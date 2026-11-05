@@ -14,7 +14,8 @@
     "check": "tsx scripts/e1-check.ts && tsx scripts/owner-rotation-check.ts && tsx scripts/anon-rpc-gate-check.ts",
     "copy:anon-rpc": "tsx scripts/copy-anon-rpc.ts",
     "predev": "tsx scripts/copy-anon-rpc.ts",
-    "prebuild": "tsx scripts/copy-anon-rpc.ts"
+    "prebuild": "tsx scripts/copy-anon-rpc.ts",
+    "check:lighter": "tsx scripts/lighter-check.ts"
   },
   "dependencies": {
     "@anon-rpc/browser-extension-harness": "^0.4.0",
