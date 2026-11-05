@@ -13,9 +13,10 @@
     "postinstall": "wxt prepare",
     "check": "tsx scripts/e1-check.ts && tsx scripts/owner-rotation-check.ts && tsx scripts/anon-rpc-gate-check.ts",
     "copy:anon-rpc": "tsx scripts/copy-anon-rpc.ts",
-    "predev": "tsx scripts/copy-anon-rpc.ts",
-    "prebuild": "tsx scripts/copy-anon-rpc.ts",
-    "check:lighter": "tsx scripts/lighter-check.ts"
+    "predev": "tsx scripts/copy-anon-rpc.ts && tsx scripts/fetch-circuits.ts",
+    "prebuild": "tsx scripts/copy-anon-rpc.ts && tsx scripts/fetch-circuits.ts",
+    "check:lighter": "tsx scripts/lighter-check.ts",
+    "fetch:circuits": "tsx scripts/fetch-circuits.ts"
   },
   "dependencies": {
     "@0xbow/privacy-pools-core-sdk": "^1.5.0",
