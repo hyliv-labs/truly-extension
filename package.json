@@ -16,7 +16,8 @@
     "predev": "tsx scripts/copy-anon-rpc.ts && tsx scripts/fetch-circuits.ts",
     "prebuild": "tsx scripts/copy-anon-rpc.ts && tsx scripts/fetch-circuits.ts",
     "check:lighter": "tsx scripts/lighter-check.ts",
-    "fetch:circuits": "tsx scripts/fetch-circuits.ts"
+    "fetch:circuits": "tsx scripts/fetch-circuits.ts",
+    "check:circuits": "tsx scripts/circuits-check.ts"
   },
   "dependencies": {
     "@0xbow/privacy-pools-core-sdk": "^1.5.0",
