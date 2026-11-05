@@ -1,0 +1,13 @@
+node_modules/
+.wxt/
+.output/
+dist/
+stats.html
+
+# Local env / secrets — never commit RPC keys, relayer creds or test seeds.
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store

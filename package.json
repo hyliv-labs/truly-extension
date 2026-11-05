@@ -1,0 +1,31 @@
+{
+  "name": "truly-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private perps: fund every Lighter trade from Privacy Pools through a fresh owner address, then re-shield.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0",
+    "@scure/bip32": "^2.4.0",
+    "@scure/bip39": "^2.4.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "viem": "^2.57.16"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.33",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@wxt-dev/module-react": "^1.2.2",
+    "typescript": "^5.9.3",
+    "wxt": "^0.21.5"
+  }
+}
