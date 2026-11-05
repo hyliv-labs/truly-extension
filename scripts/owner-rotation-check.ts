@@ -33,6 +33,10 @@ const session: Store = {};
   storage: { local: makeArea(local), session: makeArea(session) },
 };
 
+// Set before the imports below: config.ts reads the environment at module
+// evaluation, and startTrade refuses to move money without a specifier.
+process.env.WXT_ANON_RPC_SPECIFIER = '0x00000000000000000000000000000000000000a1';
+
 // Imported after the stub exists — these modules touch chrome at call time only.
 const { createVault, currentOwner, getOwnerIndex } = await import('../src/lib/vault.ts');
 const { startTrade, endTrade, getActiveTrade } = await import('../src/lib/trade.ts');

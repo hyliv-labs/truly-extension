@@ -18,25 +18,35 @@ export const ARBITRUM_CHAIN_ID = 42161;
 export const USDC_ADDRESS: Address = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 
 /**
+ * import.meta.env exists under the bundler but not under plain Node, which is
+ * how the scripts/ checks run. Fall through to process.env there so the same
+ * modules are exercised by the tests rather than a stub.
+ */
+function env(key: string): string | undefined {
+  const fromBundler = (import.meta as { env?: Record<string, string | undefined> }).env;
+  return fromBundler?.[key] ?? globalThis.process?.env?.[key];
+}
+
+/**
  * Bootstrap RPC, used ONLY to read the anon-rpc specifier contract. It breaks
  * the circular "need the chain to reach the chain" dependency and sees exactly
  * one read; everything else goes through the harness.
  */
 export const BOOTSTRAP_RPC_URL =
-  import.meta.env.WXT_BOOTSTRAP_RPC_URL ?? 'https://arb1.arbitrum.io/rpc';
+  env('WXT_BOOTSTRAP_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
 
 /**
  * The anon-rpc IWorkerSpecifier contract, which identifies the anon-client by
  * hash. OPEN QUESTION for the Ethereum Foundation booth: which specifier to
  * use for Arbitrum reads. Until it is set, every read is refused.
  */
-export const ANON_RPC_SPECIFIER = import.meta.env.WXT_ANON_RPC_SPECIFIER as
+export const ANON_RPC_SPECIFIER = env('WXT_ANON_RPC_SPECIFIER') as
   | Address
   | undefined;
 
 /** Destination the anon-client proxies reads to. */
 export const ARBITRUM_RPC_URL =
-  import.meta.env.WXT_ARBITRUM_RPC_URL ?? 'https://arb1.arbitrum.io/rpc';
+  env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
 
 export interface ConfigProblem {
   readonly key: string;
