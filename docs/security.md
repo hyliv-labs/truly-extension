@@ -1,8 +1,12 @@
 # Security notes
 
-## Open: trade owner keys collide with the Privacy Pools master secret
+## Fixed: trade owner keys collided with the Privacy Pools master secret
 
-**Status: confirmed by test, not yet fixed.**
+**Status: fixed. Owners now derive at `m/44'/60'/7702'/0/i`, and
+`scripts/e1-check.ts` asserts no owner key across 25 indices equals either
+master-key preimage. The guard was verified to fail on the old path.**
+
+The original problem, kept because the reasoning is what matters:
 
 E1 derives trade owner keys at `m/44'/60'/1'/0/i`. The Privacy Pools SDK
 derives its master keys as:
@@ -34,16 +38,15 @@ immediately.
 The risk grows if a user imports an existing Privacy Pools account, because
 then the same phrase provably controls real funds in the pool.
 
-### Fix
+### The fix, as applied
 
-Move owner derivation off the BIP-44 account path the SDK uses — for example
-`m/44'/60'/7702'/0/i`, or a distinct purpose — so no owner index can ever
-coincide with `accountIndex` 0 or 1.
+Owners derive at `m/44'/60'/7702'/0/i`. The SDK only ever reads accountIndex 0
+and 1, so no owner index can coincide with either.
 
-**This changes every derived owner address**, so it must land before any
-mainnet funds touch an owner address. `scripts/owner-rotation-check.ts` should
-gain an assertion that no owner key equals either SDK master-key preimage, so
-the collision cannot return.
+This changed every derived owner address, which is why it had to land before
+any mainnet funds. Note derivation was unaffected — it depends on the mnemonic
+alone — and `scripts/notes-check.ts` pins three precommitments captured before
+the move to prove it.
 
 ## Deliberate choices
 
