@@ -11,7 +11,10 @@
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare",
-    "check": "tsx scripts/e1-check.ts && tsx scripts/owner-rotation-check.ts"
+    "check": "tsx scripts/e1-check.ts && tsx scripts/owner-rotation-check.ts",
+    "copy:anon-rpc": "tsx scripts/copy-anon-rpc.ts",
+    "predev": "tsx scripts/copy-anon-rpc.ts",
+    "prebuild": "tsx scripts/copy-anon-rpc.ts"
   },
   "dependencies": {
     "@anon-rpc/browser-extension-harness": "^0.4.0",
