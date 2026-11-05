@@ -4,6 +4,7 @@ import type { Address } from 'viem';
 import type { ApprovalRecord } from './approvals';
 import type { ActiveTrade } from './trade';
 import type { RecoveryState } from './recovery';
+import type { TradeStatus } from './orchestrator';
 
 export type Request =
   // Popup
@@ -27,6 +28,9 @@ export type Request =
   // Lighter bridge (E4)
   | { kind: 'prepareDeposit' }
   | { kind: 'checkDeposit' }
+  // Orchestrator (E8)
+  | { kind: 'tradeStatus' }
+  | { kind: 'scanStranded' }
   // MetaMask recovery, run as a background job (E-recovery)
   | { kind: 'metamaskRecoverStart'; password: string; version: 'v1' | 'v2' }
   | { kind: 'metamaskRecoverStatus' }
@@ -76,6 +80,8 @@ export interface ResultMap {
   keepAlive: null;
   anonRpcStatus: AnonRpcStatus;
   anonRpcSelfTest: SelfTestResult;
+  tradeStatus: TradeStatus | null;
+  scanStranded: { index: number; address: string; balance: string }[];
   metamaskRecoverStart: null;
   metamaskRecoverStatus: RecoveryState;
   metamaskRecoverClear: null;

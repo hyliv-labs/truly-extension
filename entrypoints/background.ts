@@ -28,6 +28,8 @@ import {
   deriveMnemonicFromWalletSignature,
 } from '@truly/lib/wallet-seed';
 import type { Address, Hex } from 'viem';
+import { getTradeStatus } from '@truly/lib/orchestrator';
+import { scanForStrandedFunds } from '@truly/lib/recovery-scan';
 import {
   clearRecoveryState,
   getRecoveryState,
@@ -151,6 +153,19 @@ async function handle(
 
     case 'keepAlive':
       return null;
+
+    case 'tradeStatus':
+      return getTradeStatus();
+
+    case 'scanStranded': {
+      const found = await scanForStrandedFunds();
+      // bigint does not survive the message channel.
+      return found.map((f) => ({
+        index: f.index,
+        address: f.address,
+        balance: f.balance.toString(),
+      }));
+    }
 
     case 'metamaskRecoverStart':
       // Returns immediately; the job outlives the popup.

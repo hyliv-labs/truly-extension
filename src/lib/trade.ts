@@ -22,6 +22,8 @@ export interface ActiveTrade {
   readonly intentAddress?: Address;
   /** E4: assigned by Lighter once the first deposit is credited. */
   readonly accountIndex?: number;
+  /** E8: last phase recorded, so the popup has something before the first poll. */
+  readonly phase?: string;
   /** E4: last status seen, so the popup can show a wait without re-polling. */
   readonly deposit?: {
     readonly status: string;
