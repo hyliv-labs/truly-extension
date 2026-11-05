@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Onboarding } from './Onboarding';
 import {
   send,
   type AnonRpcStatus,
@@ -139,43 +140,34 @@ export function App() {
             Lock
           </button>
         </section>
-      ) : (
+      ) : status.hasVault ? (
+        // An existing vault only needs unlocking. Onboarding is for choosing
+        // which account a NEW vault represents, which is already settled here.
         <section className="panel">
           <label className="field-label" htmlFor="password">
-            {status.hasVault ? 'Password' : 'Choose a password'}
+            Password
           </label>
           <input
             id="password"
             type="password"
             value={password}
             disabled={busy}
+            autoFocus
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => {
               if (e.key !== 'Enter' || !password) return;
-              void run(async () => {
-                if (status.hasVault) {
-                  await send({ kind: 'unlock', password });
-                } else {
-                  setBackup((await send({ kind: 'createVault', password })).mnemonic);
-                }
-              });
+              void run(() => send({ kind: 'unlock', password }).then(() => {}));
             }}
           />
           <button
             disabled={busy || !password}
-            onClick={() =>
-              run(async () => {
-                if (status.hasVault) {
-                  await send({ kind: 'unlock', password });
-                } else {
-                  setBackup((await send({ kind: 'createVault', password })).mnemonic);
-                }
-              })
-            }
+            onClick={() => run(() => send({ kind: 'unlock', password }).then(() => {}))}
           >
-            {status.hasVault ? 'Unlock' : 'Create vault'}
+            Unlock
           </button>
         </section>
+      ) : (
+        <Onboarding busy={busy} run={run} onBackup={setBackup} />
       )}
 
       {error && <p className="error">{error}</p>}

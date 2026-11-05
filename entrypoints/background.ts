@@ -23,6 +23,11 @@ import { handleProviderRequest, settle } from '@truly/lib/provider';
 import { getApproval } from '@truly/lib/approvals';
 import { getReadCount } from '@truly/lib/anon-rpc';
 import { checkDeposit, prepareDeposit } from '@truly/lib/deposit';
+import {
+  buildSeedDerivationTypedData,
+  deriveMnemonicFromWalletSignature,
+} from '@truly/lib/wallet-seed';
+import type { Address, Hex } from 'viem';
 import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
@@ -141,6 +146,30 @@ async function handle(
 
     case 'keepAlive':
       return null;
+
+    case 'seedTypedData':
+      // Shown to the user so they can compare it against what their wallet
+      // displays before signing.
+      return {
+        json: JSON.stringify(
+          buildSeedDerivationTypedData(message.address as Address, message.version),
+          null,
+          2,
+        ),
+      };
+
+    case 'importWalletSeed': {
+      // Derive first: an invalid signature must not create a vault that then
+      // has to be destroyed.
+      const mnemonic = await deriveMnemonicFromWalletSignature(
+        message.signature as Hex,
+        message.address as Address,
+        message.version,
+      );
+      const result = await createVault(message.password, mnemonic);
+      await touchAutoLock();
+      return result;
+    }
 
     case 'prepareDeposit': {
       const intentAddress = await prepareDeposit();

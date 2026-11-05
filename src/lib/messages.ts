@@ -25,7 +25,16 @@ export type Request =
   | { kind: 'anonRpcSelfTest' }
   // Lighter bridge (E4)
   | { kind: 'prepareDeposit' }
-  | { kind: 'checkDeposit' };
+  | { kind: 'checkDeposit' }
+  // Recovering an existing Privacy Pools account (wallet-signature type)
+  | { kind: 'seedTypedData'; address: string; version: 'v1' | 'v2' }
+  | {
+      kind: 'importWalletSeed';
+      password: string;
+      address: string;
+      version: 'v1' | 'v2';
+      signature: string;
+    };
 
 export interface AnonRpcStatus {
   reads: number;
@@ -62,6 +71,8 @@ export interface ResultMap {
   keepAlive: null;
   anonRpcStatus: AnonRpcStatus;
   anonRpcSelfTest: SelfTestResult;
+  seedTypedData: { json: string };
+  importWalletSeed: { mnemonic: string };
   prepareDeposit: { intentAddress: string };
   checkDeposit: {
     complete: boolean;

@@ -184,3 +184,22 @@ button.link {
   color: #fcd9a5;
   font-size: 11px;
 }
+
+textarea {
+  padding: 8px;
+  border: 1px solid #272b31;
+  border-radius: 6px;
+  background: #13161a;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  resize: vertical;
+}
+
+/* Explanatory text under a choice, not an error. */
+.hint {
+  margin: -2px 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
