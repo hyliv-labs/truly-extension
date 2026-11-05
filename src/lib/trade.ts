@@ -10,6 +10,7 @@
 import type { Address } from 'viem';
 import { currentOwner, retireOwner } from './vault';
 import { configProblems } from './config';
+import { clearLighterSiteData } from './site-cleanup';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 
@@ -65,6 +66,10 @@ export async function startTrade(): Promise<ActiveTrade> {
     throw new Error(problems.map((p) => p.reason).join(' '));
   }
 
+  // Before, not only after: after-only trusts that the previous cleanup ran,
+  // and the first trade after an install or a crash has no previous at all.
+  await clearLighterSiteData();
+
   const owner = await currentOwner();
   const trade: ActiveTrade = {
     ownerIndex: owner.index,
@@ -89,4 +94,8 @@ export async function endTrade(): Promise<void> {
   // reverse order could drop the record and leave the index reusable.
   await retireOwner(trade.ownerIndex);
   await chrome.storage.local.remove(LOCAL_ACTIVE_TRADE);
+
+  // Best effort: the trade is already closed and the index burned, so a
+  // cleanup failure must not resurrect it. The next startTrade cleans up again.
+  await clearLighterSiteData().catch(() => {});
 }
