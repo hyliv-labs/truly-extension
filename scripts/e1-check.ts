@@ -1,7 +1,13 @@
 // E1 verification: determinism of derivation + round-trip of the sealed vault.
 // Run with Node's type stripping; no chrome APIs are touched here.
 
-import { deriveOwner, newMnemonic, isValidMnemonic, ownerPath } from '../src/lib/keys.ts';
+import {
+  deriveOwner,
+  newMnemonic,
+  isValidMnemonic,
+  ownerPath,
+  sdkMasterKeyPreimages,
+} from '../src/lib/keys.ts';
 import { seal, open } from '../src/lib/crypto.ts';
 
 const fail = (msg: string) => {
@@ -17,8 +23,42 @@ const PHRASE =
 if (!isValidMnemonic(PHRASE)) fail('fixture phrase should be valid');
 else pass('fixture phrase validates');
 
-if (ownerPath(0) !== "m/44'/60'/1'/0/0") fail(`path wrong: ${ownerPath(0)}`);
+if (ownerPath(0) !== "m/44'/60'/7702'/0/0") fail(`path wrong: ${ownerPath(0)}`);
 else pass('derivation path shape');
+
+// THE COLLISION GUARD.
+//
+// The Privacy Pools SDK hashes the private keys at m/44'/60'/0'/0/0 and
+// m/44'/60'/1'/0/0 into masterNullifier and masterSecret. An owner key that
+// equals either one would make the key that signs on Lighter's website the
+// preimage of half the material deriving every note in the pool. Owner
+// account 1 did exactly that before this was caught, so it is asserted rather
+// than left to the path string looking right.
+{
+  const { masterNullifierPreimage, masterSecretPreimage } =
+    await sdkMasterKeyPreimages(PHRASE);
+  let collided = false;
+  for (let i = 0; i < 25; i++) {
+    const owner = await deriveOwner(PHRASE, i);
+    if (owner.privateKey === masterNullifierPreimage) {
+      fail(`owner #${i} IS the masterNullifier preimage`);
+      collided = true;
+    }
+    if (owner.privateKey === masterSecretPreimage) {
+      fail(`owner #${i} IS the masterSecret preimage`);
+      collided = true;
+    }
+  }
+  if (!collided) pass('no owner key equals either SDK master-key preimage (25 indices)');
+
+  // Guard the guard: if these two were ever equal to each other, or the
+  // helper returned a constant, the loop above would pass vacuously.
+  if (masterNullifierPreimage === masterSecretPreimage) {
+    fail('the two master-key preimages are identical — the check is vacuous');
+  } else {
+    pass('the two master-key preimages differ, so the check is meaningful');
+  }
+}
 
 // Determinism: same phrase + index => same address, every time.
 const a = await deriveOwner(PHRASE, 0);
