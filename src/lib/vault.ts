@@ -69,6 +69,14 @@ export async function lock(): Promise<void> {
   await chrome.storage.session.remove(SESSION_MNEMONIC);
 }
 
+/**
+ * The unlocked phrase. Exported for note derivation, which needs the seed
+ * itself rather than a derived key — the Privacy Pools SDK takes a mnemonic.
+ */
+export async function requireUnlockedMnemonic(): Promise<string> {
+  return requireMnemonic();
+}
+
 async function requireMnemonic(): Promise<string> {
   const stored = await chrome.storage.session.get(SESSION_MNEMONIC);
   const phrase = stored[SESSION_MNEMONIC];

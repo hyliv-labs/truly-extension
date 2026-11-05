@@ -75,6 +75,14 @@ export const PRIVACY_POOL_ADDRESS = env('WXT_PRIVACY_POOL_ADDRESS') as
 export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
 
 /**
+ * The pool's scope, which binds a note to one pool. It is an input to
+ * generateDepositSecrets, so a wrong scope derives notes for a pool the funds
+ * are not in — findable by nobody. OPEN: read it from the pool contract or get
+ * it from 0xbow rather than guessing.
+ */
+export const PRIVACY_POOL_SCOPE = env('WXT_PRIVACY_POOL_SCOPE');
+
+/**
  * Where the Privacy Pools circuit artifacts (.wasm / .zkey) are served from.
  *
  * They are NOT shipped in the SDK and 0xbow publishes no release assets, so

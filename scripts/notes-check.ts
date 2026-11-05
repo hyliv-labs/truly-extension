@@ -71,6 +71,33 @@ if (deriveNote(VAULT, OTHER_SCOPE, 0).precommitment === a.precommitment) {
   pass('scope separates notes between pools');
 }
 
+// REGRESSION PIN.
+//
+// Note derivation must depend on the mnemonic alone — generateMasterKeys reads
+// accountIndex 0 and 1 — and must therefore be completely unaffected by the
+// owner-key derivation path, which moved to account 7702' to stop colliding
+// with the SDK's master keys.
+//
+// These values were captured BEFORE that move. If they ever change, previously
+// re-shielded funds become undiscoverable, so this failing means real money is
+// stranded rather than a test being stale.
+const PINNED: Record<number, string> = {
+  0: '20989285794294416915427341900376611790943415285600831049009268118579350954735',
+  1: '12685716211516796675596311499279101128147218478089183872686951502022826694879',
+  2: '19565643961411693085050773175898238580122516970227586347797244788195013404061',
+};
+let pinned = true;
+for (const [index, expected] of Object.entries(PINNED)) {
+  const actual = deriveNote(VAULT, SCOPE, Number(index)).precommitment.toString();
+  if (actual !== expected) {
+    fail(`note ${index} changed — existing deposits would become unfindable`);
+    pinned = false;
+  }
+}
+if (pinned) {
+  pass('note derivation unchanged by the owner-path fix (3 pinned indices)');
+}
+
 // A different vault must never derive another vault's note.
 if (deriveNote(OTHER_VAULT, SCOPE, 0).precommitment === a.precommitment) {
   fail('a DIFFERENT mnemonic derived the same note');
