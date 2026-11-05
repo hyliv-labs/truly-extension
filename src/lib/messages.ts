@@ -3,6 +3,7 @@
 import type { Address } from 'viem';
 import type { ApprovalRecord } from './approvals';
 import type { ActiveTrade } from './trade';
+import type { RecoveryState } from './recovery';
 
 export type Request =
   // Popup
@@ -26,6 +27,10 @@ export type Request =
   // Lighter bridge (E4)
   | { kind: 'prepareDeposit' }
   | { kind: 'checkDeposit' }
+  // MetaMask recovery, run as a background job (E-recovery)
+  | { kind: 'metamaskRecoverStart'; password: string; version: 'v1' | 'v2' }
+  | { kind: 'metamaskRecoverStatus' }
+  | { kind: 'metamaskRecoverClear' }
   // Recovering an existing Privacy Pools account (wallet-signature type)
   | { kind: 'seedTypedData'; address: string; version: 'v1' | 'v2' }
   | {
@@ -71,6 +76,9 @@ export interface ResultMap {
   keepAlive: null;
   anonRpcStatus: AnonRpcStatus;
   anonRpcSelfTest: SelfTestResult;
+  metamaskRecoverStart: null;
+  metamaskRecoverStatus: RecoveryState;
+  metamaskRecoverClear: null;
   seedTypedData: { json: string };
   importWalletSeed: { mnemonic: string };
   prepareDeposit: { intentAddress: string };

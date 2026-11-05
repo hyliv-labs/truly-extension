@@ -12,6 +12,7 @@
 
 import { mountOffscreenHost } from '@anon-rpc/browser-extension-harness/offscreen';
 import { assertArtifactsPresent } from '@truly/lib/proving';
+import { requestSeedSignature, MetaMaskError } from '@truly/lib/metamask';
 
 // Only claims ports named 'anon-rpc.worker', so it coexists with the proof
 // handling below.
@@ -31,6 +32,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       assertArtifactsPresent()
         .then(() => sendResponse({ ok: true, value: true }))
         .catch((error: Error) => sendResponse({ ok: false, error: error.message }));
+      return true;
+
+    case 'metamaskSign':
+      // Held here rather than in the popup: MetaMask's approval window takes
+      // focus and closes the popup, which would tear down the port mid-request.
+      requestSeedSignature(message.version)
+        .then((value) => sendResponse({ ok: true, value }))
+        .catch((error: unknown) =>
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            reason: error instanceof MetaMaskError ? error.reason : 'failed',
+          }),
+        );
       return true;
 
     // TODO(E3): 'proveWithdrawal' — needs the circuit artifacts and the pool

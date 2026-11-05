@@ -28,6 +28,11 @@ import {
   deriveMnemonicFromWalletSignature,
 } from '@truly/lib/wallet-seed';
 import type { Address, Hex } from 'viem';
+import {
+  clearRecoveryState,
+  getRecoveryState,
+  startMetaMaskRecovery,
+} from '@truly/lib/recovery';
 import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
@@ -145,6 +150,18 @@ async function handle(
       return getApproval(message.id);
 
     case 'keepAlive':
+      return null;
+
+    case 'metamaskRecoverStart':
+      // Returns immediately; the job outlives the popup.
+      await startMetaMaskRecovery(message.password, message.version);
+      return null;
+
+    case 'metamaskRecoverStatus':
+      return getRecoveryState();
+
+    case 'metamaskRecoverClear':
+      await clearRecoveryState();
       return null;
 
     case 'seedTypedData':
