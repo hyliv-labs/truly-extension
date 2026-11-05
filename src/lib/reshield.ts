@@ -110,6 +110,28 @@ export async function reshield(input: {
     account,
     client: publicClient,
     transport: http(BUNDLER_URL),
+    userOperation: {
+      /**
+       * Pimlico prices user operations with its own method. Left to viem's
+       * default, the fees come from Arbitrum's own estimate and the bundler
+       * can reject the operation as underpriced — a failure that reads as a
+       * mysterious rejection rather than a fee problem.
+       */
+      async estimateFeesPerGas({ bundlerClient: client }) {
+        const { standard } = await client.request<{
+          Method: 'pimlico_getUserOperationGasPrice';
+          Parameters: [];
+          ReturnType: {
+            standard: { maxFeePerGas: Hex; maxPriorityFeePerGas: Hex };
+          };
+        }>({ method: 'pimlico_getUserOperationGasPrice', params: [] });
+
+        return {
+          maxFeePerGas: BigInt(standard.maxFeePerGas),
+          maxPriorityFeePerGas: BigInt(standard.maxPriorityFeePerGas),
+        };
+      },
+    },
   });
 
   const permitSignature = await signPaymasterPermit({
