@@ -21,6 +21,10 @@ import {
 import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
 import { handleProviderRequest, settle } from '@truly/lib/provider';
 import { getApproval } from '@truly/lib/approvals';
+import { getReadCount } from '@truly/lib/anon-rpc';
+import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
+import { publicClient } from '@truly/lib/chain';
+import { erc20Abi } from 'viem';
 
 const AUTO_LOCK_ALARM = 'truly:auto-lock';
 const AUTO_LOCK_MINUTES = 15;
@@ -116,6 +120,26 @@ async function handle(
 
     case 'keepAlive':
       return null;
+
+    case 'anonRpcStatus':
+      return { reads: await getReadCount(), problems: configProblems() };
+
+    case 'anonRpcSelfTest': {
+      // E2's done-criterion: one eth_blockNumber and one USDC balance read,
+      // both returning through the harness.
+      const blockNumber = await publicClient.getBlockNumber();
+      const owner = await currentOwner();
+      const balance = await publicClient.readContract({
+        address: USDC_ADDRESS,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [owner.address],
+      });
+      return {
+        blockNumber: blockNumber.toString(),
+        usdcBalance: balance.toString(),
+      };
+    }
 
     case 'settleApproval':
       await settle(message.id, message.approved);

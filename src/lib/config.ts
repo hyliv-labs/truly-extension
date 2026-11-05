@@ -12,6 +12,12 @@ import type { Address } from 'viem';
 export const ARBITRUM_CHAIN_ID = 42161;
 
 /**
+ * Native USDC on Arbitrum (Circle), not the bridged USDC.e. The pool, Lighter
+ * deposits and the Circle Paymaster all work in this one.
+ */
+export const USDC_ADDRESS: Address = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+
+/**
  * Bootstrap RPC, used ONLY to read the anon-rpc specifier contract. It breaks
  * the circular "need the chain to reach the chain" dependency and sees exactly
  * one read; everything else goes through the harness.

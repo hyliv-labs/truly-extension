@@ -4,7 +4,12 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { send, type VaultStatus } from '@truly/lib/messages';
+import {
+  send,
+  type AnonRpcStatus,
+  type SelfTestResult,
+  type VaultStatus,
+} from '@truly/lib/messages';
 
 export function App() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
@@ -13,10 +18,13 @@ export function App() {
   const [backup, setBackup] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
+  const [selfTest, setSelfTest] = useState<SelfTestResult | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await send({ kind: 'status' });
     setStatus(next);
+    setAnon(await send({ kind: 'anonRpcStatus' }));
     if (next.unlocked) {
       setOwner((await send({ kind: 'currentOwner' })).address);
     } else {
@@ -139,9 +147,32 @@ export function App() {
 
       {error && <p className="error">{error}</p>}
 
+      {/* The counter has to be visible in the demo video. */}
       <footer>
-        {/* TODO(E2): live Anon-RPC read counter; must be visible in the demo. */}
-        <span className="anon-rpc">Anon-RPC reads: —</span>
+        <span className="anon-rpc">Anon-RPC reads: {anon?.reads ?? '—'}</span>
+        {status?.unlocked && (
+          <button
+            className="link"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                setSelfTest(await send({ kind: 'anonRpcSelfTest' }));
+              })
+            }
+          >
+            Test read
+          </button>
+        )}
+        {selfTest && (
+          <p className="field-label">
+            block {selfTest.blockNumber} · {Number(selfTest.usdcBalance) / 1e6} USDC
+          </p>
+        )}
+        {anon?.problems.map((p) => (
+          <p key={p.key} className="blocked">
+            {p.reason}
+          </p>
+        ))}
       </footer>
     </main>
   );

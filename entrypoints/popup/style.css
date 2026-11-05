@@ -159,3 +159,28 @@ footer {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+button.link {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+/* Money-moving steps are blocked; say why rather than failing opaquely. */
+.blocked {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #2a1f14;
+  color: #fcd9a5;
+  font-size: 11px;
+}

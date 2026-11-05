@@ -19,7 +19,21 @@ export type Request =
   | { kind: 'getApproval'; id: string }
   | { kind: 'settleApproval'; id: string; approved: boolean }
   // Keeps the worker alive while an approval prompt is open (E5).
-  | { kind: 'keepAlive' };
+  | { kind: 'keepAlive' }
+  // Anon-RPC (E2)
+  | { kind: 'anonRpcStatus' }
+  | { kind: 'anonRpcSelfTest' };
+
+export interface AnonRpcStatus {
+  reads: number;
+  /** Non-empty means money-moving steps are blocked; each entry says why. */
+  problems: { key: string; reason: string }[];
+}
+
+export interface SelfTestResult {
+  blockNumber: string;
+  usdcBalance: string;
+}
 
 export interface VaultStatus {
   hasVault: boolean;
@@ -43,6 +57,8 @@ export interface ResultMap {
   getApproval: ApprovalRecord | null;
   settleApproval: null;
   keepAlive: null;
+  anonRpcStatus: AnonRpcStatus;
+  anonRpcSelfTest: SelfTestResult;
 }
 
 export async function send<K extends Request['kind']>(
