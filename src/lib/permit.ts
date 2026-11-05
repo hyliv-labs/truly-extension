@@ -130,5 +130,16 @@ export function encodePaymasterData(input: {
   );
 }
 
-/** USDC the paymaster may pull for gas. Circle's sample uses 10 USDC. */
-export const DEFAULT_PERMIT_AMOUNT = 10_000_000n;
+/**
+ * USDC the paymaster is ALLOWED to pull for gas — a ceiling, not a charge. It
+ * takes only the actual gas plus Circle's 10% surcharge, which on Arbitrum is
+ * cents.
+ *
+ * Circle's sample permits 10 USDC, which is wrong here for two reasons: a $25
+ * trade that took a loss can leave less than 10 USDC on Lighter, so re-shield
+ * would refuse outright; and whatever is reserved stays behind at a retired,
+ * single-use owner address on every trade.
+ *
+ * 1 USDC is generous for Arbitrum gas while keeping the stranded dust small.
+ */
+export const DEFAULT_PERMIT_AMOUNT = 1_000_000n;

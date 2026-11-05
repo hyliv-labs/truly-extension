@@ -86,9 +86,14 @@ export async function reshield(input: {
     args: [owner.address],
   });
 
-  // The paymaster may pull up to permitAmount for gas, so depositing the full
-  // balance would leave the operation unpayable. Reserve it rather than
-  // discovering the shortfall mid-operation.
+  // The paymaster may pull up to permitAmount, so depositing the whole balance
+  // would leave the operation unpayable. Reserve it rather than discovering
+  // the shortfall mid-operation.
+  //
+  // The reserve is an allowance, not a charge: actual Arbitrum gas plus the
+  // 10% surcharge is cents, so most of it stays with the owner. That remainder
+  // is dust stranded at a retired single-use address, which is why the
+  // allowance is kept small rather than following Circle's 10 USDC sample.
   if (balance <= permitAmount) {
     throw new ReshieldUnavailable(
       `Owner holds ${balance} USDC units, which does not cover the ${permitAmount} gas allowance.`,
