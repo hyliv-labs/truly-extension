@@ -18,29 +18,43 @@ thing that blocks E3.
 - `new Circuits({ browser: true })` selects `fetch` over `fs`, which is the
   only option in an extension.
 
-## The blocker
+## The artifacts — solved
 
-**The circuit artifacts are not obtainable from any published source.**
+They looked unobtainable: not in the npm package, no release assets on
+`0xbow-io/privacy-pools-core` through v1.3.0, and no `-circuits` or
+`-artifacts` package on npm. Compiling them locally would need a trusted setup
+whose keys would not match the deployed verifier.
 
-Four files are needed: `withdraw.wasm`, `withdraw.zkey`, `commitment.wasm`,
-`commitment.zkey`.
+**They are committed to the repository**, just never released.
+`scripts/fetch-circuits.ts` pulls them at build time from a pinned commit.
 
-- They are **not** shipped inside the npm package.
-- `0xbow-io/privacy-pools-core` publishes releases, but **none carry release
-  assets** (checked through v1.3.0).
-- There is no `@0xbow/privacy-pools-circuits` or `-artifacts` package on npm.
-- The SDK's own `circuits:setup` script compiles them from the monorepo's
-  `circuits/` directory, which means a full circom compile and trusted setup —
-  not viable inside the event, and the resulting keys would not match the
-  deployed pool's verifier anyway.
+**Six files, from two different directories.** The split matters and comes
+from the SDK's own `scripts/copy_circuits.sh`, not from guesswork:
 
-**The ask for 0xbow:** the prebuilt artifacts matching the deployed Arbitrum
-USDC pool, or the URL their own frontend serves them from. Everything else in
-E3 is written and waiting; drop the four files into `public/privacy-pools/`
-and proving works without further code changes.
+| File | Source |
+| --- | --- |
+| `withdraw.zkey`, `commitment.zkey` | `packages/circuits/trusted-setup/final-keys/` |
+| `withdraw.vkey`, `commitment.vkey` | `packages/circuits/trusted-setup/final-keys/` |
+| `withdraw.wasm`, `commitment.wasm` | `packages/circuits/build/<name>/<name>_js/` |
 
-Note that MV3 forbids remote code, so fetching them from a CDN at runtime is
-not an alternative — they have to ship inside the extension.
+The `final-keys` zkeys are the post-ceremony ones that match the deployed
+verifier — **not** the `groth16_pkey.zkey` files under `build/`, which are the
+pre-ceremony keys and would produce proofs that never verify. The `.vkey`
+files are needed too, which is easy to miss.
+
+**They must live under `artifacts/`.** The SDK resolves each file as
+`<baseUrl>/artifacts/<name>`. Hosting them at the base instead gives a 404
+*inside* the SDK that surfaces only as `Failed to generate proof`, naming no
+path. This cost a debugging cycle and is the single easiest thing to get wrong.
+
+**Integrity.** The SDK carries a frozen `ARTIFACT_HASHES` table and refuses to
+load any artifact missing from it. `fetch-circuits.ts` verifies the SHA-256 of
+every download against that same table, so a corrupted or substituted proving
+key fails at build time rather than producing proofs that never verify. All six
+match.
+
+MV3 forbids remote code, so these ship inside the extension (~23 MiB) and are
+never fetched at runtime.
 
 ## Still open for 0xbow
 
