@@ -17,6 +17,28 @@ export interface ActiveTrade {
   readonly ownerIndex: number;
   readonly ownerAddress: Address;
   readonly startedAt: number;
+  /** E4: where the relayer sends the withdrawal. Stable for a given owner. */
+  readonly intentAddress?: Address;
+  /** E4: assigned by Lighter once the first deposit is credited. */
+  readonly accountIndex?: number;
+  /** E4: last status seen, so the popup can show a wait without re-polling. */
+  readonly deposit?: {
+    readonly status: string;
+    readonly description: string;
+    readonly checkedAt: number;
+  };
+}
+
+/** Merge fields into the active trade. Refuses if no trade is active. */
+export async function updateActiveTrade(
+  patch: Partial<Omit<ActiveTrade, 'ownerIndex' | 'ownerAddress' | 'startedAt'>>,
+): Promise<ActiveTrade> {
+  const trade = await getActiveTrade();
+  if (!trade) throw new Error('no active trade');
+
+  const next = { ...trade, ...patch };
+  await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: next });
+  return next;
 }
 
 export async function getActiveTrade(): Promise<ActiveTrade | null> {
