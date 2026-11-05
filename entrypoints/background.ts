@@ -223,6 +223,14 @@ async function pollDeposit(): Promise<void> {
       return;
     }
 
+    if (progress.claimable) {
+      // Waiting will not credit these funds, and polling through it looks
+      // identical to a slow deposit.
+      await chrome.alarms.clear(DEPOSIT_ALARM);
+      console.warn('[truly] deposit is claimable and needs an action');
+      return;
+    }
+
     if (progress.failed) {
       // Polling a dead deposit forever would look identical to waiting.
       await chrome.alarms.clear(DEPOSIT_ALARM);

@@ -13,6 +13,7 @@ import {
   getDepositStatus,
   isDepositComplete,
   isDepositFailed,
+  isDepositClaimable,
 } from './lighter';
 import { getActiveTrade, updateActiveTrade, type ActiveTrade } from './trade';
 
@@ -45,6 +46,8 @@ export async function prepareDeposit(): Promise<Address> {
 export interface DepositProgress {
   readonly complete: boolean;
   readonly failed: boolean;
+  /** Funds are there but need an action; waiting will not credit them. */
+  readonly claimable: boolean;
   readonly status: string;
   readonly description: string;
   readonly accountIndex: number | null;
@@ -68,6 +71,7 @@ export async function checkDeposit(): Promise<DepositProgress> {
 
   const complete = accountIndex !== null || isDepositComplete(status);
   const failed = !complete && isDepositFailed(status);
+  const claimable = !complete && isDepositClaimable(status);
 
   await updateActiveTrade({
     deposit: {
@@ -84,6 +88,7 @@ export async function checkDeposit(): Promise<DepositProgress> {
   return {
     complete,
     failed,
+    claimable,
     status: status.status,
     description: status.description,
     accountIndex,

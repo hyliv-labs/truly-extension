@@ -125,11 +125,11 @@ export async function getDepositStatus(owner: Address): Promise<DepositStatus> {
 }
 
 /**
- * Lighter does not document its status values and only 'pending' has been
- * observed, so this matches a family of plausible terminal strings rather than
- * one guess. It is NOT the only signal: checkDeposit also treats the existence
- * of a Lighter account as proof of credit, so an unexpected string cannot
- * strand a funded trade.
+ * deposit/latest does not document its status values, but the sibling
+ * deposit/history endpoint enumerates: failed | pending | completed | claimable.
+ * Whether /latest shares that vocabulary is NOT documented, so this stays a
+ * family match and is only ever a secondary signal — checkDeposit treats the
+ * existence of a Lighter account as the real proof of credit.
  */
 export function isDepositComplete(status: DepositStatus): boolean {
   return /^(completed|complete|success|succeeded|done|credited|finished)$/.test(
@@ -140,6 +140,15 @@ export function isDepositComplete(status: DepositStatus): boolean {
 /** A deposit that will not progress on its own. */
 export function isDepositFailed(status: DepositStatus): boolean {
   return /(fail|error|reject|cancel|expire)/.test(status.status.toLowerCase());
+}
+
+/**
+ * 'claimable' is in deposit/history's enum: the funds are there but will not
+ * arrive by waiting. Polling through it would look exactly like a slow
+ * deposit, which is the failure mode that costs a demo.
+ */
+export function isDepositClaimable(status: DepositStatus): boolean {
+  return status.status.trim().toLowerCase() === 'claimable';
 }
 
 /**
