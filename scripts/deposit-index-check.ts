@@ -10,28 +10,10 @@
  * Neither raises an error at the time, so both are asserted here.
  */
 
-type Store = Record<string, unknown>;
+import { installChromeStub } from './chrome-stub.ts';
 
-function makeArea(store: Store) {
-  return {
-    async get(key: string) {
-      return key in store ? { [key]: store[key] } : {};
-    },
-    async set(items: Store) {
-      Object.assign(store, items);
-    },
-    async remove(key: string) {
-      delete store[key];
-    },
-    async clear() {
-      for (const k of Object.keys(store)) delete store[k];
-    },
-  };
-}
+installChromeStub();
 
-(globalThis as Record<string, unknown>).chrome = {
-  storage: { local: makeArea({}), session: makeArea({}) },
-};
 
 const { nextDepositIndex, confirmDepositIndex, getDepositIndex, MAX_INDEX_GAP } =
   await import('../src/lib/notes.ts');

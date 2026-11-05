@@ -6,32 +6,10 @@
  * real vault/trade modules rather than a reimplementation of them.
  */
 
-// --- chrome.storage stub -----------------------------------------------------
+import { installChromeStub } from './chrome-stub.ts';
 
-type Store = Record<string, unknown>;
+const calls = installChromeStub();
 
-function makeArea(store: Store) {
-  return {
-    async get(key: string) {
-      return key in store ? { [key]: store[key] } : {};
-    },
-    async set(items: Store) {
-      Object.assign(store, items);
-    },
-    async remove(key: string) {
-      delete store[key];
-    },
-    async clear() {
-      for (const k of Object.keys(store)) delete store[k];
-    },
-  };
-}
-
-const local: Store = {};
-const session: Store = {};
-(globalThis as Record<string, unknown>).chrome = {
-  storage: { local: makeArea(local), session: makeArea(session) },
-};
 
 // Set before the imports below: config.ts reads the environment at module
 // evaluation, and startTrade refuses to move money without a specifier.
@@ -73,7 +51,27 @@ if ((await currentOwner()).address !== first.ownerAddress) {
   fail('owner changed mid-trade');
 } else pass('owner stable during the trade');
 
+// E10: starting a trade must wipe Lighter's session, or the new owner is
+// linked to the previous one from Lighter's side regardless of funding.
+if (calls.browsingDataRemove.length === 0) {
+  fail('starting a trade did not clear Lighter site data');
+} else {
+  const origins = calls.browsingDataRemove[0]!.origins;
+  if (!origins.some((o) => o.includes('lighter.xyz'))) {
+    fail(`cleanup did not target Lighter: ${origins.join(', ')}`);
+  } else {
+    pass('starting a trade clears Lighter site data');
+  }
+}
+
+const cleanupsBeforeEnd = calls.browsingDataRemove.length;
 await endTrade();
+
+if (calls.browsingDataRemove.length <= cleanupsBeforeEnd) {
+  fail('ending a trade did not clear Lighter site data');
+} else {
+  pass('ending a trade clears Lighter site data too');
+}
 
 if (await getActiveTrade()) fail('trade still active after endTrade');
 else pass('trade cleared');
