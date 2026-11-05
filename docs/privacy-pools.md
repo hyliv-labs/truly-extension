@@ -56,6 +56,22 @@ match.
 MV3 forbids remote code, so these ship inside the extension (~23 MiB) and are
 never fetched at runtime.
 
+**Verified end to end.** `pnpm check:circuits` generates a real Groth16
+commitment proof against the bundled files and verifies it. **Proving takes
+~1.3s**, so no part of the UI needs to plan for a long wait.
+
+## snarkjs never lets the process exit
+
+snarkjs starts a bn128 worker pool and never shuts it down, and the handle is
+not reachable from the SDK's bundled scope. In Node the process therefore hangs
+indefinitely *after* the proof has succeeded, which is indistinguishable from
+proving never returning — it cost two runs that looked like 15-minute hangs.
+`circuits-check.ts` exits explicitly for that reason.
+
+This does not affect the extension, where the offscreen document is torn down
+by Chrome rather than by the process exiting. It does mean any future Node-side
+proving script must exit explicitly.
+
 ## Still open for 0xbow
 
 - Pool, entrypoint and relayer addresses for the Arbitrum USDC pool
