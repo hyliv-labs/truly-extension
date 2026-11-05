@@ -80,6 +80,39 @@ export function App() {
               : 'No active trade. Lighter cannot connect.'}
           </p>
 
+          {status.activeTrade && (
+            <>
+              {status.activeTrade.intentAddress ? (
+                <>
+                  <label className="field-label">
+                    Deposit address (the relayer sends here)
+                  </label>
+                  <code className="address">{status.activeTrade.intentAddress}</code>
+                </>
+              ) : (
+                <button
+                  disabled={busy}
+                  onClick={() => run(() => send({ kind: 'prepareDeposit' }).then(() => {}))}
+                >
+                  Get deposit address
+                </button>
+              )}
+
+              {status.activeTrade.deposit && (
+                <p className="field-label">
+                  {status.activeTrade.deposit.description} (
+                  {status.activeTrade.deposit.status})
+                </p>
+              )}
+
+              {status.activeTrade.accountIndex !== undefined && (
+                <p className="field-label">
+                  Lighter account #{status.activeTrade.accountIndex}
+                </p>
+              )}
+            </>
+          )}
+
           {/* TODO(E8): the orchestrator starts a trade only once the account
               is funded. Until then these are manual, for exercising E5. */}
           {status.activeTrade ? (
