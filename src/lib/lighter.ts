@@ -124,8 +124,22 @@ export async function getDepositStatus(owner: Address): Promise<DepositStatus> {
   };
 }
 
+/**
+ * Lighter does not document its status values and only 'pending' has been
+ * observed, so this matches a family of plausible terminal strings rather than
+ * one guess. It is NOT the only signal: checkDeposit also treats the existence
+ * of a Lighter account as proof of credit, so an unexpected string cannot
+ * strand a funded trade.
+ */
 export function isDepositComplete(status: DepositStatus): boolean {
-  return status.status.toLowerCase() === 'completed';
+  return /^(completed|complete|success|succeeded|done|credited|finished)$/.test(
+    status.status.trim().toLowerCase(),
+  );
+}
+
+/** A deposit that will not progress on its own. */
+export function isDepositFailed(status: DepositStatus): boolean {
+  return /(fail|error|reject|cancel|expire)/.test(status.status.toLowerCase());
 }
 
 /**

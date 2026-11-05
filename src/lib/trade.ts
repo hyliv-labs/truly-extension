@@ -26,6 +26,8 @@ export interface ActiveTrade {
     readonly status: string;
     readonly description: string;
     readonly checkedAt: number;
+    /** Every distinct status seen, so a real run records Lighter's vocabulary. */
+    readonly seen?: string[];
   };
 }
 

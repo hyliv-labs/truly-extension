@@ -12,6 +12,7 @@ import {
   getAccountIndex,
   getDepositStatus,
   isDepositComplete,
+  isDepositFailed,
 } from './lighter';
 import { getActiveTrade, updateActiveTrade, type ActiveTrade } from './trade';
 
@@ -43,6 +44,7 @@ export async function prepareDeposit(): Promise<Address> {
 
 export interface DepositProgress {
   readonly complete: boolean;
+  readonly failed: boolean;
   readonly status: string;
   readonly description: string;
   readonly accountIndex: number | null;
@@ -56,22 +58,32 @@ export async function checkDeposit(): Promise<DepositProgress> {
   const trade = await requireTrade();
 
   const status = await getDepositStatus(trade.ownerAddress);
-  const complete = isDepositComplete(status);
 
-  // The account only exists once the first deposit is credited.
-  const accountIndex = complete ? await getAccountIndex(trade.ownerAddress) : null;
+  // Asked on EVERY poll, not only when the status string looks terminal.
+  // Lighter does not document its status values and only 'pending' has been
+  // observed, so an unmatched string must not be able to stall a funded trade.
+  // The account not existing is the real "not yet"; the account existing is
+  // the real "credited".
+  const accountIndex = await getAccountIndex(trade.ownerAddress);
+
+  const complete = accountIndex !== null || isDepositComplete(status);
+  const failed = !complete && isDepositFailed(status);
 
   await updateActiveTrade({
     deposit: {
       status: status.status,
       description: status.description,
       checkedAt: Date.now(),
+      // Keeps every distinct status seen, so the first funded run on mainnet
+      // records Lighter's real terminal string instead of us guessing again.
+      seen: [...new Set([...(trade.deposit?.seen ?? []), status.status])],
     },
     ...(accountIndex !== null ? { accountIndex } : {}),
   });
 
   return {
     complete,
+    failed,
     status: status.status,
     description: status.description,
     accountIndex,

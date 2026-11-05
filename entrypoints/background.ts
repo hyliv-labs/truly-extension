@@ -43,6 +43,13 @@ export default defineBackground(() => {
     console.info('[truly] installed');
   });
 
+  // Chrome may drop alarms across a browser restart. A deposit in flight has
+  // real money sitting at an intent address, so re-arm rather than relying on
+  // the user reopening the popup.
+  chrome.runtime.onStartup.addListener(() => {
+    void resumeDepositWatch();
+  });
+
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
     if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
@@ -191,6 +198,17 @@ async function touchAutoLock(): Promise<void> {
   });
 }
 
+/** Re-arm the deposit watch if a trade is still waiting on credit. */
+async function resumeDepositWatch(): Promise<void> {
+  const trade = await getActiveTrade();
+  if (!trade?.intentAddress || trade.accountIndex !== undefined) return;
+
+  await chrome.alarms.create(DEPOSIT_ALARM, {
+    periodInMinutes: DEPOSIT_POLL_MINUTES,
+  });
+  console.info('[truly] resumed deposit watch for owner', trade.ownerIndex);
+}
+
 /**
  * One deposit poll. Stops the alarm once credited, and on any error leaves it
  * running: a transient API failure must not abandon a deposit in flight.
@@ -198,9 +216,17 @@ async function touchAutoLock(): Promise<void> {
 async function pollDeposit(): Promise<void> {
   try {
     const progress = await checkDeposit();
+
     if (progress.complete) {
       await chrome.alarms.clear(DEPOSIT_ALARM);
       console.info('[truly] deposit credited, account', progress.accountIndex);
+      return;
+    }
+
+    if (progress.failed) {
+      // Polling a dead deposit forever would look identical to waiting.
+      await chrome.alarms.clear(DEPOSIT_ALARM);
+      console.error('[truly] deposit failed:', progress.status, progress.description);
     }
   } catch (error) {
     // No active trade means the trade ended; nothing left to watch.
