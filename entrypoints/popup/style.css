@@ -53,6 +53,77 @@ h1 {
   text-align: center;
 }
 
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.address {
+  display: block;
+  padding: 8px;
+  border: 1px solid #272b31;
+  border-radius: 6px;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.backup {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.backup code {
+  display: block;
+  margin: 8px 0;
+  line-height: 1.6;
+  word-spacing: 4px;
+}
+
+.backup p {
+  margin: 0;
+  color: var(--muted);
+}
+
+input {
+  padding: 8px;
+  border: 1px solid #272b31;
+  border-radius: 6px;
+  background: #13161a;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+button {
+  padding: 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #06201c;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 12px;
+}
+
 footer {
   border-top: 1px solid #272b31;
   padding-top: 10px;

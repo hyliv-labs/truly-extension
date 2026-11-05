@@ -1,5 +1,47 @@
-/** E9 shell. Real unlock / balance / trade progress land in later commits. */
+/**
+ * E9 shell, wired to E1 only: create or unlock a vault and show the owner
+ * address. Balance, New trade and progress land with E3/E8.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import { send, type VaultStatus } from '@truly/lib/messages';
+
 export function App() {
+  const [status, setStatus] = useState<VaultStatus | null>(null);
+  const [owner, setOwner] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [backup, setBackup] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const next = await send({ kind: 'status' });
+    setStatus(next);
+    if (next.unlocked) {
+      setOwner((await send({ kind: 'currentOwner' })).address);
+    } else {
+      setOwner(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh().catch((e: Error) => setError(e.message));
+  }, [refresh]);
+
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      setPassword('');
+    }
+  };
+
   return (
     <main className="popup">
       <header>
@@ -7,10 +49,70 @@ export function App() {
         <p className="tagline">One trade, one address.</p>
       </header>
 
-      <section className="placeholder">
-        {/* TODO(E9): unlock, approved + pending balance, New trade, progress. */}
-        <p>Scaffold only — no trade flow wired up yet.</p>
-      </section>
+      {status === null ? (
+        <section className="placeholder">
+          <p>Loading…</p>
+        </section>
+      ) : status.unlocked ? (
+        <section className="panel">
+          <label className="field-label">Owner address #{status.ownerIndex}</label>
+          <code className="address">{owner ?? '…'}</code>
+
+          {backup && (
+            <div className="backup">
+              <strong>Write this down now.</strong>
+              <code>{backup}</code>
+              <p>It is the only way to recover funds from a trade in flight.</p>
+            </div>
+          )}
+
+          <button disabled={busy} onClick={() => run(async () => {
+            setBackup(null);
+            await send({ kind: 'lock' });
+          })}>
+            Lock
+          </button>
+        </section>
+      ) : (
+        <section className="panel">
+          <label className="field-label" htmlFor="password">
+            {status.hasVault ? 'Password' : 'Choose a password'}
+          </label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            disabled={busy}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || !password) return;
+              void run(async () => {
+                if (status.hasVault) {
+                  await send({ kind: 'unlock', password });
+                } else {
+                  setBackup((await send({ kind: 'createVault', password })).mnemonic);
+                }
+              });
+            }}
+          />
+          <button
+            disabled={busy || !password}
+            onClick={() =>
+              run(async () => {
+                if (status.hasVault) {
+                  await send({ kind: 'unlock', password });
+                } else {
+                  setBackup((await send({ kind: 'createVault', password })).mnemonic);
+                }
+              })
+            }
+          >
+            {status.hasVault ? 'Unlock' : 'Create vault'}
+          </button>
+        </section>
+      )}
+
+      {error && <p className="error">{error}</p>}
 
       <footer>
         {/* TODO(E2): live Anon-RPC read counter; must be visible in the demo. */}

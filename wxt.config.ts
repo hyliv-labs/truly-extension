@@ -1,8 +1,13 @@
 import { defineConfig } from 'wxt';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   srcDir: '.',
+  // Not '@': WXT already binds '@' and '~' to srcDir, which is the repo root here.
+  alias: {
+    '@truly': resolve('src'),
+  },
   manifest: {
     name: 'Truly',
     description:
