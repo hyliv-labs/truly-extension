@@ -1,5 +1,7 @@
 # Lighter API — verified behaviour
 
+> See also [privacy-pools.md](privacy-pools.md) for the SDK findings.
+
 What was checked against mainnet or found in the docs, and what is still
 unknown. Written down because several of these differ from what the API
 reference implies, and because an unknown that looks like a known one is how
