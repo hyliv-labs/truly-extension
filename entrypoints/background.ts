@@ -1,5 +1,6 @@
 /**
- * Background service worker: the only place key material is ever handled.
+ * Background service worker: the only place key material is ever handled, and
+ * the only place a provider request is ever answered.
  *
  * MV3 tears this worker down after ~30s idle, so nothing durable may live in a
  * module-level variable. The unlocked seed goes to chrome.storage.session and
@@ -17,6 +18,9 @@ import {
   lock,
   unlock,
 } from '@truly/lib/vault';
+import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
+import { handleProviderRequest, settle } from '@truly/lib/provider';
+import { getApproval } from '@truly/lib/approvals';
 
 const AUTO_LOCK_ALARM = 'truly:auto-lock';
 const AUTO_LOCK_MINUTES = 15;
@@ -30,16 +34,19 @@ export default defineBackground(() => {
     if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
   });
 
-  chrome.runtime.onMessage.addListener((message: Request, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
     if (typeof message?.kind !== 'string') return false;
 
-    handle(message)
+    handle(message, sender)
       .then((value) => sendResponse({ ok: true, value } satisfies Response<unknown>))
       .catch((error: unknown) =>
         sendResponse({
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        } satisfies Response<never>),
+          error: errorMessage(error),
+          // Preserve the EIP-1193 code so the dapp can tell a user rejection
+          // (4001) from an unsupported method (4200).
+          ...(isRpcError(error) ? { rpc: { code: error.code, message: error.message } } : {}),
+        }),
       );
 
     // Keeps the message channel open for the async reply.
@@ -47,13 +54,17 @@ export default defineBackground(() => {
   });
 });
 
-async function handle(message: Request): Promise<unknown> {
+async function handle(
+  message: Request,
+  sender: chrome.runtime.MessageSender,
+): Promise<unknown> {
   switch (message.kind) {
     case 'status':
       return {
         hasVault: await hasVault(),
         unlocked: await isUnlocked(),
         ownerIndex: await getOwnerIndex(),
+        activeTrade: await getActiveTrade(),
       };
 
     case 'createVault': {
@@ -78,6 +89,32 @@ async function handle(message: Request): Promise<unknown> {
       return { index: owner.index, address: owner.address };
     }
 
+    case 'startTrade': {
+      const trade = await startTrade();
+      await touchAutoLock();
+      return trade;
+    }
+
+    case 'endTrade':
+      await endTrade();
+      return null;
+
+    case 'provider': {
+      // Trust the sender's own URL over anything the page claims: a page cannot
+      // forge the origin of the content script that relays for it.
+      const origin = sender.origin ?? message.origin;
+      const result = await handleProviderRequest(origin, message.method, message.params);
+      await touchAutoLock();
+      return result;
+    }
+
+    case 'getApproval':
+      return getApproval(message.id);
+
+    case 'settleApproval':
+      await settle(message.id, message.approved);
+      return null;
+
     default: {
       const unreachable: never = message;
       throw new Error(`unknown request: ${JSON.stringify(unreachable)}`);
@@ -96,4 +133,12 @@ async function touchAutoLock(): Promise<void> {
   await chrome.alarms.create(AUTO_LOCK_ALARM, {
     delayInMinutes: AUTO_LOCK_MINUTES,
   });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRpcError(error: unknown): error is Error & { code: number } {
+  return error instanceof Error && typeof (error as { code?: unknown }).code === 'number';
 }

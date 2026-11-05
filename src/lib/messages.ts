@@ -1,23 +1,32 @@
-/** Typed popup <-> background protocol. Key material never crosses this line. */
+/** Typed protocol into the background worker. Key material never crosses it. */
 
 import type { Address } from 'viem';
+import type { ApprovalRecord } from './approvals';
+import type { ActiveTrade } from './trade';
 
 export type Request =
+  // Popup
   | { kind: 'status' }
   | { kind: 'createVault'; password: string; mnemonic?: string }
   | { kind: 'unlock'; password: string }
   | { kind: 'lock' }
-  | { kind: 'currentOwner' };
+  | { kind: 'currentOwner' }
+  | { kind: 'startTrade' }
+  | { kind: 'endTrade' }
+  // Content-script relay (E5)
+  | { kind: 'provider'; origin: string; method: string; params: unknown[] }
+  // Approval window (E5)
+  | { kind: 'getApproval'; id: string }
+  | { kind: 'settleApproval'; id: string; approved: boolean };
 
 export interface VaultStatus {
   hasVault: boolean;
   unlocked: boolean;
   ownerIndex: number;
+  activeTrade: ActiveTrade | null;
 }
 
-export type Response<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: string };
+export type Response<T> = { ok: true; value: T } | { ok: false; error: string };
 
 export interface ResultMap {
   status: VaultStatus;
@@ -26,6 +35,11 @@ export interface ResultMap {
   lock: null;
   /** Address only — the private key stays in the worker. */
   currentOwner: { index: number; address: Address };
+  startTrade: ActiveTrade;
+  endTrade: null;
+  provider: unknown;
+  getApproval: ApprovalRecord | null;
+  settleApproval: null;
 }
 
 export async function send<K extends Request['kind']>(

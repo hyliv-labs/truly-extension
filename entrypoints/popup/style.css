@@ -118,6 +118,31 @@ button:disabled {
   cursor: default;
 }
 
+.message {
+  margin: 0;
+  padding: 8px;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid #272b31;
+  border-radius: 6px;
+  background: #13161a;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: auto;
+}
+
+button.secondary {
+  background: #272b31;
+  color: var(--fg);
+}
+
 .error {
   margin: 0;
   color: #fca5a5;

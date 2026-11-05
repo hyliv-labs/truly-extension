@@ -66,7 +66,32 @@ export function App() {
             </div>
           )}
 
-          <button disabled={busy} onClick={() => run(async () => {
+          <p className="field-label">
+            {status.activeTrade
+              ? 'Trade active — Lighter can connect to this address.'
+              : 'No active trade. Lighter cannot connect.'}
+          </p>
+
+          {/* TODO(E8): the orchestrator starts a trade only once the account
+              is funded. Until then these are manual, for exercising E5. */}
+          {status.activeTrade ? (
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => run(() => send({ kind: 'endTrade' }).then(() => {}))}
+            >
+              End trade
+            </button>
+          ) : (
+            <button
+              disabled={busy}
+              onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
+            >
+              Start trade
+            </button>
+          )}
+
+          <button className="secondary" disabled={busy} onClick={() => run(async () => {
             setBackup(null);
             await send({ kind: 'lock' });
           })}>

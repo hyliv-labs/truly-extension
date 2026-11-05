@@ -25,8 +25,11 @@ export default defineConfig({
       'tabs',
     ],
     host_permissions: [
+      // The app (app.lighter.xyz) and the marketing site.
       'https://*.lighter.xyz/*',
-      // TODO(E5): confirm against Lighter's real app + API hostnames before relying on this.
+      // Lighter's API is on a DIFFERENT registrable domain, so the pattern
+      // above does not cover it. E4/E6 call this host from the worker.
+      'https://mainnet.zklighter.elliot.ai/*',
     ],
     web_accessible_resources: [
       {
