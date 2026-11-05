@@ -28,21 +28,35 @@ function env(key: string): string | undefined {
 }
 
 /**
- * Bootstrap RPC, used ONLY to read the anon-rpc specifier contract. It breaks
- * the circular "need the chain to reach the chain" dependency and sees exactly
- * one read; everything else goes through the harness.
+ * Bootstrap RPC, used ONLY to read the anon-rpc specifier contract once. It
+ * breaks the circular "need the chain to reach the chain" dependency.
+ *
+ * ETHEREUM MAINNET, not Arbitrum. The specifier contract is published on
+ * Ethereum; the chain the anon-client then *fetches* from is a separate thing
+ * entirely (ARBITRUM_RPC_URL below). Pointing this at Arbitrum reads an
+ * address with no contract there, and the failure says nothing useful.
  */
 export const BOOTSTRAP_RPC_URL =
-  env('WXT_BOOTSTRAP_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
+  env('WXT_BOOTSTRAP_RPC_URL') ?? 'https://ethereum-rpc.publicnode.com';
 
 /**
- * The anon-rpc IWorkerSpecifier contract, which identifies the anon-client by
- * hash. OPEN QUESTION for the Ethereum Foundation booth: which specifier to
- * use for Arbitrum reads. Until it is set, every read is refused.
+ * The anon-rpc IWorkerSpecifier contract, which pins the anon-client by hash.
+ *
+ * Defaults to tor-js, from anon-rpc's own adopters.json5 — a published worker
+ * of kind "network", meaning it actually anonymises. Verified to have bytecode
+ * on Ethereum mainnet.
+ *
+ * Do NOT substitute the passthrough worker
+ * (0x4fd77be300f31c5fe6ab266d35d27750a3478d27): it is kind "reference" and
+ * fulfils calls with an ordinary fetch, so requests are not anonymised at all.
+ * It demonstrates the sandbox, not privacy, and using it would quietly void
+ * the entire claim this extension makes.
+ *
+ * Alternative network worker: nym, 0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0
+ * (~18 MB bundle, several seconds to bootstrap).
  */
-export const ANON_RPC_SPECIFIER = env('WXT_ANON_RPC_SPECIFIER') as
-  | Address
-  | undefined;
+export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ??
+  '0x700dA3193D35fA54Cd3fBf29B66f2a2A0385659e') as Address;
 
 /** Destination the anon-client proxies reads to. */
 export const ARBITRUM_RPC_URL =
@@ -105,14 +119,6 @@ export interface ConfigProblem {
  */
 export function configProblems(): ConfigProblem[] {
   const problems: ConfigProblem[] = [];
-
-  if (!ANON_RPC_SPECIFIER) {
-    problems.push({
-      key: 'WXT_ANON_RPC_SPECIFIER',
-      reason:
-        'No anon-rpc specifier contract set, so reads cannot be anonymised. Ask the Ethereum Foundation booth which specifier to use on Arbitrum.',
-    });
-  }
 
   if (!PRIVACY_POOL_ENTRYPOINT || !PRIVACY_POOL_ADDRESS) {
     problems.push({

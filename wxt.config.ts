@@ -34,6 +34,11 @@ export default defineConfig({
       // Lighter's API is on a DIFFERENT registrable domain, so the pattern
       // above does not cover it. E4/E6 call this host from the worker.
       'https://mainnet.zklighter.elliot.ai/*',
+      // Bootstrap read of the anon-rpc specifier, on ETHEREUM mainnet.
+      'https://ethereum-rpc.publicnode.com/*',
+      // Where the anon-client proxies Arbitrum reads, and the 4337 bundler.
+      'https://arb1.arbitrum.io/*',
+      'https://public.pimlico.io/*',
     ],
     // Puts the anon-rpc worker at an opaque origin with its own CSP. The '*'
     // is a real wildcard, which is what keeps this entry stable even though

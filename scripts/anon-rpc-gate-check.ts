@@ -55,11 +55,9 @@ if (problems.length === 0) {
 
 // Each unknown must be named separately: "something is missing" does not tell
 // the user which booth to visit.
-for (const key of [
-  'WXT_ANON_RPC_SPECIFIER',
-  'WXT_PRIVACY_POOL_ENTRYPOINT',
-  'WXT_PRIVACY_POOL_RELAYER_URL',
-]) {
+// The specifier is deliberately NOT here: it now has a working default
+// (tor-js), so it is no longer something the user must supply.
+for (const key of ['WXT_PRIVACY_POOL_ENTRYPOINT', 'WXT_PRIVACY_POOL_RELAYER_URL']) {
   if (!problems.some((p) => p.key === key)) fail(`${key} was not reported`);
   else pass(`${key} reported`);
 }
@@ -78,10 +76,10 @@ try {
   fail('a trade STARTED while reads could not be anonymised');
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (!message.includes('anon-rpc')) {
-    fail(`refused, but not for the anon-rpc reason: ${message}`);
+  if (!message.includes('Privacy Pools')) {
+    fail(`refused, but not for the expected reason: ${message}`);
   } else {
-    pass('startTrade refused while anon-rpc is unavailable');
+    pass('startTrade refused while the pool is unconfigured');
   }
 }
 
