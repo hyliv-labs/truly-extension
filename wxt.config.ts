@@ -43,6 +43,12 @@ export default defineConfig({
     },
 
     content_security_policy: {
+      // snarkjs compiles the Privacy Pools circuits to WebAssembly, and MV3's
+      // default extension_pages policy blocks WASM outright. Without this the
+      // proof builder fails in the offscreen document with a CSP error that
+      // does not mention the circuits.
+      extension_pages:
+        "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
       // blob: in script-src is the easy one to miss: the worker runtime and
       // bundle are importScripts'd from blob URLs, and importScripts is checked
       // against script-src, not worker-src. Without it the load fails with a

@@ -18,6 +18,7 @@
     "check:lighter": "tsx scripts/lighter-check.ts"
   },
   "dependencies": {
+    "@0xbow/privacy-pools-core-sdk": "^1.5.0",
     "@anon-rpc/browser-extension-harness": "^0.4.0",
     "@anon-rpc/browser-harness": "^0.4.0",
     "@noble/hashes": "^2.4.0",
