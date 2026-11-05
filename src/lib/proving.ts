@@ -36,7 +36,10 @@ function artifactBaseUrl(): string {
 
 /** Fail with a precise message rather than letting the SDK throw mid-proof. */
 export async function assertArtifactsPresent(): Promise<void> {
-  const probe = new URL('withdraw.wasm', artifactBaseUrl()).toString();
+  // 'artifacts/' is required by the SDK, which resolves
+  // `<baseUrl>/artifacts/<name>`. Probing the base would pass while proving
+  // still 404s inside the SDK.
+  const probe = new URL('artifacts/withdraw.wasm', artifactBaseUrl()).toString();
   try {
     const response = await fetch(probe, { method: 'HEAD' });
     if (!response.ok) throw new CircuitArtifactsMissing();
