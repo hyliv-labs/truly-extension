@@ -22,7 +22,10 @@ export type Request =
   | { kind: 'keepAlive' }
   // Anon-RPC (E2)
   | { kind: 'anonRpcStatus' }
-  | { kind: 'anonRpcSelfTest' };
+  | { kind: 'anonRpcSelfTest' }
+  // Lighter bridge (E4)
+  | { kind: 'prepareDeposit' }
+  | { kind: 'checkDeposit' };
 
 export interface AnonRpcStatus {
   reads: number;
@@ -59,6 +62,13 @@ export interface ResultMap {
   keepAlive: null;
   anonRpcStatus: AnonRpcStatus;
   anonRpcSelfTest: SelfTestResult;
+  prepareDeposit: { intentAddress: string };
+  checkDeposit: {
+    complete: boolean;
+    status: string;
+    description: string;
+    accountIndex: number | null;
+  };
 }
 
 export async function send<K extends Request['kind']>(

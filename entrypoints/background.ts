@@ -22,12 +22,21 @@ import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
 import { handleProviderRequest, settle } from '@truly/lib/provider';
 import { getApproval } from '@truly/lib/approvals';
 import { getReadCount } from '@truly/lib/anon-rpc';
+import { checkDeposit, prepareDeposit } from '@truly/lib/deposit';
 import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
 
 const AUTO_LOCK_ALARM = 'truly:auto-lock';
 const AUTO_LOCK_MINUTES = 15;
+
+/**
+ * Deposit credit takes ~15-20 minutes without fast-bridge capacity, so poll on
+ * an alarm. setInterval would die with the worker; the minimum period Chrome
+ * honours for an unpacked extension is 1 minute.
+ */
+const DEPOSIT_ALARM = 'truly:deposit-poll';
+const DEPOSIT_POLL_MINUTES = 1;
 
 export default defineBackground(() => {
   chrome.runtime.onInstalled.addListener(() => {
@@ -36,6 +45,7 @@ export default defineBackground(() => {
 
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
+    if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
   });
 
   chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
@@ -101,6 +111,10 @@ async function handle(
 
     case 'endTrade':
       await endTrade();
+      // Stop watching immediately rather than letting the next tick discover
+      // there is no trade: that tick would be a network call tying this owner
+      // to a moment after the trade closed.
+      await chrome.alarms.clear(DEPOSIT_ALARM);
       return null;
 
     case 'provider': {
@@ -120,6 +134,18 @@ async function handle(
 
     case 'keepAlive':
       return null;
+
+    case 'prepareDeposit': {
+      const intentAddress = await prepareDeposit();
+      // Start watching only once there is somewhere for funds to land.
+      await chrome.alarms.create(DEPOSIT_ALARM, {
+        periodInMinutes: DEPOSIT_POLL_MINUTES,
+      });
+      return { intentAddress };
+    }
+
+    case 'checkDeposit':
+      return checkDeposit();
 
     case 'anonRpcStatus':
       return { reads: await getReadCount(), problems: configProblems() };
@@ -163,6 +189,27 @@ async function touchAutoLock(): Promise<void> {
   await chrome.alarms.create(AUTO_LOCK_ALARM, {
     delayInMinutes: AUTO_LOCK_MINUTES,
   });
+}
+
+/**
+ * One deposit poll. Stops the alarm once credited, and on any error leaves it
+ * running: a transient API failure must not abandon a deposit in flight.
+ */
+async function pollDeposit(): Promise<void> {
+  try {
+    const progress = await checkDeposit();
+    if (progress.complete) {
+      await chrome.alarms.clear(DEPOSIT_ALARM);
+      console.info('[truly] deposit credited, account', progress.accountIndex);
+    }
+  } catch (error) {
+    // No active trade means the trade ended; nothing left to watch.
+    if (errorMessage(error) === 'no active trade') {
+      await chrome.alarms.clear(DEPOSIT_ALARM);
+      return;
+    }
+    console.warn('[truly] deposit poll failed, will retry', error);
+  }
 }
 
 function errorMessage(error: unknown): string {
