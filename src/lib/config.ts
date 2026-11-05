@@ -70,6 +70,30 @@ export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
  */
 export const CIRCUIT_ARTIFACT_PATH = 'privacy-pools/';
 
+/**
+ * Circle Paymaster v0.8 on Arbitrum One — pays gas in USDC so the owner
+ * address never needs ETH, which is the whole point: funding it with ETH from
+ * anywhere would link it to whoever sent the ETH.
+ *
+ * Verified: this address has bytecode on Arbitrum mainnet and Circle's
+ * addresses page lists it as v0.8 mainnet. v0.7 is a DIFFERENT address
+ * (0x6C973eBe80dCD8660841D4356bf15c32460271C9) paired with EntryPoint v0.7.
+ */
+export const CIRCLE_PAYMASTER: Address =
+  '0x0578cFB241215b77442a541325d6A4E6dFE700Ec';
+
+/**
+ * Circle's own samples use Pimlico's public endpoint. Overridable because the
+ * public one carries undocumented rate limits, which is exactly the kind of
+ * thing that fails during a demo.
+ */
+export const BUNDLER_URL =
+  env('WXT_BUNDLER_URL') ?? `https://public.pimlico.io/v2/${ARBITRUM_CHAIN_ID}/rpc`;
+
+/** Circle's documented sample values. */
+export const PAYMASTER_VERIFICATION_GAS_LIMIT = 200_000n;
+export const PAYMASTER_POST_OP_GAS_LIMIT = 35_000n;
+
 export interface ConfigProblem {
   readonly key: string;
   readonly reason: string;
