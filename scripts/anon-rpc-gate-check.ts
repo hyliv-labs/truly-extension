@@ -29,8 +29,11 @@ function makeArea(store: Store) {
   storage: { local: makeArea({}), session: makeArea({}) },
 };
 
-// Deliberately unset.
+// Deliberately unset: this script exists to prove the gate closes.
 delete process.env.WXT_ANON_RPC_SPECIFIER;
+delete process.env.WXT_PRIVACY_POOL_ENTRYPOINT;
+delete process.env.WXT_PRIVACY_POOL_ADDRESS;
+delete process.env.WXT_PRIVACY_POOL_RELAYER_URL;
 
 const { configProblems } = await import('../src/lib/config.ts');
 const { createVault } = await import('../src/lib/vault.ts');
@@ -45,9 +48,20 @@ const pass = (msg: string) => console.log('pass', msg);
 
 const problems = configProblems();
 if (problems.length === 0) {
-  fail('no specifier set, yet configProblems() reported nothing');
+  fail('nothing configured, yet configProblems() reported nothing');
 } else {
-  pass(`config problem reported: ${problems[0]!.key}`);
+  pass(`config problems reported: ${problems.map((p) => p.key).join(', ')}`);
+}
+
+// Each unknown must be named separately: "something is missing" does not tell
+// the user which booth to visit.
+for (const key of [
+  'WXT_ANON_RPC_SPECIFIER',
+  'WXT_PRIVACY_POOL_ENTRYPOINT',
+  'WXT_PRIVACY_POOL_RELAYER_URL',
+]) {
+  if (!problems.some((p) => p.key === key)) fail(`${key} was not reported`);
+  else pass(`${key} reported`);
 }
 
 // The reason has to be human-readable: the popup shows this string verbatim.

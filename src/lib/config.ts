@@ -48,6 +48,28 @@ export const ANON_RPC_SPECIFIER = env('WXT_ANON_RPC_SPECIFIER') as
 export const ARBITRUM_RPC_URL =
   env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
 
+/**
+ * Privacy Pools v2 on Arbitrum. OPEN QUESTIONS for the 0xbow booth: the pool,
+ * entrypoint and relayer addresses, and the minimum deposit.
+ */
+export const PRIVACY_POOL_ENTRYPOINT = env('WXT_PRIVACY_POOL_ENTRYPOINT') as
+  | Address
+  | undefined;
+export const PRIVACY_POOL_ADDRESS = env('WXT_PRIVACY_POOL_ADDRESS') as
+  | Address
+  | undefined;
+export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
+
+/**
+ * Where the Privacy Pools circuit artifacts (.wasm / .zkey) are served from.
+ *
+ * They are NOT shipped in the SDK and 0xbow publishes no release assets, so
+ * they have to be placed in public/privacy-pools/ and served from the
+ * extension's own origin. MV3 forbids remote code, so fetching them from a CDN
+ * is not an alternative.
+ */
+export const CIRCUIT_ARTIFACT_PATH = 'privacy-pools/';
+
 export interface ConfigProblem {
   readonly key: string;
   readonly reason: string;
@@ -65,6 +87,22 @@ export function configProblems(): ConfigProblem[] {
       key: 'WXT_ANON_RPC_SPECIFIER',
       reason:
         'No anon-rpc specifier contract set, so reads cannot be anonymised. Ask the Ethereum Foundation booth which specifier to use on Arbitrum.',
+    });
+  }
+
+  if (!PRIVACY_POOL_ENTRYPOINT || !PRIVACY_POOL_ADDRESS) {
+    problems.push({
+      key: 'WXT_PRIVACY_POOL_ENTRYPOINT',
+      reason:
+        'No Privacy Pools entrypoint or pool address set, so funds cannot be withdrawn from the pool. Ask the 0xbow booth for the Arbitrum USDC pool addresses.',
+    });
+  }
+
+  if (!PRIVACY_POOL_RELAYER_URL) {
+    problems.push({
+      key: 'WXT_PRIVACY_POOL_RELAYER_URL',
+      reason:
+        'No Privacy Pools relayer set. Without it the withdrawal would have to be paid for by the owner address, which would link it to the deposit.',
     });
   }
 

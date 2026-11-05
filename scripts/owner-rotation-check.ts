@@ -36,6 +36,9 @@ const session: Store = {};
 // Set before the imports below: config.ts reads the environment at module
 // evaluation, and startTrade refuses to move money without a specifier.
 process.env.WXT_ANON_RPC_SPECIFIER = '0x00000000000000000000000000000000000000a1';
+process.env.WXT_PRIVACY_POOL_ENTRYPOINT = '0x00000000000000000000000000000000000000e1';
+process.env.WXT_PRIVACY_POOL_ADDRESS = '0x00000000000000000000000000000000000000b1';
+process.env.WXT_PRIVACY_POOL_RELAYER_URL = 'https://relayer.example';
 
 // Imported after the stub exists — these modules touch chrome at call time only.
 const { createVault, currentOwner, getOwnerIndex } = await import('../src/lib/vault.ts');
