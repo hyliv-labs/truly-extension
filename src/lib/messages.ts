@@ -17,7 +17,9 @@ export type Request =
   | { kind: 'provider'; origin: string; method: string; params: unknown[] }
   // Approval window (E5)
   | { kind: 'getApproval'; id: string }
-  | { kind: 'settleApproval'; id: string; approved: boolean };
+  | { kind: 'settleApproval'; id: string; approved: boolean }
+  // Keeps the worker alive while an approval prompt is open (E5).
+  | { kind: 'keepAlive' };
 
 export interface VaultStatus {
   hasVault: boolean;
@@ -40,6 +42,7 @@ export interface ResultMap {
   provider: unknown;
   getApproval: ApprovalRecord | null;
   settleApproval: null;
+  keepAlive: null;
 }
 
 export async function send<K extends Request['kind']>(

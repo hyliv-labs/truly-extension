@@ -8,7 +8,7 @@
  */
 
 import type { Address } from 'viem';
-import { currentOwner } from './vault';
+import { currentOwner, retireOwner } from './vault';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 
@@ -43,6 +43,17 @@ export async function startTrade(): Promise<ActiveTrade> {
   return trade;
 }
 
+/**
+ * Retire the trade AND its owner address. The index is burned here rather than
+ * at the start of the next trade, so an unfinished trade resumes on the same
+ * address while a finished one can never be handed out again.
+ */
 export async function endTrade(): Promise<void> {
+  const trade = await getActiveTrade();
+  if (!trade) return;
+
+  // Burn first: if this throws, the trade stays active and retryable. The
+  // reverse order could drop the record and leave the index reusable.
+  await retireOwner(trade.ownerIndex);
   await chrome.storage.local.remove(LOCAL_ACTIVE_TRADE);
 }

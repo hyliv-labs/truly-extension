@@ -81,7 +81,9 @@ function reply(
 function injectMainWorldProvider(): void {
   const script = document.createElement('script');
   script.src = chrome.runtime.getURL('/injected.js');
-  script.type = 'module';
+  // Deliberately NOT type="module": that would defer execution and CORS-fetch
+  // the file, so the provider could announce after the dapp has already built
+  // its connect list. WXT emits an IIFE, which runs synchronously.
   script.onload = () => script.remove();
   // document_start can run before <head> exists.
   (document.head ?? document.documentElement).prepend(script);

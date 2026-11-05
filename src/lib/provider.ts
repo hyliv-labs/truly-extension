@@ -11,7 +11,7 @@
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Hex } from 'viem';
 import { getActiveTrade } from './trade';
-import { currentOwner } from './vault';
+import { ownerAt } from './vault';
 import { dropApproval, putApproval } from './approvals';
 
 /** Arbitrum One. */
@@ -79,7 +79,14 @@ export async function handleProviderRequest(
         message: decodeMessage(rawMessage),
       });
 
-      const owner = await currentOwner();
+      // Derive at the trade's pinned index, never the current one: if the
+      // index moved while the prompt was open, signing with it would produce a
+      // signature from an address the dapp never saw.
+      const owner = await ownerAt(trade.ownerIndex);
+      if (owner.address.toLowerCase() !== trade.ownerAddress.toLowerCase()) {
+        throw rpcError(4100, 'Truly owner mismatch; refusing to sign.');
+      }
+
       return privateKeyToAccount(owner.privateKey).signMessage({
         message: { raw: rawMessage },
       });

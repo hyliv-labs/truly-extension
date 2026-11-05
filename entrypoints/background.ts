@@ -103,6 +103,9 @@ async function handle(
       // Trust the sender's own URL over anything the page claims: a page cannot
       // forge the origin of the content script that relays for it.
       const origin = sender.origin ?? message.origin;
+      // Temporary: needed to learn which methods Lighter actually calls.
+      // TODO(E5): remove once the connect + authorize flow is confirmed.
+      console.info('[truly] rpc', origin, message.method, message.params);
       const result = await handleProviderRequest(origin, message.method, message.params);
       await touchAutoLock();
       return result;
@@ -110,6 +113,9 @@ async function handle(
 
     case 'getApproval':
       return getApproval(message.id);
+
+    case 'keepAlive':
+      return null;
 
     case 'settleApproval':
       await settle(message.id, message.approved);

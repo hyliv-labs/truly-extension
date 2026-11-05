@@ -84,17 +84,27 @@ export async function getOwnerIndex(): Promise<number> {
 
 /** The owner for the current trade. */
 export async function currentOwner(): Promise<OwnerKey> {
-  return deriveOwner(await requireMnemonic(), await getOwnerIndex());
+  return ownerAt(await getOwnerIndex());
 }
 
 /**
- * Burn the current index and derive the next owner. Called once per new trade.
- * The index is persisted BEFORE the key is handed out, so a crash can only ever
- * skip an index — never hand the same address to two trades.
+ * The owner at a specific index. A trade pins its index at the start and signs
+ * against that, so a concurrent retirement can never redirect a signature to a
+ * different address.
  */
-export async function advanceOwner(): Promise<OwnerKey> {
-  const phrase = await requireMnemonic();
-  const next = (await getOwnerIndex()) + 1;
+export async function ownerAt(index: number): Promise<OwnerKey> {
+  return deriveOwner(await requireMnemonic(), index);
+}
+
+/**
+ * Burn the current index so the next trade gets a fresh address. This is the
+ * ONLY place the index moves, and it deliberately needs no mnemonic: retiring
+ * must succeed even when the vault has auto-locked mid-trade, or a locked
+ * wallet would silently reissue the same owner to the next trade.
+ */
+export async function retireOwner(usedIndex: number): Promise<void> {
+  const current = await getOwnerIndex();
+  // Monotonic: never move backwards, even if called twice or out of order.
+  const next = Math.max(current, usedIndex + 1);
   await chrome.storage.local.set({ [LOCAL_OWNER_INDEX]: next });
-  return deriveOwner(phrase, next);
 }

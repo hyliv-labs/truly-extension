@@ -10,8 +10,8 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
-    "check:e1": "node scripts/e1-check.ts",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "check": "tsx scripts/e1-check.ts && tsx scripts/owner-rotation-check.ts"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
@@ -27,6 +27,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@wxt-dev/module-react": "^1.2.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "wxt": "^0.21.5"
   }

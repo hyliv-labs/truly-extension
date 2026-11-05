@@ -21,6 +21,16 @@ function Approval() {
       .catch(() => setMissing(true));
   }, [id]);
 
+  // The worker is torn down after ~30s idle, and with it the promise holding
+  // the dapp's request. Reading a message takes longer than that, so poke the
+  // worker periodically — any message resets its idle timer.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void chrome.runtime.sendMessage({ kind: 'keepAlive' }).catch(() => {});
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const answer = async (approved: boolean) => {
     setBusy(true);
     await chrome.runtime.sendMessage({ kind: 'settleApproval', id, approved });
