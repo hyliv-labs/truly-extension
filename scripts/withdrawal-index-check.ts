@@ -20,8 +20,9 @@ installChromeStub();
 const {
   nextWithdrawalIndex,
   confirmWithdrawalIndex,
-  getWithdrawalIndex,
+  getWithdrawalFloor,
   deriveChangeNote,
+  StaleScanError,
 } = await import('../src/lib/notes.ts');
 
 let failed = false;
@@ -35,50 +36,77 @@ const LABEL_A = 42n;
 const LABEL_B = 99n;
 const PHRASE = 'test test test test test test test test test test test junk';
 
-// A fresh label starts at 0.
-if ((await nextWithdrawalIndex(LABEL_A)) !== 0) {
-  fail('a label with no withdrawals did not start at index 0');
+// THE AUTHORITY IS THE CHAIN. The SDK derives the index as
+// account.children.length, both when creating secrets and when replaying
+// Withdrawn events during recovery. So the index must follow that count.
+if ((await nextWithdrawalIndex(LABEL_A, 0)) !== 0) {
+  fail('a label with no change notes did not yield index 0');
 } else {
-  pass('a fresh label starts at index 0');
+  pass('a label with no change notes yields index 0');
+}
+if ((await nextWithdrawalIndex(LABEL_A, 3)) !== 3) {
+  fail('the index did not follow the on-chain children count');
+} else {
+  pass('the index follows the on-chain children count');
 }
 
-// Allocation must NOT advance: a withdrawal that never lands consumed nothing.
-await nextWithdrawalIndex(LABEL_A);
-if ((await nextWithdrawalIndex(LABEL_A)) !== 0) {
-  fail('allocating advanced the index — a failed withdrawal would burn one');
+// THE RECOVERY CASE that a local counter would get wrong. Storage is empty
+// after MetaMask recovery or a reinstall, so a local counter reads 0 -- but
+// the chain has two change notes. Index 0 would reuse a spent nullifier.
+if ((await nextWithdrawalIndex(LABEL_B, 2)) !== 2) {
+  fail('a recovered vault with an empty store did not follow the chain — index would collide');
+} else {
+  pass('a recovered vault with an EMPTY store still yields index 2, not 0');
+}
+
+// Allocation must not advance anything: a withdrawal that never lands has
+// consumed no index, and the chain count is unchanged either way.
+await nextWithdrawalIndex(LABEL_A, 3);
+if ((await nextWithdrawalIndex(LABEL_A, 3)) !== 3) {
+  fail('allocating twice changed the answer — a failed withdrawal would burn an index');
 } else {
   pass('allocating does not advance; a failed withdrawal reuses its index');
 }
 
-// Confirmation advances it.
+// The local floor catches the OPPOSITE failure: a scan that has not yet seen
+// a withdrawal we know confirmed. Deriving against the lower count would
+// reuse a spent nullifier.
+await confirmWithdrawalIndex(LABEL_A, 2); // floor becomes 3
+if ((await getWithdrawalFloor(LABEL_A)) !== 3) {
+  fail('confirming did not raise the local floor');
+} else {
+  pass('confirming raises the local floor');
+}
+try {
+  await nextWithdrawalIndex(LABEL_A, 1);
+  fail('a STALE scan (1 child, floor 3) was accepted — the change note would be stranded');
+} catch (error) {
+  if (error instanceof StaleScanError) {
+    pass('a stale scan is refused with StaleScanError rather than silently reusing an index');
+  } else {
+    fail(`stale scan threw the wrong error: ${(error as Error).name}`);
+  }
+}
+if ((await nextWithdrawalIndex(LABEL_A, 3)) !== 3) {
+  fail('a scan that matches the floor was wrongly refused');
+} else {
+  pass('a scan that has caught up with the floor is accepted');
+}
+
+// The floor is monotonic, so a late confirmation cannot lower it and let a
+// stale scan through.
 await confirmWithdrawalIndex(LABEL_A, 0);
-if ((await nextWithdrawalIndex(LABEL_A)) !== 1) {
-  fail('confirming did not advance the index — the next withdrawal would reuse it');
+if ((await getWithdrawalFloor(LABEL_A)) !== 3) {
+  fail('a repeated confirmation lowered the floor');
 } else {
-  pass('confirming advances the index');
+  pass('a repeated confirmation cannot lower the floor');
 }
 
-// THE COLLISION GUARD: a late or duplicated confirmation must not rewind.
-await confirmWithdrawalIndex(LABEL_A, 0);
-if ((await getWithdrawalIndex(LABEL_A)) !== 1) {
-  fail('a repeated confirmation moved the index BACKWARDS — the next change note would collide');
+// Floors are per label, not global.
+if ((await getWithdrawalFloor(999n)) !== 0) {
+  fail('an untouched label inherited another label\'s floor');
 } else {
-  pass('a repeated confirmation cannot move the index backwards');
-}
-
-await confirmWithdrawalIndex(LABEL_A, 5);
-await confirmWithdrawalIndex(LABEL_A, 2);
-if ((await getWithdrawalIndex(LABEL_A)) !== 6) {
-  fail(`an out-of-order confirmation rewound the index to ${await getWithdrawalIndex(LABEL_A)}`);
-} else {
-  pass('out-of-order confirmations keep the maximum');
-}
-
-// Indices are per label, not global.
-if ((await nextWithdrawalIndex(LABEL_B)) !== 0) {
-  fail('a second label inherited the first label\'s index — indices are not isolated');
-} else {
-  pass('a second label is independent, still at index 0');
+  pass('floors are per label, not global');
 }
 
 // Derivation: same inputs give the same secrets, different indices do not.
@@ -104,6 +132,12 @@ if (String(n0.nullifier) === String(b0.nullifier)) {
 }
 
 for (const bad of [-1, 1.5, Number.NaN]) {
+  try {
+    await nextWithdrawalIndex(LABEL_A, bad);
+    fail(`nextWithdrawalIndex accepted an invalid children count ${bad}`);
+  } catch {
+    pass(`nextWithdrawalIndex rejects a children count of ${bad}`);
+  }
   try {
     deriveChangeNote(PHRASE, LABEL_A, bad);
     fail(`deriveChangeNote accepted an invalid index ${bad}`);

@@ -96,6 +96,13 @@ an unfunded seed finds no notes, as it must
 `totalDeposits`, so the scan is seeing the whole pool — and with no Hypersync
 dependency.
 
+**Measured over direct HTTP, not over anon-rpc.** Twelve calls is plainly
+affordable where eleven thousand was not, but whether tor-js carries a
+10,000,000-block `eth_getLogs` — its request timeout, its response-size
+handling, and whether arb1 serves Tor exits at all — is **untested**. The
+wiring is asserted (below); the transport is not. A discovery scan is the first
+item in the in-extension smoke test.
+
 ### Routing discovery through anon-rpc
 
 `DataService` takes an `rpcUrl` *string* and builds its own transport —
@@ -305,6 +312,14 @@ Two further facts the quote settled:
   CoW for pricing and can fail transiently, so **quote failures are retryable**,
   not a reason to abandon a withdrawal.
 
+**The relayer calls are not anonymised.** `/relayer/quote` and
+`/relayer/request` are plain `fetch`es from the user's IP, and they carry the
+owner address as recipient. Fixing discovery's transport (task 3) does not make
+the withdrawal path private: fastrelay can associate this IP with that owner
+address. Routing these through anon-rpc's fetch path, or accepting the leak,
+is an open decision — it is recorded here so the discovery fix is not mistaken
+for a whole-path guarantee.
+
 ## Status
 
 Both blockers found in the first pass are resolved, and neither needed a new
@@ -322,9 +337,16 @@ UI must show:
   spendable. This is the only state that waits for a batch.
 - `spendable` — label present. Its change notes are spendable immediately.
 - `rejected` — the only exit is `ragequit`, which pays the **original
-  depositor**, i.e. the retired owner address. That address's key stays
-  derivable from the vault, so the funds are recoverable; the UI has to say so,
-  because the address is otherwise never reused.
+  depositor**: the retired owner address. Its key stays derivable from the
+  vault, so the vault can still *sign* for it.
+
+  **Whether it can still pay for that signature is unverified.** The owner
+  holds no ETH by design and pays gas in USDC through the Circle paymaster. If
+  the re-shield's UserOp consumes the 1 USDC permit reserve and leaves the
+  owner empty, a ragequit cannot be funded without sending USDC to that
+  address — which links it, defeating the point of retiring it. At 1 rejection
+  in 240 this is not urgent, but "recoverable" must not be stated
+  unqualified until the post-re-shield owner balance is checked.
 
 ## Remaining before mainnet use
 
@@ -336,17 +358,24 @@ UI must show:
    proof and a real note, so it is part of the funded test above. `quote` and
    `details` are now covered by `pnpm check:relayer`.
 
-## The E3 call order, fixed by the context
+## The E3 call order
 
-The context commits to the withdrawal struct, which carries the relayer's fee
-terms, so these steps cannot be reordered:
+Two constraints fix it. The context commits to the withdrawal struct, which
+carries the relayer's fee terms — so the quote must precede proving. And the
+**`feeCommitment` TTL is 60 seconds**, measured live. Everything between
+quoting and submitting has to fit in that minute.
 
-1. `POST /relayer/quote` → `feeCommitment`
-2. Build the withdrawal struct from it
-3. Compute `context = keccak(withdrawal, SCOPE) % SNARK_SCALAR_FIELD`
-4. Obtain the ASP tree whose root equals `latestRoot()`
-5. Prove
+So anything network-bound that does *not* depend on the quote goes first.
+Fetching the ASP tree over Tor inside the window would risk expiring it:
+
+1. Obtain the ASP tree and confirm its root equals `latestRoot()`
+2. `POST /relayer/quote` → `feeCommitment` **(60s clock starts)**
+3. Build the withdrawal struct from it
+4. Compute `context = keccak(withdrawal, SCOPE) % SNARK_SCALAR_FIELD`
+5. Prove (~2.5s)
 6. `POST /relayer/request`
 
-Retryable at step 6: `IncorrectASPRoot` (root rotated — refetch, re-prove) and
-a CoW-sourced quote error (re-quote from step 1).
+Retries:
+- `IncorrectASPRoot` — the root rotated. Go back to **step 1**, and re-quote,
+  because the old quote has almost certainly expired too.
+- A CoW-sourced quote error — re-quote from step 2.

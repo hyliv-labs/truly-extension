@@ -89,7 +89,7 @@ try {
   if (chunks > 100) {
     fail(`${chunks} eth_getLogs calls is still not viable over anon-rpc`);
   } else {
-    pass(`a full scan is ${chunks} eth_getLogs calls, which anon-rpc can carry`);
+    pass(`a full scan is ${chunks} eth_getLogs calls (measured over DIRECT HTTP;\n       carrying a ${LOG_CHUNK_SIZE}-block getLogs over tor-js is still untested)`);
   }
 
   const started = Date.now();

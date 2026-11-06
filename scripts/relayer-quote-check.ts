@@ -69,6 +69,28 @@ try {
     const quote = JSON.parse(text) as Record<string, unknown>;
     const keys = Object.keys(quote);
     pass(`quote fields: ${keys.join(', ')}`);
+
+    // THE QUOTE'S TTL SETS THE E3 STEP ORDER. Everything between quoting and
+    // submitting has to fit inside it: computing the context, fetching the ASP
+    // tree, and in-browser proving (~2.5s). Anything that does NOT depend on
+    // the quote must happen BEFORE it, or a slow Tor fetch expires the quote.
+    const commitment = quote.feeCommitment as { expiration?: number } | undefined;
+    if (typeof commitment?.expiration === 'number') {
+      const ttlMs = commitment.expiration - Date.now();
+      const ttlSec = Math.round(ttlMs / 1000);
+      pass(`feeCommitment TTL is ${ttlSec}s (expiration ${commitment.expiration})`);
+      if (ttlSec < 30) {
+        fail(`a ${ttlSec}s TTL is too short to fetch the ASP tree over Tor and prove`);
+      } else {
+        console.log(
+          `  => quote LAST, after the ASP tree and the latestRoot() check.\n` +
+            `     Proving is ~2.5s, so ${ttlSec}s is workable only if nothing\n` +
+            `     network-bound sits between the quote and the request.`,
+        );
+      }
+    } else {
+      fail('the quote has no feeCommitment.expiration — its TTL is unknown');
+    }
     // The fee commitment is what must be folded into the withdrawal data
     // before the context is computed.
     if (!keys.some((k) => k.toLowerCase().includes('commitment'))) {

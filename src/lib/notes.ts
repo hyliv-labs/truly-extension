@@ -96,18 +96,27 @@ export async function confirmDepositIndex(index: number): Promise<void> {
  *
  * A partial withdrawal spends a note and writes a CHANGE note under the same
  * label, with secrets from `generateWithdrawalSecrets(keys, label, index)`.
- * That index is per-LABEL, not global, and carries the same hazard as the
- * deposit index in a nastier form:
  *
- *  - Reuse an index already spent under that label and the change note gets a
- *    nullifier that is already in the pool's spent set. The withdrawal that
- *    tries to spend it reverts, permanently, and those funds are unreachable.
- *  - Advance on ATTEMPT rather than on success and a failed withdrawal burns
- *    an index. Unlike deposits there is no density requirement here — the SDK
- *    walks a label's withdrawals from its own event history — but a burned
- *    index still desynchronises the stored counter from the chain.
+ * THE INDEX IS NOT OURS TO CHOOSE. The SDK derives it from chain history —
+ * `index = BigInt(account.children.length)` — in BOTH places that matter:
  *
- * So: allocate without advancing, and advance only once the chain confirms.
+ *   createWithdrawalSecrets()  when building the next withdrawal
+ *   the `Withdrawn` event replay  when reconstructing an account from a seed
+ *
+ * So the chain decides, and a local counter is a SECOND source of truth that
+ * can only drift. The drift is silent and it strands funds:
+ *
+ *   After MetaMask recovery, or a reinstall, local storage is empty and reads
+ *   0. A label with two prior withdrawals would then reuse index 0 — whose
+ *   nullifier is already in the pool's spent set. The withdrawal that tries to
+ *   spend that change note reverts permanently, and a later rescan
+ *   reconstructs different secrets than the ones we used. Nothing errors when
+ *   the duplicate is created.
+ *
+ * The counter is therefore kept only as a FLOOR, to catch the opposite
+ * failure: a scan that has not yet seen withdrawals we know confirmed. If the
+ * floor exceeds what the scan reports, the scan is stale and we must refuse
+ * rather than derive against a count we know is too low.
  * ------------------------------------------------------------------------ */
 
 type WithdrawalIndexMap = Record<string, number>;
@@ -121,28 +130,58 @@ async function readWithdrawalIndices(): Promise<WithdrawalIndexMap> {
   return map && typeof map === 'object' ? (map as WithdrawalIndexMap) : {};
 }
 
-/** How many withdrawals this label has already confirmed. */
-export async function getWithdrawalIndex(label: bigint): Promise<number> {
+/**
+ * How many withdrawals under this label we have seen confirmed LOCALLY.
+ *
+ * A floor, not an answer. It is 0 on a freshly recovered vault even when the
+ * chain has many — which is exactly why it must never be used as the index.
+ */
+export async function getWithdrawalFloor(label: bigint): Promise<number> {
   const indices = await readWithdrawalIndices();
   const index = indices[labelKey(label)];
   return typeof index === 'number' ? index : 0;
 }
 
+export class StaleScanError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleScanError';
+  }
+}
+
 /**
- * The index the next withdrawal under `label` should use.
+ * The index the next withdrawal under `label` must use.
  *
- * Deliberately NOT advanced, for the same reason as `nextDepositIndex`: a
- * withdrawal that never lands has consumed nothing.
+ * `childrenCount` comes from the SDK's account for this label — the number of
+ * change notes already on chain. That is the authority, because it is what the
+ * SDK itself will derive when it replays the pool's `Withdrawn` events.
+ *
+ * Throws if our local floor is higher: that means we confirmed a withdrawal
+ * the scan has not caught up with, and deriving against the lower count would
+ * reuse an index whose nullifier is already spent.
  */
-export async function nextWithdrawalIndex(label: bigint): Promise<number> {
-  return getWithdrawalIndex(label);
+export async function nextWithdrawalIndex(
+  label: bigint,
+  childrenCount: number,
+): Promise<number> {
+  if (!Number.isInteger(childrenCount) || childrenCount < 0) {
+    throw new Error(`childrenCount must be a non-negative integer, got ${childrenCount}`);
+  }
+  const floor = await getWithdrawalFloor(label);
+  if (floor > childrenCount) {
+    throw new StaleScanError(
+      `Label ${label}: ${floor} withdrawals are recorded locally but the scan found ${childrenCount}. ` +
+        'Deriving against the scan would reuse a spent nullifier and strand the change note. Rescan before withdrawing.',
+    );
+  }
+  return childrenCount;
 }
 
 /**
  * Record that a withdrawal at `index` under `label` is confirmed on chain.
  *
- * Monotonic per label, so a late or duplicated confirmation cannot move the
- * counter backwards and hand the next withdrawal an index already spent.
+ * Raises the local floor only. Monotonic, so a late or duplicated
+ * confirmation cannot lower it and let a stale scan pass the check above.
  */
 export async function confirmWithdrawalIndex(label: bigint, index: number): Promise<void> {
   const indices = await readWithdrawalIndices();
