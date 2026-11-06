@@ -50,6 +50,19 @@ const addr = server.address();
 if (typeof addr === 'string' || addr === null) throw new Error('no port');
 const baseUrl = `http://127.0.0.1:${addr.port}/`;
 
+// Stub chrome.runtime.getURL so src/lib/proving.ts resolves artifacts at the
+// local server. This test then exercises THE SHIPPING PATH -- the same
+// runWithdrawalProof the offscreen document calls -- rather than a lookalike
+// that could drift from it.
+(globalThis as unknown as { chrome: unknown }).chrome = {
+  // The local server already serves from the artifacts root, so the
+  // CIRCUIT_ARTIFACT_PATH prefix is dropped rather than doubled.
+  runtime: { getURL: () => baseUrl },
+};
+
+const { runWithdrawalProof } = await import('../src/lib/prove-withdrawal.ts');
+const { toWireMerkleProof } = await import('../src/lib/prove-withdrawal.ts');
+
 let failed = false;
 const fail = (msg: string) => {
   console.error('FAIL', msg);
@@ -88,21 +101,22 @@ try {
   );
 
   const started = Date.now();
-  const proof = await sdk.proveWithdrawal(commitment, {
-    context: 12345n,
-    withdrawalAmount,
-    stateMerkleProof,
-    aspMerkleProof,
-    stateRoot: stateMerkleProof.root as unknown as Hash,
-    stateTreeDepth: BigInt(stateMerkleProof.siblings.length),
-    aspRoot: aspMerkleProof.root as unknown as Hash,
-    aspTreeDepth: BigInt(aspMerkleProof.siblings.length),
-    newSecret: newSecret as Secret,
-    newNullifier: newNullifier as Secret,
+  // THE SHIPPING PATH: the same function the offscreen document runs.
+  const proof = await runWithdrawalProof({
+    value: String(value),
+    label: String(label),
+    nullifier: String(nullifier),
+    secret: String(secret),
+    withdrawalAmount: String(withdrawalAmount),
+    context: '12345',
+    stateMerkleProof: toWireMerkleProof(stateMerkleProof as never),
+    aspMerkleProof: toWireMerkleProof(aspMerkleProof as never),
+    newNullifier: String(newNullifier),
+    newSecret: String(newSecret),
   });
-  pass(`generated a withdrawal proof in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  pass(`generated a withdrawal proof via runWithdrawalProof in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 
-  const signals = (proof as { publicSignals: string[] }).publicSignals;
+  const signals = proof.publicSignals as string[];
 
   // THE RELAYER CONSTRAINT: zRelayRequest requires exactly 8.
   if (!Array.isArray(signals)) {
@@ -163,7 +177,9 @@ try {
   console.log('  public signals (in order):');
   signals?.forEach((s, i) => console.log(`    [${i}] ${s}`));
 
-  const valid = await sdk.verifyWithdrawal(proof);
+  const valid = await sdk.verifyWithdrawal(
+    structuredClone(proof) as unknown as Parameters<typeof sdk.verifyWithdrawal>[0],
+  );
   if (!valid) fail('the withdrawal proof did NOT verify against the bundled vkey');
   else pass('withdrawal proof verifies locally against the bundled vkey');
 
