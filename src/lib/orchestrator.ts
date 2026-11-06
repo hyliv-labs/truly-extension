@@ -109,7 +109,9 @@ function describe(advice: ExitAdvice): string {
     case 'has-positions':
       return `Position open on Lighter. Close it there to end the trade.`;
     case 'withdraw-fast':
-      return `Withdraw the full ${advice.balance} USDC on Lighter (fast withdrawal).`;
+      // Truly cannot see resting orders, so it says so rather than implying
+      // the account is clear.
+      return `Withdraw the full ${advice.balance} USDC on Lighter (fast withdrawal). Cancel any resting orders there first — Truly cannot see them.`;
     case 'withdraw-secure':
       return advice.reason;
     case 'dust':

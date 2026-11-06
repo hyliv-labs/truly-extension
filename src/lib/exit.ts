@@ -65,7 +65,26 @@ export async function readAccount(owner: Address): Promise<AccountSnapshot> {
   };
 
   const account = json.accounts?.[0];
-  const balance = Number(account?.collateral ?? account?.available_balance ?? '0');
+
+  // Fail loudly on an unexpected shape. `Number(undefined ?? '0')` is 0, which
+  // reads as "the account is empty" — the trade then looks finished and
+  // retirable while the money is still sitting on Lighter. These field names
+  // have NOT been checked against a funded account, so this is the guard that
+  // turns a silent wrong answer into a visible error.
+  if (!account) {
+    throw new Error(
+      `Lighter returned no account for index ${accountIndex}; refusing to assume it is empty.`,
+    );
+  }
+
+  const raw = account.collateral ?? account.available_balance;
+  if (raw === undefined || !Number.isFinite(Number(raw))) {
+    throw new Error(
+      `Lighter account ${accountIndex} has no readable balance (got ${JSON.stringify(raw)}); refusing to assume it is empty.`,
+    );
+  }
+
+  const balance = Number(raw);
 
   // A position with no size is flat; Lighter keeps the row.
   const positions = (account?.positions ?? []).filter((p) => {
@@ -75,10 +94,11 @@ export async function readAccount(owner: Address): Promise<AccountSnapshot> {
 
   return {
     accountIndex,
-    balance: Number.isFinite(balance) ? balance : 0,
+    balance,
     positions,
-    // Open orders are not on this payload; the watcher treats positions as the
-    // gate and the user closes orders on Lighter's site.
+    // Open orders are not on this payload. The plan's bar is "flat with no
+    // open orders", and this only sees positions — so the user is told to
+    // cancel orders on Lighter rather than being assured there are none.
     openOrders: 0,
   };
 }
