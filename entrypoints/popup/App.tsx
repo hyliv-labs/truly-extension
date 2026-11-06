@@ -72,7 +72,25 @@ export function App() {
 
       {status === null ? (
         <section className="placeholder">
-          <p>Loading…</p>
+          {/* The error belongs HERE as well as below. The only error render
+              used to sit inside the loaded branch, so a background that never
+              answered left the popup on 'Loading…' forever with the reason
+              invisible — the failure state showed the least information. */}
+          {error ? (
+            <>
+              <p className="error">{error}</p>
+              <p className="field-label">
+                The background worker did not answer. Open chrome://extensions, check
+                the Truly card for errors, and click &ldquo;service worker&rdquo; to see
+                its console.
+              </p>
+              <button onClick={() => void refresh().catch((e: Error) => setError(e.message))}>
+                Retry
+              </button>
+            </>
+          ) : (
+            <p>Loading…</p>
+          )}
         </section>
       ) : status.unlocked ? (
         <section className="panel">

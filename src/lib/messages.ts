@@ -118,10 +118,50 @@ export interface ResultMap {
   };
 }
 
+/**
+ * Default timeout for a request to the background worker.
+ *
+ * Generous, because some requests are genuinely slow: a pool scan is 12
+ * eth_getLogs calls over Tor, and a withdrawal builds a proof. But NOT
+ * unbounded: a worker that fails to start, or a handler that awaits something
+ * which never settles, would otherwise leave the popup on 'Loading…' forever
+ * with no indication of why. A hang must become a readable error.
+ */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+export class BackgroundUnreachable extends Error {
+  constructor(kind: string, ms: number) {
+    super(
+      `The background worker did not answer '${kind}' within ${Math.round(ms / 1000)}s. ` +
+        'Check chrome://extensions — if the Truly card shows no "service worker" link, it failed to start.',
+    );
+    this.name = 'BackgroundUnreachable';
+  }
+}
+
 export async function send<K extends Request['kind']>(
   request: Extract<Request, { kind: K }>,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<ResultMap[K]> {
-  const response: Response<ResultMap[K]> = await chrome.runtime.sendMessage(request);
-  if (!response?.ok) throw new Error(response?.error ?? 'no response');
-  return response.value;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new BackgroundUnreachable(request.kind, timeoutMs)), timeoutMs);
+  });
+
+  try {
+    const response = (await Promise.race([
+      chrome.runtime.sendMessage(request),
+      timeout,
+    ])) as Response<ResultMap[K]> | undefined;
+
+    // sendMessage resolves with undefined when nothing answered — a dead or
+    // never-started worker looks exactly like this.
+    if (response === undefined) {
+      throw new BackgroundUnreachable(request.kind, 0);
+    }
+    if (!response.ok) throw new Error(response.error ?? 'no response');
+    return response.value;
+  } finally {
+    clearTimeout(timer);
+  }
 }
