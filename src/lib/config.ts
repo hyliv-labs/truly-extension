@@ -89,6 +89,16 @@ export const PRIVACY_POOL_ADDRESS = env('WXT_PRIVACY_POOL_ADDRESS') as
 export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
 
 /**
+ * 0xbow's ASP API. Serves Arbitrum too, despite the bare hostname.
+ *
+ * Every route needs an `X-Pool-Scope` header. This is a PLAIN fetch from the
+ * user's IP — anon-rpc is a JSON-RPC proxy and cannot carry it — so the tree
+ * is cached and refetched only when the on-chain root moves, rather than
+ * pulled before each withdrawal. See docs/e3-validation.md.
+ */
+export const ASP_API_BASE = env('WXT_ASP_API_BASE') ?? 'https://api.0xbow.io';
+
+/**
  * The pool's scope. Configured only as a cross-check — src/lib/pool.ts reads
  * SCOPE() from the chain and that value is authoritative, because a wrong
  * scope derives notes for a pool the funds are not in and errors nowhere.
