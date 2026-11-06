@@ -5,6 +5,8 @@
  * Truly, and relays every call to the ISOLATED content script.
  */
 
+import { mascotDataUri } from '@truly/lib/brand';
+
 export default defineUnlistedScript(() => {
   const provider = createProvider();
 
@@ -17,7 +19,7 @@ export default defineUnlistedScript(() => {
     // a page cannot read an extension asset. The previous value was a valid
     // but EMPTY 0x0 svg, which listed Truly as a blank tile beside wallets
     // that all have marks.
-    icon: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI5NiIgaGVpZ2h0PSI5NiIgdmlld0JveD0iMCAwIDk2IDk2Ij48cmVjdCB3aWR0aD0iOTYiIGhlaWdodD0iOTYiIHJ4PSIyMiIgZmlsbD0iIzBlMWExNyIvPjxyZWN0IHg9IjMiIHk9IjMiIHdpZHRoPSI5MCIgaGVpZ2h0PSI5MCIgcng9IjE5IiBmaWxsPSJub25lIiBzdHJva2U9IiMyZjZmNjIiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0yNiAzMmg0NCIgc3Ryb2tlPSIjNmZlM2M0IiBzdHJva2Utd2lkdGg9IjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxwYXRoIGQ9Ik00OCAzMnYzNiIgc3Ryb2tlPSIjNmZlM2M0IiBzdHJva2Utd2lkdGg9IjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxjaXJjbGUgY3g9IjQ4IiBjeT0iNzYiIHI9IjUiIGZpbGw9IiMyZjZmNjIiLz48L3N2Zz4=',
+    icon: mascotDataUri('happy'),
     rdns: 'xyz.hylivlabs.truly',
   });
 

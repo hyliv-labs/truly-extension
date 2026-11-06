@@ -4,6 +4,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { LockScreen } from './LockScreen';
+import { Logo } from './Mascot';
 import { Onboarding } from './Onboarding';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
@@ -19,7 +21,6 @@ import type { ShieldedBalance } from '@truly/lib/shielded-balance';
 export function App() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
-  const [password, setPassword] = useState('');
   const [backup, setBackup] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -177,14 +178,36 @@ export function App() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
-      setPassword('');
     }
   };
+
+  if (status?.hasVault && !status.unlocked) {
+    return (
+      <main className="popup popup-locked">
+        <LockScreen
+          busy={busy}
+          error={error}
+          notice={
+            connectOrigin ? (
+              <div className="connect-hint">
+                <p>
+                  <strong>{connectOrigin}</strong> wants to connect. Unlock to continue.
+                </p>
+              </div>
+            ) : undefined
+          }
+          onUnlock={(pw) => run(() => send({ kind: 'unlock', password: pw }).then(() => {}))}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="popup">
       <header>
-        <h1>Truly</h1>
+        <h1>
+          <Logo />
+        </h1>
         <p className="tagline">A new account, funded once.</p>
       </header>
 
@@ -426,33 +449,7 @@ export function App() {
             Lock
           </button>
         </section>
-      ) : status.hasVault ? (
-        // An existing vault only needs unlocking. Onboarding is for choosing
-        // which account a NEW vault represents, which is already settled here.
-        <section className="panel">
-          <label className="field-label" htmlFor="password">
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            disabled={busy}
-            autoFocus
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' || !password) return;
-              void run(() => send({ kind: 'unlock', password }).then(() => {}));
-            }}
-          />
-          <button
-            disabled={busy || !password}
-            onClick={() => run(() => send({ kind: 'unlock', password }).then(() => {}))}
-          >
-            Unlock
-          </button>
-        </section>
-      ) : (
+      ) : status.hasVault ? null /* locked: LockScreen above */ : (
         <Onboarding busy={busy} run={run} onBackup={setBackup} />
       )}
 
