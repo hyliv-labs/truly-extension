@@ -364,12 +364,19 @@ async function usdcBalance(owner: Address): Promise<bigint> {
 }
 
 /**
- * What the owner should hold before the proof is built, while the real cost
- * is not known yet. Measured: one unshield needed 0.0000570 ETH, which the
- * old fixed 0.00005 did not cover. The exact cost is checked again against
- * the signed transaction before it is broadcast (maxCostWei).
+ * What the owner must hold before the proof is built: enough for the gas
+ * estimate. NOT the real cost, which is known only after signing and is
+ * checked then (maxCostWei). Raising this to a guess of the real cost made a
+ * funded owner (0.0000918 ETH, real cost 0.000057) ask for a top-up the vault
+ * could not pay, and the retry was refused.
  */
-const UNSHIELD_GAS_WEI = 100_000_000_000_000n;
+const UNSHIELD_GAS_WEI = 50_000_000_000_000n;
+/**
+ * What an owner with NO ETH is given in one go. Measured: one unshield
+ * needed 0.0000570 ETH, so a single top-up of this usually covers both the
+ * estimate and the signed transaction, rather than two transfers.
+ */
+const FRESH_OWNER_TOPUP_WEI = 100_000_000_000_000n;
 const ETH_TRANSFER_GAS = 21_000n;
 
 /**
@@ -383,7 +390,8 @@ const ETH_TRANSFER_GAS = 21_000n;
 async function ensureUnshieldGas(ownerIndex: number, owner: Address, needWei = UNSHIELD_GAS_WEI): Promise<void> {
   const balance = await publicClient.getBalance({ address: owner });
   if (balance >= needWei) return;
-  const topUp = needWei - balance + needWei / 5n;
+  const shortfall = needWei - balance + needWei / 5n;
+  const topUp = balance === 0n && shortfall < FRESH_OWNER_TOPUP_WEI ? FRESH_OWNER_TOPUP_WEI : shortfall;
 
   for (let index = 0; index < ownerIndex; index += 1) {
     const earlier = await ownerAt(index);
