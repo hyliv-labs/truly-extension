@@ -24,6 +24,21 @@ export function App() {
   const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
   const [phase, setPhase] = useState<{ phase: string; detail: string } | null>(null);
   const [unshield, setUnshield] = useState<string | null>(null);
+  /**
+   * Set when the provider opened this window because a dapp tried to connect.
+   * The dapp shows its own wording — Lighter just says "Connection cancelled"
+   * — so without this the window appears asking for a password and nothing on
+   * screen explains why.
+   */
+  const [connectOrigin] = useState<string | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get('connect');
+    if (!raw) return null;
+    try {
+      return new URL(raw).host;
+    } catch {
+      return 'A site';
+    }
+  });
   const [reshieldNote, setReshieldNote] = useState<string | null>(null);
   const [pool, setPool] = useState<{
     totalUnits: string;
@@ -72,6 +87,15 @@ export function App() {
         <h1>Truly</h1>
         <p className="tagline">One trade, one address.</p>
       </header>
+
+      {connectOrigin && !status?.activeTrade && (
+        <p className="connect-hint">
+          <strong>{connectOrigin}</strong> asked to connect.
+          {status?.unlocked
+            ? ' Start a trade below, then connect again — the address is new every trade.'
+            : ' Unlock Truly, start a trade, then connect again.'}
+        </p>
+      )}
 
       {status === null ? (
         <section className="placeholder">

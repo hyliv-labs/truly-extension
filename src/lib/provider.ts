@@ -17,7 +17,7 @@
 import { keccak256, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getActiveTrade } from './trade';
-import { ownerAt } from './vault';
+import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
   dropApproval,
@@ -68,7 +68,7 @@ export async function handleProviderRequest(
   if (existing) return continueInFlight(existing);
 
   const trade = await getActiveTrade();
-  if (!trade) return refuseWithoutTrade(method);
+  if (!trade) return refuseWithoutTrade(method, origin);
 
   switch (method) {
     case 'eth_chainId':
@@ -161,16 +161,27 @@ export async function resumePendingApprovals(): Promise<void> {
  * An explicit connect still opens Truly, because silence there leaves the
  * user with no idea why the button failed.
  */
-async function refuseWithoutTrade(method: string): Promise<unknown> {
+async function refuseWithoutTrade(method: string, origin?: string): Promise<unknown> {
   if (method === 'eth_chainId') return CHAIN_ID_HEX;
   if (method === 'eth_accounts' || method === 'wallet_getPermissions') return [];
 
   if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
-    await openTrulyWindow();
+    await openTrulyWindow(origin);
   }
+
+  // A LOCKED vault and an unlocked one with no trade are different problems
+  // with different first steps, and telling someone to "start a trade" while
+  // the window in front of them asks for a password is worse than saying
+  // nothing. The dapp shows its own wording either way — Lighter says
+  // "Connection cancelled" — so this text has to be right in the one place it
+  // does surface: the service worker log and any dapp that shows the reason.
+  const unlocked = await isUnlocked();
+
   throw rpcError(
     4100,
-    'Truly has no active trade. Open Truly and start one (a market trade, or a manual trade on Lighter\'s site), then connect again.',
+    unlocked
+      ? 'Truly has no active trade. Open Truly and start one (a market trade, or a manual trade on Lighter\'s site), then connect again.'
+      : 'Truly is locked. Unlock it in the window that just opened, start a trade, then connect again.',
   );
 }
 
@@ -492,10 +503,15 @@ async function windowExists(windowId: number): Promise<boolean> {
  * Best effort by design: if the window cannot be opened the caller still
  * throws, so the dapp is never left waiting on a window that is not there.
  */
-async function openTrulyWindow(): Promise<void> {
+async function openTrulyWindow(origin?: string): Promise<void> {
   try {
+    // Carries WHY it opened. Without it the window appears asking for a
+    // password while the dapp says "Connection cancelled", and nothing on
+    // screen connects the two.
+    const url = new URL(chrome.runtime.getURL('/popup.html'));
+    url.searchParams.set('connect', origin ?? '1');
     await chrome.windows.create({
-      url: chrome.runtime.getURL('/popup.html'),
+      url: url.toString(),
       type: 'popup',
       ...APPROVAL_WINDOW,
     });

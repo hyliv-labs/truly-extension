@@ -494,3 +494,20 @@ input[type='range'] {
 .record .row {
   margin-top: 3px;
 }
+
+/* Shown when the provider opened this window after a refused connect. */
+.connect-hint {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #2f6f62;
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: #11231f;
+  color: #cfe9e1;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.connect-hint strong {
+  color: #6fe3c4;
+}
