@@ -121,13 +121,21 @@ export interface ResultMap {
 /**
  * Default timeout for a request to the background worker.
  *
- * Generous, because some requests are genuinely slow: a pool scan is 12
- * eth_getLogs calls over Tor, and a withdrawal builds a proof. But NOT
- * unbounded: a worker that fails to start, or a handler that awaits something
- * which never settles, would otherwise leave the popup on 'Loading…' forever
- * with no indication of why. A hang must become a readable error.
+ * SHORT on purpose. Most requests only touch chrome.storage and answer in
+ * milliseconds, so if one of those has not come back in a few seconds the
+ * worker is not slow — it is not there. Diagnosing that must not take two
+ * minutes of staring at 'Loading…'.
+ *
+ * The genuinely slow calls pass their own timeout: see SLOW_TIMEOUT_MS.
  */
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 8_000;
+
+/**
+ * For requests that really do take a while: a pool scan is 12 eth_getLogs
+ * over Tor, a withdrawal builds a proof and relays it, and tor-js has to
+ * bootstrap a circuit before the first read of all.
+ */
+export const SLOW_TIMEOUT_MS = 180_000;
 
 export class BackgroundUnreachable extends Error {
   constructor(kind: string, ms: number) {

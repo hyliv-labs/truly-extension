@@ -10,6 +10,7 @@ import {
   type AnonRpcStatus,
   type SelfTestResult,
   type VaultStatus,
+  SLOW_TIMEOUT_MS,
 } from '@truly/lib/messages';
 
 export function App() {
@@ -37,7 +38,7 @@ export function App() {
     setStatus(next);
     setAnon(await send({ kind: 'anonRpcStatus' }));
     // Derived from Lighter and the chain, so it survives a restart mid-trade.
-    setPhase(next.activeTrade ? await send({ kind: 'tradeStatus' }) : null);
+    setPhase(next.activeTrade ? await send({ kind: 'tradeStatus' }, SLOW_TIMEOUT_MS) : null);
     if (next.unlocked) {
       setOwner((await send({ kind: 'currentOwner' })).address);
     } else {
@@ -161,7 +162,7 @@ export function App() {
                       disabled={busy}
                       onClick={() =>
                         run(async () => {
-                          const result = await send({ kind: 'unshield' });
+                          const result = await send({ kind: 'unshield' }, SLOW_TIMEOUT_MS);
                           setUnshield(
                             `Sent ${(Number(result.amountUnits) / 1e6).toFixed(2)} USDC; ` +
                               `Lighter should see ~${(
@@ -222,7 +223,7 @@ export function App() {
           <button
             className="link"
             disabled={busy}
-            onClick={() => run(async () => setPool(await send({ kind: 'poolBalance' })))}
+            onClick={() => run(async () => setPool(await send({ kind: 'poolBalance' }, SLOW_TIMEOUT_MS)))}
           >
             Check pool balance
           </button>
@@ -245,7 +246,7 @@ export function App() {
           <button
             className="link"
             disabled={busy}
-            onClick={() => run(async () => setStranded(await send({ kind: 'scanStranded' })))}
+            onClick={() => run(async () => setStranded(await send({ kind: 'scanStranded' }, SLOW_TIMEOUT_MS)))}
           >
             Scan for funds left at old addresses
           </button>
@@ -312,7 +313,7 @@ export function App() {
             disabled={busy}
             onClick={() =>
               run(async () => {
-                setSelfTest(await send({ kind: 'anonRpcSelfTest' }));
+                setSelfTest(await send({ kind: 'anonRpcSelfTest' }, SLOW_TIMEOUT_MS));
               })
             }
           >
