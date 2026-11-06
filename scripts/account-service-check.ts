@@ -24,6 +24,8 @@ const CHAIN_ID = 42161;
 const DEPLOYMENT_BLOCK = 411197154n;
 const SCOPE = 19314316433070648921215665277427138450050666275686107272761703472573535400848n;
 const RPC = process.env.WXT_ARBITRUM_RPC_URL ?? 'https://arb1.arbitrum.io/rpc';
+/** Measured ceiling on arb1.arbitrum.io/rpc; see scripts/log-range-check.ts. */
+const LOG_CHUNK_SIZE = 10_000_000;
 
 let failed = false;
 const fail = (msg: string) => {
@@ -42,17 +44,24 @@ try {
   const precommitment = hashPrecommitment(nullifier, secret);
   pass(`derived index 0 precommitment for the REAL scope: ${String(precommitment).slice(0, 20)}…`);
 
-  const dataService = new DataService([
-    {
-      chainId: CHAIN_ID,
-      privacyPoolAddress: POOL as `0x${string}`,
-      entryPointAddress: ENTRYPOINT as `0x${string}`,
-      startBlock: DEPLOYMENT_BLOCK,
-      rpcUrl: RPC,
-      apiKey: '',
-    } as never,
-  ]);
-  pass('DataService constructed for Arbitrum');
+  // THE FIX for the 11,044-call scan: DataService takes a per-chain log fetch
+  // config, and Arbitrum's public RPC serves 10,000,000-block ranges — 1000x
+  // the SDK's 10k default. See scripts/log-range-check.ts for the measurement.
+  // That turns a full scan into ~12 calls, which is viable over anon-rpc.
+  const dataService = new DataService(
+    [
+      {
+        chainId: CHAIN_ID,
+        privacyPoolAddress: POOL as `0x${string}`,
+        entryPointAddress: ENTRYPOINT as `0x${string}`,
+        startBlock: DEPLOYMENT_BLOCK,
+        rpcUrl: RPC,
+        apiKey: '',
+      } as never,
+    ],
+    new Map([[CHAIN_ID, { blockChunkSize: LOG_CHUNK_SIZE, concurrency: 2 }]]) as never,
+  );
+  pass(`DataService constructed for Arbitrum with a ${LOG_CHUNK_SIZE}-block chunk`);
 
   const account = new AccountService(dataService, { mnemonic: PHRASE });
   pass('AccountService constructed from a mnemonic');
@@ -68,16 +77,15 @@ try {
     chain: arbitrum,
     transport: http(RPC),
   }).getBlockNumber();
-  const chunks = Number((head - DEPLOYMENT_BLOCK) / 10_000n) + 1;
-  console.log(`  head block ${head}; ${head - DEPLOYMENT_BLOCK} blocks since deployment`);
-  console.log(`  => ${chunks} eth_getLogs calls at the SDK's default 10k chunk size`);
-  if (chunks > 1000) {
-    console.log(
-      '  NOTE: that is impractical over a public RPC and far worse over anon-rpc.',
-    );
-    console.log(
-      '  The official frontend proxies these reads through Hypersync for exactly this reason.',
-    );
+  const span = head - DEPLOYMENT_BLOCK;
+  const defaultChunks = Number(span / 10_000n) + 1;
+  const chunks = Number(span / BigInt(LOG_CHUNK_SIZE)) + 1;
+  console.log(`  head block ${head}; ${span} blocks since deployment`);
+  console.log(`  ${defaultChunks} calls at the SDK's 10k default -> ${chunks} at ${LOG_CHUNK_SIZE}`);
+  if (chunks > 100) {
+    fail(`${chunks} eth_getLogs calls is still not viable over anon-rpc`);
+  } else {
+    pass(`a full scan is ${chunks} eth_getLogs calls, which anon-rpc can carry`);
   }
 
   const started = Date.now();
