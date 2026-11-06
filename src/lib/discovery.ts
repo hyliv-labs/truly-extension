@@ -22,7 +22,7 @@
  */
 
 import type { PublicClient } from 'viem';
-import { DataService } from '@0xbow/privacy-pools-core-sdk';
+import { AccountService, DataService } from '@0xbow/privacy-pools-core-sdk';
 import { publicClient } from './chain';
 import {
   ARBITRUM_CHAIN_ID,
@@ -108,4 +108,112 @@ export function createAnonDataService(): DataService {
 export function usesAnonTransport(service: DataService): boolean {
   const bearer = service as unknown as ClientBearing;
   return bearer.clients instanceof Map && bearer.clients.get(ARBITRUM_CHAIN_ID) === publicClient;
+}
+
+/* ------------------------------------------------------------------------ *
+ * Finding the notes this vault can spend.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Shape of the SDK's account model that we read.
+ *
+ * `children` is the chain's record of this label's change notes, and its
+ * LENGTH is what the SDK uses as the next withdrawal index — in
+ * createWithdrawalSecrets and in the Withdrawn replay alike. It must travel
+ * with the note, or a caller would have to invent the index and strand funds.
+ */
+interface PoolAccountLike {
+  label: bigint;
+  deposit: CommitmentLike;
+  children: CommitmentLike[];
+  ragequit?: unknown;
+  isMigrated?: boolean;
+}
+
+interface CommitmentLike {
+  hash: bigint;
+  value: bigint;
+  nullifier: bigint;
+  secret: bigint;
+}
+
+export interface DiscoveredNote {
+  readonly label: bigint;
+  readonly value: bigint;
+  readonly nullifier: bigint;
+  readonly secret: bigint;
+  readonly commitmentHash: bigint;
+  /** account.children.length — the authority for the next withdrawal index. */
+  readonly childrenCount: number;
+}
+
+/**
+ * Scan the pool and return every note this mnemonic can spend.
+ *
+ * The spendable commitment is the account's LAST child, or the deposit if it
+ * has none — a partial withdrawal supersedes what came before it, so spending
+ * an earlier commitment would present an already-spent nullifier.
+ *
+ * Ragequit and migrated accounts are skipped: their value is no longer
+ * spendable from here.
+ */
+export async function findSpendableNotes(
+  mnemonic: string,
+  scope: bigint,
+): Promise<DiscoveredNote[]> {
+  if (!PRIVACY_POOL_ADDRESS) {
+    throw new DiscoveryError('No pool address configured; cannot discover notes.');
+  }
+
+  const dataService = createAnonDataService();
+  const account = new AccountService(dataService, { mnemonic });
+
+  await account.retrieveHistory([
+    {
+      chainId: ARBITRUM_CHAIN_ID,
+      address: PRIVACY_POOL_ADDRESS,
+      scope: scope as never,
+      deploymentBlock: POOL_DEPLOYMENT_BLOCK,
+    } as never,
+  ]);
+
+  const accounts = (
+    account as unknown as { account: { poolAccounts: Map<unknown, PoolAccountLike[]> } }
+  ).account?.poolAccounts;
+
+  if (!(accounts instanceof Map)) {
+    throw new DiscoveryError(
+      'This SDK version does not expose poolAccounts, so the withdrawal index cannot be read from chain history. Refusing to guess it.',
+    );
+  }
+
+  const notes: DiscoveredNote[] = [];
+  for (const list of accounts.values()) {
+    for (const poolAccount of list) {
+      if (poolAccount.ragequit || poolAccount.isMigrated) continue;
+
+      const children = poolAccount.children ?? [];
+      const spendable = children.length > 0 ? children[children.length - 1] : poolAccount.deposit;
+      if (!spendable || spendable.value === 0n) continue;
+
+      notes.push({
+        label: poolAccount.label,
+        value: spendable.value,
+        nullifier: spendable.nullifier,
+        secret: spendable.secret,
+        commitmentHash: spendable.hash,
+        childrenCount: children.length,
+      });
+    }
+  }
+
+  // Largest first: a trade should spend the note that leaves the healthiest
+  // remainder, and a note too small to split is the last resort.
+  notes.sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0));
+  return notes;
+}
+
+/** Total spendable across all notes. For the popup's balance line. */
+export function totalSpendable(notes: readonly DiscoveredNote[]): bigint {
+  return notes.reduce((sum, note) => sum + note.value, 0n);
 }
