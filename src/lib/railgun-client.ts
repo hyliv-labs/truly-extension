@@ -455,7 +455,7 @@ async function ensureUnshieldGas(ownerIndex: number, owner: Address, needWei = U
   }
 
   throw new Error(
-    `This owner needs ${formatEther(topUp)} more ETH on Arbitrum One for the Railgun unshield gas. Send it to ${owner}; Truly sends the unshield once it arrives. Nothing left the pool.`,
+    `This owner needs ${formatEther(topUp)} more ETH on Arbitrum One for the Railgun unshield gas. Send it to ${owner}, then retry funding (an unshield already signed is resent on its own). Nothing left the pool.`,
   );
 }
 
