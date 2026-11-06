@@ -99,10 +99,41 @@ export const POOL_VETTING_FEE_BPS = 50n;
 export const POOL_MAX_RELAY_FEE_BPS = 1000n;
 
 /**
- * fastrelay.xyz charges 10 BPS (0.1%) on Arbitrum USDC — queried live. Its own
- * minWithdrawAmount is 0, so the floor is ours to enforce.
+ * fastrelay.xyz's BASE rate on Arbitrum USDC, from /relayer/details.
+ *
+ * This is NOT what a withdrawal pays. /relayer/quote amortises the relay
+ * transaction's gas into the rate, and that gas is a FIXED cost, so the
+ * effective rate rises sharply as the withdrawal shrinks. Measured live
+ * (scripts/relayer-quote-check.ts):
+ *
+ *     5 USDC -> 68 BPS      50 USDC -> 15 BPS
+ *    10 USDC -> 39 BPS     100 USDC -> 12 BPS
+ *    25 USDC -> 21 BPS     250 USDC -> 11 BPS
+ *
+ * Treating this as a constant would under-reserve by ~6x at the pool floor.
+ * Use estimateRelayerFeeUnits() for sizing, and the live quote to transact.
  */
-export const RELAYER_FEE_BPS = 10n;
+export const RELAYER_BASE_FEE_BPS = 10n;
+
+/**
+ * The fixed gas component the relayer folds in, in USDC units. Derived from
+ * the curve above: 250 USDC pays $0.275 against a $0.25 base, leaving ~$0.025;
+ * 5 USDC pays $0.034 against a $0.005 base, leaving ~$0.029. Rounded up,
+ * because under-reserving strands funds and over-reserving only costs dust.
+ */
+export const RELAYER_FIXED_FEE_UNITS = 35_000n; // $0.035
+
+/**
+ * Conservative pre-quote estimate of what a relayed withdrawal costs.
+ *
+ * Only for SIZING — deciding whether a withdrawal is worth attempting and how
+ * much to leave behind. The authoritative number is the relayer's quote, which
+ * must be obtained before the context is computed, since the fee terms are
+ * inside the withdrawal data the context commits to.
+ */
+export function estimateRelayerFeeUnits(amountUnits: bigint): bigint {
+  return (amountUnits * RELAYER_BASE_FEE_BPS) / 10_000n + RELAYER_FIXED_FEE_UNITS;
+}
 
 /**
  * Where the Privacy Pools circuit artifacts (.wasm / .zkey) are served from.

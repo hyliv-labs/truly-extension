@@ -230,7 +230,8 @@ have.
 Fees that now have to be modelled, neither previously accounted for:
 - **0.5% entrypoint vetting fee** on every deposit, so a re-shield returns
   less than it sends
-- **0.1% relayer fee** on withdrawal (`feeBPS: 10`, queried live)
+- The relayer fee, which is **not** the flat 0.1% that `/relayer/details`
+  advertises — see below
 
 And a hard floor: a re-shield landing under **5 USDC** is rejected by the
 pool. With the 1 USDC gas reserve, an owner balance under ~6 USDC cannot be
@@ -243,6 +244,45 @@ refuses to proceed on any disagreement, returning the **on-chain** values so a
 caller cannot keep using a stale configured scope. A pool that cannot answer
 this surface is rejected — which is what a v2 address or a wrong chain looks
 like.
+
+## 7. Relayer quote — the fee is not flat
+
+`/relayer/details` advertises `feeBPS: "10"`, and that was recorded in
+`config.ts` as the withdrawal cost. `/relayer/quote` shows it is only a **base**
+rate: the relay transaction's gas is amortised in, and gas is a *fixed* cost,
+so the effective rate climbs as the withdrawal shrinks.
+
+Measured live (`pnpm check:relayer`):
+
+| Withdrawal | Effective | Cost |
+| --- | --- | --- |
+| 5 USDC | **68 BPS** | $0.034 |
+| 10 USDC | 39 BPS | $0.039 |
+| 25 USDC | 21 BPS | $0.052 |
+| 50 USDC | 15 BPS | $0.075 |
+| 100 USDC | 12 BPS | $0.120 |
+| 250 USDC | 11 BPS | $0.275 |
+
+**At the pool's 5 USDC floor the real rate is ~7x the assumed one.** Sizing a
+withdrawal against 10 BPS leaves a remainder smaller than planned, and if it
+lands under `POOL_MIN_DEPOSIT_UNITS` it cannot be re-shielded at all — funds
+stranded, with no error at the time.
+
+`config.ts` now models it as base rate + fixed cost via
+`estimateRelayerFeeUnits()`, and `scripts/relayer-fee-check.ts` (offline, in
+`pnpm check`) asserts the estimate is conservative at every measured size.
+The estimate is for **sizing only**; the live quote is authoritative.
+
+Two further facts the quote settled:
+
+- The quote returns a **`feeCommitment`** containing pre-encoded
+  `withdrawalData` and a `signedRelayerCommitment`, plus an `expiration`. Since
+  the context is `keccak(withdrawal, SCOPE)` and the withdrawal data carries
+  the fee terms, **the quote must precede proving** — a fee agreed afterwards
+  changes the context and the pool reverts with `ContextMismatch`.
+- One probe returned `HTTP 400 "CowSwap quote error"`. The relayer depends on
+  CoW for pricing and can fail transiently, so **quote failures are retryable**,
+  not a reason to abandon a withdrawal.
 
 ## Status
 
@@ -273,4 +313,21 @@ UI must show:
    against synthetic trees and the deployed verifier, but not against a real
    note. This needs real mainnet USDC (5 USDC minimum, plus the 0.5% vetting
    fee) and an irreversible deposit — so it waits on an explicit go-ahead.
-2. The relayer `quote` and `request` calls have never been exercised.
+2. `/relayer/request` is still unexercised. It cannot be probed without a real
+   proof and a real note, so it is part of the funded test above. `quote` and
+   `details` are now covered by `pnpm check:relayer`.
+
+## The E3 call order, fixed by the context
+
+The context commits to the withdrawal struct, which carries the relayer's fee
+terms, so these steps cannot be reordered:
+
+1. `POST /relayer/quote` → `feeCommitment`
+2. Build the withdrawal struct from it
+3. Compute `context = keccak(withdrawal, SCOPE) % SNARK_SCALAR_FIELD`
+4. Obtain the ASP tree whose root equals `latestRoot()`
+5. Prove
+6. `POST /relayer/request`
+
+Retryable at step 6: `IncorrectASPRoot` (root rotated — refetch, re-prove) and
+a CoW-sourced quote error (re-quote from step 1).
