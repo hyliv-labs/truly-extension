@@ -33,7 +33,12 @@ import {
 } from '@0xbow/privacy-pools-core-sdk';
 import { getAssociationSet, isLabelApproved, AspUnavailable } from './asp';
 import { fetchStateTree, StateTreeError } from './state-tree';
-import { getSdk } from './proving';
+import { ensureOffscreenDocument } from './offscreen';
+import {
+  proveWithdrawalOffscreen,
+  toWireMerkleProof,
+  ProvingUnavailable,
+} from './prove-withdrawal';
 import {
   requestQuote,
   submitWithdrawal,
@@ -175,9 +180,10 @@ async function quoteAndProve(
     );
   }
 
-  // The SDK must be ready before the clock starts: first use fetches and
-  // hash-checks the circuit artifacts, which is not a 60-second-window task.
-  const sdk = await getSdk();
+  // The offscreen document must exist and have its artifacts ready BEFORE the
+  // clock starts: first use fetches and hash-checks the circuit files, which
+  // is not a 60-second-window task.
+  await ensureOffscreenDocument();
 
   // --- 2. quote. The 60s window opens HERE. ---
   const quote = await requestQuote(recipient, amountUnits);
@@ -199,23 +205,21 @@ async function quoteAndProve(
   }
 
   // --- 5. prove. ---
-  const proof = await sdk.proveWithdrawal(commitment as never, {
-    context: context as unknown as bigint,
-    withdrawalAmount: amountUnits,
-    stateMerkleProof,
-    aspMerkleProof,
-    stateRoot: stateMerkleProof.root as unknown as Hash,
-    stateTreeDepth: BigInt(stateMerkleProof.siblings.length),
-    aspRoot: aspMerkleProof.root as unknown as Hash,
-    aspTreeDepth: BigInt(aspMerkleProof.siblings.length),
-    newSecret: change.secret as unknown as Secret,
-    newNullifier: change.nullifier as unknown as Secret,
-  } as never);
-
-  const { publicSignals, proof: rawProof } = proof as unknown as {
-    publicSignals: string[];
-    proof: { pi_a: string[]; pi_b: string[][]; pi_c: string[] };
-  };
+  // Runs in the offscreen document: snarkjs needs real DOM, workers and
+  // WebAssembly, none of which a service worker has. Only the proof crosses;
+  // the orchestration stays here with the vault and chrome.storage.
+  const { publicSignals, proof: rawProof } = await proveWithdrawalOffscreen({
+    value: note.value.toString(),
+    label: note.label.toString(),
+    nullifier: String(note.nullifier),
+    secret: String(note.secret),
+    withdrawalAmount: amountUnits.toString(),
+    context: String(context),
+    stateMerkleProof: toWireMerkleProof(stateMerkleProof as never),
+    aspMerkleProof: toWireMerkleProof(aspMerkleProof as never),
+    newNullifier: String(change.nullifier),
+    newSecret: String(change.secret),
+  });
 
   // The relayer's schema is strict; a malformed bundle is rejected after the
   // proving cost has already been paid, so check before submitting.
@@ -353,6 +357,9 @@ export async function withdrawFromPool(request: WithdrawRequest): Promise<Withdr
         (error instanceof WithdrawError && error.retryable) ||
         error instanceof AspUnavailable ||
         error instanceof StateTreeError ||
+        // The offscreen document can be torn down between calls; that is a
+        // lifecycle race, not a bad proof.
+        error instanceof ProvingUnavailable ||
         isRetryableRevert(lastError.message);
 
       if (!retryable || attempt === MAX_ATTEMPTS) break;

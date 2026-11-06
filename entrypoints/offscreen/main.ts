@@ -13,6 +13,7 @@
 import { mountOffscreenHost } from '@anon-rpc/browser-extension-harness/offscreen';
 import { assertArtifactsPresent } from '@truly/lib/proving';
 import { requestSeedSignature, MetaMaskError } from '@truly/lib/metamask';
+import { runWithdrawalProof } from '@truly/lib/prove-withdrawal';
 
 // Only claims ports named 'anon-rpc.worker', so it coexists with the proof
 // handling below.
@@ -48,8 +49,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         );
       return true;
 
-    // TODO(E3): 'proveWithdrawal' — needs the circuit artifacts and the pool
-    // addresses before it can do anything but fail.
+    case 'proveWithdrawal':
+      // snarkjs needs real DOM, workers and WebAssembly, none of which the
+      // service worker has — so the orchestration stays there and only the
+      // proof crosses.
+      //
+      // message.input carries the note's nullifier and secret, i.e. spend
+      // authority. It is never logged here and never included in an error.
+      runWithdrawalProof(message.input)
+        .then((value) => sendResponse({ ok: true, value }))
+        .catch((error: unknown) =>
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : 'Proof generation failed.',
+          }),
+        );
+      return true;
 
     default:
       sendResponse({ ok: false, error: `unknown kind: ${message.kind}` });
