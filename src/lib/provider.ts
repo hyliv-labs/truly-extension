@@ -36,7 +36,21 @@ export async function handleProviderRequest(
 ): Promise<unknown> {
   const trade = await getActiveTrade();
   if (!trade) {
-    throw rpcError(4100, 'Truly has no active trade; start one to connect.');
+    // A dapp renders ANY provider rejection as its own words — Lighter says
+    // "connection cancelled" — so the reason never reaches the user. An error
+    // alone is therefore a dead end: nothing on screen says a trade must be
+    // started first, or where to do it.
+    //
+    // Only for an explicit connect. eth_accounts is a silent "already
+    // connected?" probe that dapps fire on page load, and opening a window
+    // for that would mean Truly popping up on every visit.
+    if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
+      await openTrulyWindow();
+    }
+    throw rpcError(
+      4100,
+      'Truly has no active trade. Open Truly and press "Start trade", then connect again.',
+    );
   }
 
   switch (method) {
@@ -94,6 +108,24 @@ export async function handleProviderRequest(
 
     default:
       throw rpcError(4200, `Truly does not support ${method}.`);
+  }
+}
+
+/**
+ * Show Truly itself, so a refused connect leads somewhere.
+ *
+ * Best effort by design: if the window cannot be opened the caller still
+ * throws, so the dapp is never left waiting on a window that is not there.
+ */
+async function openTrulyWindow(): Promise<void> {
+  try {
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('/popup.html'),
+      type: 'popup',
+      ...APPROVAL_WINDOW,
+    });
+  } catch (error) {
+    console.warn('[truly] could not open the popup window', error);
   }
 }
 
