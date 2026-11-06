@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@railgun-community/wallet@10.4.0':
+    hash: 6vlnmhuoal7rbrh4tdf6xcbh5a
+    path: patches/@railgun-community__wallet@10.4.0.patch
+
 importers:
 
   .:
@@ -31,7 +36,7 @@ importers:
         version: 7.6.1(ethers@6.13.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       '@railgun-community/wallet':
         specifier: 10.4.0
-        version: 10.4.0(@graphql-tools/utils@12.1.0(graphql@16.15.0))(@types/node@26.6.6)(bufferutil@4.1.0)(chai@5.3.3)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))(tslib@2.9.1)(utf-8-validate@5.0.10)
+        version: 10.4.0(patch_hash=6vlnmhuoal7rbrh4tdf6xcbh5a)(@graphql-tools/utils@12.1.0(graphql@16.15.0))(@types/node@26.6.6)(bufferutil@4.1.0)(chai@5.3.3)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))(tslib@2.9.1)(utf-8-validate@5.0.10)
       '@scure/bip32':
         specifier: ^2.4.0
         version: 2.4.0
@@ -5381,7 +5386,7 @@ snapshots:
     dependencies:
       ethers: 6.13.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
-  '@railgun-community/wallet@10.4.0(@graphql-tools/utils@12.1.0(graphql@16.15.0))(@types/node@26.6.6)(bufferutil@4.1.0)(chai@5.3.3)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))(tslib@2.9.1)(utf-8-validate@5.0.10)':
+  '@railgun-community/wallet@10.4.0(patch_hash=6vlnmhuoal7rbrh4tdf6xcbh5a)(@graphql-tools/utils@12.1.0(graphql@16.15.0))(@types/node@26.6.6)(bufferutil@4.1.0)(chai@5.3.3)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))(tslib@2.9.1)(utf-8-validate@5.0.10)':
     dependencies:
       '@graphql-mesh/cache-localforage': 0.7.20(@graphql-mesh/types@0.91.15)(@graphql-mesh/utils@0.43.23)(graphql@16.15.0)(tslib@2.9.1)
       '@graphql-mesh/cross-helpers': 0.3.4(@graphql-tools/utils@12.1.0(graphql@16.15.0))(graphql@16.15.0)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))

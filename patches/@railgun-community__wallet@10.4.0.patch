@@ -1,0 +1,39 @@
+diff --git a/dist/services/railgun/quick-sync/V2/quick-sync-events-graph-v2.js b/dist/services/railgun/quick-sync/V2/quick-sync-events-graph-v2.js
+index f6c62ce714eb3c7908ab3c1fbdd69704404c2086..aa726762f9e0420dbc6e41c635282b8df5873f94 100644
+--- a/dist/services/railgun/quick-sync/V2/quick-sync-events-graph-v2.js
++++ b/dist/services/railgun/quick-sync/V2/quick-sync-events-graph-v2.js
+@@ -10,7 +10,7 @@ const graph_query_1 = require("../graph-query");
+ const meshes = {};
+ // 1.5 full trees of commitments
+ // TODO: This will have to change when we have more than 100k commitments.
+-const MAX_QUERY_RESULTS = 100000;
++const MAX_QUERY_RESULTS = 1000000;
+ const sourceNameForNetwork = (networkName) => {
+     switch (networkName) {
+         case shared_models_1.NetworkName.Ethereum:
+diff --git a/dist/services/railgun/quick-sync/V3/quick-sync-events-graph-v3.js b/dist/services/railgun/quick-sync/V3/quick-sync-events-graph-v3.js
+index 4a82292ac6897c14ead270b8ecd767ab576d8588..cd26a30a9d8b2ca018022e94f022f769d5c12777 100644
+--- a/dist/services/railgun/quick-sync/V3/quick-sync-events-graph-v3.js
++++ b/dist/services/railgun/quick-sync/V3/quick-sync-events-graph-v3.js
+@@ -11,7 +11,7 @@ const graph_type_formatters_v3_1 = require("./graph-type-formatters-v3");
+ const meshes = {};
+ // 1.5 full trees of commitments
+ // TODO: This will have to change when we have more than 100k commitments.
+-const MAX_QUERY_RESULTS = 100000;
++const MAX_QUERY_RESULTS = 1000000;
+ const sourceNameForNetwork = (networkName) => {
+     switch (networkName) {
+         case shared_models_1.NetworkName.Ethereum:
+diff --git a/dist/services/railgun/quick-sync/graph-query.js b/dist/services/railgun/quick-sync/graph-query.js
+index c5b08190d34ec2bb1d3c46912e9cb6eaff4f4cba..a022f7714036baac32f54824f1f7eab19320c3f3 100644
+--- a/dist/services/railgun/quick-sync/graph-query.js
++++ b/dist/services/railgun/quick-sync/graph-query.js
+@@ -8,7 +8,7 @@ exports.EMPTY_EVENTS = {
+     nullifierEvents: [],
+ };
+ const autoPaginatingQuery = async (query, blockNumber, maxQueryResults, prevResults = []) => {
+-    const newResults = await (0, shared_models_1.promiseTimeout)(query(blockNumber), 20000, new Error('Timeout querying Graph for QuickSync of RAILGUN Events'));
++    const newResults = await (0, shared_models_1.promiseTimeout)(query(blockNumber), 90000, new Error('Timeout querying Graph for QuickSync of RAILGUN Events'));
+     if (newResults.length === 0) {
+         return prevResults;
+     }
