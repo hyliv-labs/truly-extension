@@ -951,7 +951,7 @@ async function stepReturnRailgun(trade: ActiveTrade, session: TradeSession): Pro
     }));
     return;
   }
-  await transition(session.id, 'reshielding', 'USDC is at the owner. Shielding it back into Railgun, with gas paid in USDC.');
+  await transition(session.id, 'reshielding', 'USDC is at the owner. Shielding all of it back into Railgun, gas paid from the owner\'s ETH (or in USDC if it has none).');
   await shieldOwnerUsdcToRailgun();
   await transition(session.id, 'complete', 'Funds are back in Railgun. This trade can be retired.');
 }
