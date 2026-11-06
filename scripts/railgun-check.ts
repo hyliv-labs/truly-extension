@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RAILGUN_CIRCUIT_IC0 } from '../src/lib/railgun-circuit.ts';
+import { RAILGUN_CIRCUITS, RAILGUN_CIRCUIT_FILES } from '../src/lib/railgun-circuit.ts';
 import {
   RAILGUN_PROXY_ARBITRUM,
   RailgunFundingError,
@@ -108,15 +108,27 @@ const missing = engineFns.filter((name) => typeof wallet[name] !== 'function');
 if (missing.length > 0) fail(`Railgun SDK is missing ${missing.join(', ')}`);
 else pass('the Railgun wallet SDK exports the real proof and shield calls');
 
-const vkeyPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'railgun', '1x2', 'vkey.json');
-try {
-  const vkey = JSON.parse(readFileSync(vkeyPath, 'utf8')) as { IC?: string[][] };
-  if (vkey.IC?.[0]?.[0] !== RAILGUN_CIRCUIT_IC0) {
-    fail('the bundled Railgun vkey does not match the Arbitrum proxy');
-  } else pass('the bundled Railgun vkey matches the Arbitrum proxy');
-} catch {
-  fail('the Railgun proving key is missing. Run: tsx scripts/fetch-railgun-circuit.ts');
+// Every circuit a spend can pick must be bundled with the CURRENT key. One
+// that is missing is downloaded by the SDK from an old hash, and its proofs
+// revert on chain: "Invalid Snark Proof" (measured with 2x2, two notes).
+for (const circuit of RAILGUN_CIRCUITS) {
+  const vkeyPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'railgun', circuit.id, 'vkey.json');
+  try {
+    const vkey = JSON.parse(readFileSync(vkeyPath, 'utf8')) as { IC?: string[][] };
+    if (vkey.IC?.[0]?.[0] !== circuit.ic0) {
+      fail(`the bundled Railgun ${circuit.id} vkey does not match the Arbitrum proxy`);
+    } else pass(`the bundled Railgun ${circuit.id} vkey matches the Arbitrum proxy`);
+  } catch {
+    fail(`the Railgun ${circuit.id} proving key is missing. Run: tsx scripts/fetch-railgun-circuit.ts`);
+  }
+  for (const name of ['vkey.json', 'zkey', 'wasm']) {
+    if (RAILGUN_CIRCUIT_FILES[`artifacts-v2.1/${circuit.id}/${name}`] !== `railgun/${circuit.id}/${name}`) {
+      fail(`the SDK path for ${circuit.id}/${name} is not served from the bundle`);
+    }
+  }
 }
+if (!RAILGUN_CIRCUITS.some((c) => c.id === '2x2')) fail('two-note spends (2x2) would fall back to the old key');
+else pass('one-note and two-note spends (1x2, 2x2) are served from the current keys');
 
 console.log(failed ? '\nFAILED' : '\nrailgun spend rules OK');
 process.exit(failed ? 1 : 0);

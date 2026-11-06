@@ -52,7 +52,7 @@ import { installRpcThrottle } from './rpc-throttle';
  */
 const RAILGUN_RPC_URLS = [...new Set(['https://arb1.arbitrum.io/rpc', ARBITRUM_RPC_URL])];
 import { POI, RailgunEngine } from '@railgun-community/engine';
-import { RAILGUN_CIRCUIT_FILES, RAILGUN_CIRCUIT_PUBLIC_DIR } from './railgun-circuit';
+import { RAILGUN_CIRCUIT_FILES } from './railgun-circuit';
 import { RAILGUN_USDC, SELF_BROADCAST_SPEND_BUCKETS } from './railgun';
 
 const NETWORK = NetworkName.Arbitrum;
@@ -526,17 +526,17 @@ const circuitBytes = new Map<string, string | Uint8Array>();
  * never runs. Anything else (POI) still uses IndexedDB.
  */
 async function bundledCircuit(path: string): Promise<string | Uint8Array | undefined> {
-  const name = RAILGUN_CIRCUIT_FILES[path as keyof typeof RAILGUN_CIRCUIT_FILES];
-  if (!name) return undefined;
+  const file = RAILGUN_CIRCUIT_FILES[path];
+  if (!file) return undefined;
   const cached = circuitBytes.get(path);
   if (cached) return cached;
-  const response = await fetch(chrome.runtime.getURL(`${RAILGUN_CIRCUIT_PUBLIC_DIR}/${name}`));
+  const response = await fetch(chrome.runtime.getURL(file));
   if (!response.ok) {
     throw new Error(
-      `The Railgun proving key is not in the extension (${name}). Run pnpm dev so it is fetched before proving.`,
+      `The Railgun proving key is not in the extension (${file}). Run pnpm dev so it is fetched before proving.`,
     );
   }
-  const value = name.endsWith('.json') ? await response.text() : new Uint8Array(await response.arrayBuffer());
+  const value = file.endsWith('.json') ? await response.text() : new Uint8Array(await response.arrayBuffer());
   circuitBytes.set(path, value);
   return value;
 }
