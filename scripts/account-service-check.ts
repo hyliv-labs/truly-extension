@@ -24,8 +24,12 @@ const CHAIN_ID = 42161;
 const DEPLOYMENT_BLOCK = 411197154n;
 const SCOPE = 19314316433070648921215665277427138450050666275686107272761703472573535400848n;
 const RPC = process.env.WXT_ARBITRUM_RPC_URL ?? 'https://arb1.arbitrum.io/rpc';
-/** Measured ceiling on arb1.arbitrum.io/rpc; see scripts/log-range-check.ts. */
-const LOG_CHUNK_SIZE = 10_000_000;
+/**
+ * Imported rather than redeclared: the chunk size is a property of the
+ * configured provider, so this check must exercise the value the extension
+ * actually uses. See scripts/log-range-check.ts for the measurement.
+ */
+const { LOG_CHUNK_SIZE } = await import('../src/lib/config.ts');
 
 let failed = false;
 const fail = (msg: string) => {

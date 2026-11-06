@@ -63,6 +63,20 @@ export const ARBITRUM_RPC_URL =
   env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
 
 /**
+ * Widest eth_getLogs range to request, in blocks.
+ *
+ * A PROPERTY OF THE PROVIDER, not of Arbitrum — which is why it lives beside
+ * ARBITRUM_RPC_URL rather than with the pool constants. arb1.arbitrum.io/rpc
+ * serves 10,000,000-block ranges (measured by scripts/log-range-check.ts);
+ * many providers cap far lower. Changing the RPC without changing this gives
+ * "only N are allowed for this request" errors from every discovery scan.
+ *
+ * The SDK's default is 10,000, which turns a full scan from the pool's
+ * deployment block into ~11,000 sequential calls. At this size it is ~12.
+ */
+export const LOG_CHUNK_SIZE = Number(env('WXT_LOG_CHUNK_SIZE') ?? 10_000_000);
+
+/**
  * Privacy Pools v2 on Arbitrum. OPEN QUESTIONS for the 0xbow booth: the pool,
  * entrypoint and relayer addresses, and the minimum deposit.
  */

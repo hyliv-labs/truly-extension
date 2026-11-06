@@ -96,17 +96,38 @@ an unfunded seed finds no notes, as it must
 `totalDeposits`, so the scan is seeing the whole pool — and with no Hypersync
 dependency.
 
-**Caveat, not yet fixed:** `DataService` takes an `rpcUrl` *string* and builds
-its own transport — `createPublicClient({ transport: http(config.rpcUrl) })`.
-It therefore talks to that URL **directly, bypassing anon-rpc**. Twelve calls
-is cheap enough to route through anon-rpc, but doing so requires subclassing
-`DataService` and overriding its fetch methods to use our own client. Until
-that lands, discovery reveals to the RPC provider that this IP is interested in
-the pool. It does not reveal which notes are ours.
+### Routing discovery through anon-rpc
 
-Chunk size is also a property of *that* provider, not of Arbitrum: a different
-`WXT_ARBITRUM_RPC_URL` may cap ranges far lower, so the setting belongs next to
-the RPC config and a range error must fail loudly rather than silently retry.
+`DataService` takes an `rpcUrl` *string* and builds its own transport —
+`createPublicClient({ transport: http(config.rpcUrl) })` — so by default every
+discovery read goes **straight to that provider, bypassing anon-rpc**. That is
+not a minor leak: discovery is the one operation that scans the whole pool, so
+running it from the user's own IP tells the provider that this address is
+interested in Privacy Pools — the exact association the extension exists to
+prevent.
+
+It needs no subclassing. All three fetchers (`getDeposits`, `getWithdrawals`,
+`getRagequits`) obtain their client via `getClientForChain(chainId)`, which
+reads the instance's `clients` map, so replacing that entry after construction
+redirects all of them:
+
+```ts
+bearer.clients.set(ARBITRUM_CHAIN_ID, publicClient);
+```
+
+`src/lib/discovery.ts` does this and **throws** if the field is missing or the
+swap would be a no-op. Falling back to a direct RPC would still *work*, which
+is exactly why it must not happen silently. The configured `rpcUrl` is an
+unroutable placeholder, so a regression fails loudly instead of leaking.
+
+`scripts/discovery-anon-check.ts` (offline, in `pnpm check`) asserts the
+Arbitrum client is the anon client *by identity*. The leak is invisible at
+runtime — discovery succeeds either way — so it has to be asserted. Verified to
+fail when the swap line is removed.
+
+Chunk size is a property of *that provider*, not of Arbitrum: a different
+`WXT_ARBITRUM_RPC_URL` may cap ranges far lower. It therefore lives beside the
+RPC config as `LOG_CHUNK_SIZE`, overridable via `WXT_LOG_CHUNK_SIZE`.
 
 The decisive negative still holds: an unfunded seed matches nothing. A false
 match there would mean the matcher could mis-assign a real user's notes.
@@ -307,8 +328,6 @@ UI must show:
 
 ## Remaining before mainnet use
 
-0. **Discovery bypasses anon-rpc.** `DataService` builds its own transport;
-   it needs a subclass that routes through our client (see task 3 caveat).
 1. **No funded seed has been tested.** Discovery and spendability are proven
    against synthetic trees and the deployed verifier, but not against a real
    note. This needs real mainnet USDC (5 USDC minimum, plus the 0.5% vetting
