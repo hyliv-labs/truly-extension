@@ -22,6 +22,7 @@ import { createBundlerClient, toSimple7702SmartAccount } from 'viem/account-abst
 import {
   encodeFunctionData,
   erc20Abi,
+  formatEther,
   http,
   keccak256,
   type Address,
@@ -38,6 +39,7 @@ import {
   USDC_ADDRESS,
 } from './config';
 import { ensureOffscreenDocument } from './offscreen';
+import { maxCostWei } from './tx-gas';
 import { publicClient } from './chain';
 import { DEFAULT_PERMIT_AMOUNT, encodePaymasterData, signPaymasterPermit } from './permit';
 import { RAILGUN_PROXY_ARBITRUM, railgunGrossForNet, railgunShieldAfterGasReserve } from './railgun';
@@ -104,6 +106,10 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
     fromAddress: owner.address,
   });
   const signed = await signPopulated(owner.privateKey, populated);
+  // The exact cost is known only now. Cover it BEFORE recording 'pending': a
+  // node refuses an unaffordable broadcast, and a pending record of refused
+  // bytes is retried every tick and never lands.
+  await ensureUnshieldGas(trade.ownerIndex, owner.address, maxCostWei(signed.raw));
   await updateActiveTrade({
     withdrawal: {
       status: 'pending',
@@ -149,7 +155,15 @@ export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 're
     await updateActiveTrade({ withdrawal: undefined });
     return 'reverted';
   }
-  if (trade.withdrawal.raw) await broadcast(trade.withdrawal.raw as Hex);
+  if (trade.withdrawal.raw) {
+    // A record written before the exact-cost check can hold bytes the owner
+    // cannot afford (measured: 0.00005 ETH held, 0.0000570 wanted), and a
+    // resend then fails every tick. Cover the shortfall first; with no ETH
+    // anywhere in the vault this throws, naming the amount to send.
+    const raw = trade.withdrawal.raw as Hex;
+    await ensureUnshieldGas(trade.ownerIndex, trade.ownerAddress as Address, maxCostWei(raw));
+    await broadcast(raw);
+  }
   return 'pending';
 }
 
@@ -349,25 +363,34 @@ async function usdcBalance(owner: Address): Promise<bigint> {
   });
 }
 
-/** Enough for a ~1.2M-gas unshield at twice the current 0.02 gwei base fee. */
-const UNSHIELD_GAS_WEI = 50_000_000_000_000n;
+/**
+ * What the owner should hold before the proof is built, while the real cost
+ * is not known yet. Measured: one unshield needed 0.0000570 ETH, which the
+ * old fixed 0.00005 did not cover. The exact cost is checked again against
+ * the signed transaction before it is broadcast (maxCostWei).
+ */
+const UNSHIELD_GAS_WEI = 100_000_000_000_000n;
 const ETH_TRANSFER_GAS = 21_000n;
 
 /**
  * The unshield is a normal transaction, so the fresh owner has to hold ETH.
  * An earlier owner from this same vault can pay that, which does link the two
- * addresses. A vault with no ETH anywhere is refused before a proof is built.
+ * addresses. A vault with no ETH anywhere is refused, naming the shortfall.
+ *
+ * `needWei` is the target balance. It tops up the shortfall plus 20%, so a
+ * fee that moves a little between the check and the broadcast still clears.
  */
-async function ensureUnshieldGas(ownerIndex: number, owner: Address): Promise<void> {
+async function ensureUnshieldGas(ownerIndex: number, owner: Address, needWei = UNSHIELD_GAS_WEI): Promise<void> {
   const balance = await publicClient.getBalance({ address: owner });
-  if (balance >= UNSHIELD_GAS_WEI) return;
+  if (balance >= needWei) return;
+  const topUp = needWei - balance + needWei / 5n;
 
   for (let index = 0; index < ownerIndex; index += 1) {
     const earlier = await ownerAt(index);
     const earlierBalance = await publicClient.getBalance({ address: earlier.address });
     const price = (await publicClient.getGasPrice()) * 2n;
     const transferCost = ETH_TRANSFER_GAS * price;
-    if (earlierBalance < UNSHIELD_GAS_WEI + transferCost) continue;
+    if (earlierBalance < topUp + transferCost) continue;
 
     const account = privateKeyToAccount(earlier.privateKey);
     const nonce = await publicClient.getTransactionCount({ address: earlier.address });
@@ -375,7 +398,7 @@ async function ensureUnshieldGas(ownerIndex: number, owner: Address): Promise<vo
       chainId: ARBITRUM_CHAIN_ID,
       nonce,
       to: owner,
-      value: UNSHIELD_GAS_WEI,
+      value: topUp,
       gas: ETH_TRANSFER_GAS,
       maxFeePerGas: price,
       maxPriorityFeePerGas: 0n,
@@ -394,7 +417,7 @@ async function ensureUnshieldGas(ownerIndex: number, owner: Address): Promise<vo
   }
 
   throw new Error(
-    `This owner has no ETH for the Railgun unshield. Send 0.0001 ETH on Arbitrum to ${owner}. Nothing left the pool.`,
+    `This owner needs ${formatEther(topUp)} more ETH on Arbitrum One for the Railgun unshield gas. Send it to ${owner}; Truly sends the unshield once it arrives. Nothing left the pool.`,
   );
 }
 
