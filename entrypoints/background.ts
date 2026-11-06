@@ -110,8 +110,18 @@ export default defineBackground({
    */
   type: 'module',
   main() {
-    chrome.runtime.onInstalled.addListener(() => {
-      console.info('[truly] installed');
+    chrome.runtime.onInstalled.addListener((details) => {
+      console.info('[truly] installed', details.reason);
+      // Reloading the extension leaves every OPEN Lighter tab with a dead
+      // relay: content scripts only run at document_start, so the page keeps
+      // the old disconnected one and announces no provider at all. Truly then
+      // simply does not appear in Lighter's wallet list, and the connect fails
+      // with 'Connection cancelled' — a symptom that names nothing.
+      //
+      // Reloading the tab is what a user would do by hand, and it re-runs the
+      // script cleanly rather than injecting a second copy alongside the dead
+      // one.
+      void refreshLighterTabs();
     });
 
     // Reads the shim's export so the module cannot be tree-shaken. Without a
@@ -449,6 +459,28 @@ async function handle(
       const unreachable: never = message;
       throw new Error(`unknown request: ${JSON.stringify(unreachable)}`);
     }
+  }
+}
+
+/**
+ * Reload any open Lighter tab so its content script is live again.
+ *
+ * Only on install/update, which in development means every extension reload.
+ * A trading page survives a reload; a silently missing wallet does not
+ * survive a demo.
+ */
+async function refreshLighterTabs(): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://*.lighter.xyz/*' });
+    for (const tab of tabs) {
+      if (tab.id === undefined) continue;
+      await chrome.tabs.reload(tab.id);
+      console.info('[truly] reloaded Lighter tab so the provider is announced again');
+    }
+  } catch (error) {
+    // Never fatal: the user can reload the page themselves, and the worker
+    // must still start.
+    console.warn('[truly] could not refresh Lighter tabs', error);
   }
 }
 
