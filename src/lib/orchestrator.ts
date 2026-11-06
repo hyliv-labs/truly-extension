@@ -18,6 +18,7 @@ import { ownerUsdcBalance } from './reshield';
 
 export type TradePhase =
   | 'funding'
+  | 'unshielding'
   | 'waiting-for-deposit'
   | 'trading'
   | 'exiting'
@@ -47,12 +48,23 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
     return { phase: 'funding', detail: 'Getting a deposit address from Lighter.' };
   }
 
+  // The intent address exists but nothing has been pulled from the pool yet.
+  // Derived from the stored record rather than from a balance: the intent
+  // address shows nothing until Lighter sweeps it, so a balance check cannot
+  // tell "not funded" from "funded and already swept".
+  if (!trade.withdrawal) {
+    return {
+      phase: 'unshielding',
+      detail: 'Ready to fund this trade from Privacy Pools.',
+    };
+  }
+
   if (trade.accountIndex === undefined) {
     return {
       phase: 'waiting-for-deposit',
       detail:
         trade.deposit?.description ??
-        'Waiting for Lighter to credit the deposit. This usually takes 15-20 minutes.',
+        'Funded from the pool. Waiting for Lighter to credit the deposit, which usually takes 15-20 minutes.',
     };
   }
 

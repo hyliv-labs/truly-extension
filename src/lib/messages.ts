@@ -29,6 +29,11 @@ export type Request =
   | { kind: 'anonRpcSelfTest' }
   // Lighter bridge (E4)
   | { kind: 'prepareDeposit' }
+  // E3: pull funds from Privacy Pools into this trade's Lighter deposit
+  // address. Long-running (proof generation plus relaying), so the popup must
+  // not assume a prompt answer.
+  | { kind: 'unshield' }
+  | { kind: 'poolBalance' }
   | { kind: 'checkDeposit' }
   // Orchestrator (E8)
   | { kind: 'tradeStatus' }
@@ -91,6 +96,20 @@ export interface ResultMap {
   seedTypedData: { json: string };
   importWalletSeed: { mnemonic: string };
   prepareDeposit: { intentAddress: string };
+  unshield: {
+    txHash?: string;
+    amountUnits: string;
+    expectedNetUnits: string;
+    remainderUnits: string;
+    feeBPS: string;
+    recipient: string;
+  };
+  poolBalance: {
+    totalUnits: string;
+    noteCount: number;
+    /** Largest note, which bounds what a single trade can draw. */
+    largestUnits: string;
+  };
   checkDeposit: {
     complete: boolean;
     status: string;

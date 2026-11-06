@@ -193,6 +193,17 @@ export const BUNDLER_URL =
 export const PAYMASTER_VERIFICATION_GAS_LIMIT = 200_000n;
 export const PAYMASTER_POST_OP_GAS_LIMIT = 35_000n;
 
+/**
+ * How much to pull from the pool for one trade, in USDC units.
+ *
+ * Sized well above every floor rather than at them. The relayer's effective
+ * rate is fixed-cost dominated — 68 BPS at 5 USDC, 21 at 25 — so trading near
+ * the minimum pays a punitive rate, and any shortfall strands the remainder.
+ */
+export const DEFAULT_TRADE_SIZE_UNITS = BigInt(
+  env('WXT_TRADE_SIZE_UNITS') ?? 25_000_000,
+);
+
 export interface ConfigProblem {
   readonly key: string;
   readonly reason: string;

@@ -33,6 +33,20 @@ export interface ActiveTrade {
     readonly deposited: string;
     readonly confirmedAt: number;
   };
+  /**
+   * E3: set once the pool withdrawal is CONFIRMED on chain. Mirrors `reshield`
+   * and for the same reason — this record is what makes funding idempotent,
+   * and the only thing that distinguishes "funded, waiting for Lighter" from
+   * "never funded". Inferring it from balances cannot: the intent address
+   * shows nothing until Lighter sweeps it.
+   */
+  readonly withdrawal?: {
+    readonly txHash: string;
+    readonly label: string;
+    readonly amount: string;
+    readonly withdrawalIndex: number;
+    readonly confirmedAt: number;
+  };
   /** E8: last phase recorded, so the popup has something before the first poll. */
   readonly phase?: string;
   /** E4: last status seen, so the popup can show a wait without re-polling. */

@@ -17,12 +17,16 @@ import {
   isUnlocked,
   lock,
   unlock,
+  requireUnlockedMnemonic,
 } from '@truly/lib/vault';
 import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
 import { handleProviderRequest, settle } from '@truly/lib/provider';
 import { getApproval } from '@truly/lib/approvals';
 import { getReadCount } from '@truly/lib/anon-rpc';
 import { checkDeposit, prepareDeposit } from '@truly/lib/deposit';
+import { unshieldForTrade } from '@truly/lib/unshield';
+import { findSpendableNotes, totalSpendable } from '@truly/lib/discovery';
+import { authoritativeScope } from '@truly/lib/pool';
 import {
   buildSeedDerivationTypedData,
   deriveMnemonicFromWalletSignature,
@@ -231,6 +235,37 @@ async function handle(
 
     case 'checkDeposit':
       return checkDeposit();
+
+    case 'unshield': {
+      // Long-running: a withdrawal proof plus relaying. The popup may well be
+      // closed before this resolves, which is fine — unshieldForTrade writes
+      // its record only on confirmed on-chain success, so the result survives
+      // in the trade state rather than in this response.
+      const result = await unshieldForTrade();
+      await touchAutoLock();
+      return {
+        txHash: result.txHash,
+        amountUnits: result.amountUnits.toString(),
+        expectedNetUnits: result.expectedNetUnits.toString(),
+        remainderUnits: result.remainderUnits.toString(),
+        feeBPS: result.feeBPS.toString(),
+        recipient: result.recipient,
+      };
+    }
+
+    case 'poolBalance': {
+      // A full pool scan, so not cheap: the popup asks for it, rather than
+      // polling it.
+      const mnemonic = await requireUnlockedMnemonic();
+      const scope = await authoritativeScope();
+      const notes = await findSpendableNotes(mnemonic, scope);
+      const largest = notes.reduce((max, n) => (n.value > max ? n.value : max), 0n);
+      return {
+        totalUnits: totalSpendable(notes).toString(),
+        noteCount: notes.length,
+        largestUnits: largest.toString(),
+      };
+    }
 
     case 'anonRpcStatus':
       return { reads: await getReadCount(), problems: configProblems() };
