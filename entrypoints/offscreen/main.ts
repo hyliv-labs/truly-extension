@@ -15,16 +15,32 @@ import { assertArtifactsPresent } from '@truly/lib/proving';
 import { requestSeedSignature, MetaMaskError } from '@truly/lib/metamask';
 import { runWithdrawalProof } from '@truly/lib/prove-withdrawal-run';
 
-// Only claims ports named 'anon-rpc.worker', so it coexists with the proof
-// handling below.
-mountOffscreenHost();
+/** Whether the anon-rpc host mounted. Reported by 'ping'. */
+let hostMounted = false;
+let hostError: string | null = null;
 
+/**
+ * THE LISTENER IS REGISTERED FIRST, before the anon-rpc host is mounted.
+ *
+ * It used to be the other way round, and that made any failure inside
+ * mountOffscreenHost() fatal to the entire document: the module threw, the
+ * listener was never added, and the offscreen page sat there loaded and
+ * completely deaf. The service worker then reported 'offscreen document
+ * disconnected' / 'Receiving end does not exist', which names neither
+ * anon-rpc nor the real error.
+ *
+ * Registering first means a broken harness costs us anon-rpc — loudly — but
+ * not proving, not MetaMask recovery, and not the ability to say what went
+ * wrong.
+ */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target !== 'truly:offscreen') return false;
 
   switch (message.kind) {
     case 'ping':
-      sendResponse({ ok: true });
+      // Reports the host's state too, so a caller can tell 'offscreen is
+      // alive but anon-rpc is broken' from 'offscreen is not there'.
+      sendResponse({ ok: true, value: { hostMounted, hostError } });
       return true;
 
     case 'circuitsReady':
@@ -72,4 +88,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.info('[truly] offscreen ready');
+// Mounted AFTER the listener, and never allowed to take the document down
+// with it. Only claims ports named 'anon-rpc.worker', so it coexists with the
+// proof handling above.
+try {
+  mountOffscreenHost();
+  hostMounted = true;
+  console.info('[truly] offscreen: anon-rpc host mounted');
+} catch (error) {
+  hostError = error instanceof Error ? error.message : String(error);
+  console.error('[truly] offscreen: anon-rpc host FAILED to mount:', error);
+}
+
+console.info('[truly] offscreen ready; anon-rpc host mounted:', hostMounted);
