@@ -42,7 +42,7 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
   fetchCount++;
   if (url.includes('mt-leaves')) {
     return new Response(
-      JSON.stringify({ aspLeaves: [LABEL.toString(), '999'], stateTreeLeaves: ['7', '8'] }),
+      JSON.stringify({ aspLeaves: [LABEL.toString(), '999'] }),
       { status: 200 },
     );
   }

@@ -26,8 +26,13 @@
 
 import type { Address } from 'viem';
 import type { Hash, Secret } from '@0xbow/privacy-pools-core-sdk';
-import { generateMerkleProof, calculateContext } from '@0xbow/privacy-pools-core-sdk';
+import {
+  generateMerkleProof,
+  calculateContext,
+  getCommitment,
+} from '@0xbow/privacy-pools-core-sdk';
 import { getAssociationSet, isLabelApproved, AspUnavailable } from './asp';
+import { fetchStateTree, StateTreeError } from './state-tree';
 import { getSdk } from './proving';
 import {
   requestQuote,
@@ -143,6 +148,36 @@ async function quoteAndProve(
   const index = await nextWithdrawalIndex(note.label, note.childrenCount);
   const change = deriveChangeNote(mnemonic, note.label, index);
 
+  // Merkle proofs are LOCAL work, so they happen before the quote: a failure
+  // here (a note missing from the tree, an unapproved label) must not burn a
+  // 60-second commitment.
+  const stateMerkleProof = generateMerkleProof([...stateLeaves], note.commitmentHash);
+  const aspMerkleProof = generateMerkleProof([...aspLeaves], note.label);
+
+  // Built with getCommitment, NOT hand-rolled. The SDK's shape is
+  // { hash, nullifierHash, preimage: { value, label, precommitment } } — a
+  // flat { hash, label, value, nullifier, secret } feeds undefined into the
+  // circuit and fails as an opaque "Failed to generate proof".
+  const commitment = getCommitment(
+    note.value,
+    note.label as unknown as Hash,
+    note.nullifier,
+    note.secret,
+  );
+
+  // Cross-check: this also validates that findSpendableNotes mapped the
+  // account fields correctly. A mismatch means we are about to prove against
+  // a commitment that is not the one in the state tree.
+  if ((commitment.hash as unknown as bigint) !== note.commitmentHash) {
+    throw new WithdrawError(
+      `Rebuilt commitment ${commitment.hash} does not match the discovered ${note.commitmentHash}. The note's fields are wrong; proving would produce an unusable proof.`,
+    );
+  }
+
+  // The SDK must be ready before the clock starts: first use fetches and
+  // hash-checks the circuit artifacts, which is not a 60-second-window task.
+  const sdk = await getSdk();
+
   // --- 2. quote. The 60s window opens HERE. ---
   const quote = await requestQuote(recipient, amountUnits);
 
@@ -163,18 +198,6 @@ async function quoteAndProve(
   }
 
   // --- 5. prove. ---
-  const stateMerkleProof = generateMerkleProof([...stateLeaves], note.commitmentHash);
-  const aspMerkleProof = generateMerkleProof([...aspLeaves], note.label);
-
-  const sdk = await getSdk();
-  const commitment = {
-    hash: note.commitmentHash as unknown as Hash,
-    label: note.label as unknown as Hash,
-    value: note.value,
-    nullifier: note.nullifier,
-    secret: note.secret,
-  };
-
   const proof = await sdk.proveWithdrawal(commitment as never, {
     context: context as unknown as bigint,
     withdrawalAmount: amountUnits,
@@ -251,10 +274,16 @@ export async function withdrawFromPool(request: WithdrawRequest): Promise<Withdr
         );
       }
 
+      // The state tree is read LIVE from chain events, never cached: state
+      // leaves change with every deposit and withdrawal, including our own.
+      // A cached copy would be missing trade N-1's change note and every
+      // merkle proof after the first would fail.
+      const stateTree = await fetchStateTree();
+
       const { proven, quote } = await quoteAndProve(
         request,
         scope,
-        set.stateTreeLeaves,
+        stateTree.leaves,
         set.aspLeaves,
         mnemonic,
       );
@@ -281,6 +310,7 @@ export async function withdrawFromPool(request: WithdrawRequest): Promise<Withdr
         (error instanceof RelayerError && error.retryable) ||
         (error instanceof WithdrawError && error.retryable) ||
         error instanceof AspUnavailable ||
+        error instanceof StateTreeError ||
         isRetryableRevert(lastError.message);
 
       if (!retryable || attempt === MAX_ATTEMPTS) break;

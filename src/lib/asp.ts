@@ -42,8 +42,6 @@ export class AspUnavailable extends Error {
 export interface AssociationSet {
   /** Approved labels. A commitment is spendable iff its label is in here. */
   readonly aspLeaves: readonly bigint[];
-  /** Commitment hashes, in insertion order — the pool's state tree. */
-  readonly stateTreeLeaves: readonly bigint[];
   /** The ASP root these leaves produce, as the API reports it. */
   readonly root: bigint;
   /** When this was fetched, for display only — never for validity. */
@@ -52,7 +50,6 @@ export interface AssociationSet {
 
 interface CachedSet {
   aspLeaves: string[];
-  stateTreeLeaves: string[];
   root: string;
   fetchedAt: number;
 }
@@ -108,11 +105,10 @@ export async function onChainAspRoot(): Promise<bigint> {
 async function readCache(): Promise<AssociationSet | null> {
   const stored = await chrome.storage.local.get(LOCAL_ASP_CACHE);
   const cached = stored[LOCAL_ASP_CACHE] as CachedSet | undefined;
-  if (!cached?.aspLeaves || !cached.stateTreeLeaves || !cached.root) return null;
+  if (!cached?.aspLeaves || !cached.root) return null;
   try {
     return {
       aspLeaves: cached.aspLeaves.map((v) => BigInt(v)),
-      stateTreeLeaves: cached.stateTreeLeaves.map((v) => BigInt(v)),
       root: BigInt(cached.root),
       fetchedAt: cached.fetchedAt ?? 0,
     };
@@ -125,7 +121,6 @@ async function readCache(): Promise<AssociationSet | null> {
 async function writeCache(set: AssociationSet): Promise<void> {
   const serialised: CachedSet = {
     aspLeaves: set.aspLeaves.map(String),
-    stateTreeLeaves: set.stateTreeLeaves.map(String),
     root: set.root.toString(),
     fetchedAt: set.fetchedAt,
   };
@@ -134,20 +129,19 @@ async function writeCache(set: AssociationSet): Promise<void> {
 
 /** Fetch the association set from 0xbow. Always a plain, non-anonymised call. */
 export async function fetchAssociationSet(scope: bigint): Promise<AssociationSet> {
-  const leaves = (await aspFetch('mt-leaves', scope)) as {
-    aspLeaves?: unknown[];
-    stateTreeLeaves?: unknown[];
-  };
-  if (!Array.isArray(leaves.aspLeaves) || !Array.isArray(leaves.stateTreeLeaves)) {
-    throw new AspUnavailable('ASP mt-leaves did not return aspLeaves and stateTreeLeaves arrays.');
+  const leaves = (await aspFetch('mt-leaves', scope)) as { aspLeaves?: unknown[] };
+  if (!Array.isArray(leaves.aspLeaves)) {
+    throw new AspUnavailable('ASP mt-leaves did not return an aspLeaves array.');
   }
+  // stateTreeLeaves is deliberately IGNORED. The ASP's snapshot of the state
+  // tree lags the chain, and state leaves change with every deposit and
+  // withdrawal -- including our own. See state-tree.ts.
 
   const roots = (await aspFetch('mt-roots', scope)) as { mtRoot?: unknown };
   const root = toBigInt(roots.mtRoot, 'mtRoot');
 
   const set: AssociationSet = {
     aspLeaves: leaves.aspLeaves.map((v, i) => toBigInt(v, `aspLeaves[${i}]`)),
-    stateTreeLeaves: leaves.stateTreeLeaves.map((v, i) => toBigInt(v, `stateTreeLeaves[${i}]`)),
     root,
     fetchedAt: Date.now(),
   };

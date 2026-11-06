@@ -21,6 +21,7 @@
     "check:withdrawal": "tsx scripts/withdrawal-proof-check.ts",
     "check:account": "tsx scripts/account-service-check.ts",
     "check:logrange": "tsx scripts/log-range-check.ts",
+    "check:statetree": "tsx scripts/state-tree-check.ts",
     "check:asproot": "tsx scripts/asp-root-rule-check.ts",
     "check:relayer": "tsx scripts/relayer-quote-check.ts"
   },
