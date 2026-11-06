@@ -30,6 +30,15 @@ body {
   min-height: 320px;
 }
 
+/* Side panel: Chrome sets the width and the user can drag it, so fill it. */
+body.panel {
+  width: auto;
+}
+
+body.panel .popup {
+  min-height: 100vh;
+}
+
 h1 {
   margin: 0;
   font-size: 18px;

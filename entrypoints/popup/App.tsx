@@ -125,6 +125,38 @@ export function App() {
     void refresh().catch((e: Error) => setError(e.message));
   }, [refresh]);
 
+  // The side panel (and the connect window) stay open for as long as the
+  // user keeps them, so state read once at open goes stale: the auto-lock
+  // fires, a trade starts from Lighter's connect window. Re-read when stored
+  // state changes (lock and trade state live in chrome.storage), when the
+  // page is shown again, and every 15s as a backstop. One read at a time.
+  useEffect(() => {
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reread = () => {
+      if (inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      void refresh()
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    const soon = () => {
+      clearTimeout(timer);
+      timer = setTimeout(reread, 1_000);
+    };
+    chrome.storage.onChanged.addListener(soon);
+    document.addEventListener('visibilitychange', soon);
+    const id = setInterval(reread, 15_000);
+    return () => {
+      chrome.storage.onChanged.removeListener(soon);
+      document.removeEventListener('visibilitychange', soon);
+      clearInterval(id);
+      clearTimeout(timer);
+    };
+  }, [refresh]);
+
   useEffect(() => {
     if (!status?.unlocked) {
       setShielded(null);

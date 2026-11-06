@@ -5,6 +5,16 @@ import { resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 
 export default defineConfig({
+  hooks: {
+    // The toolbar icon opens the side panel (background.ts). Chrome ignores
+    // openPanelOnActionClick while a default_popup is set, so drop it.
+    // popup.html is still built: Lighter's connect window opens it, and so
+    // does the fallback for browsers without the side panel API.
+    'build:manifestGenerated': (_wxt, manifest) => {
+      if (manifest.action) delete manifest.action.default_popup;
+    },
+  },
+
   modules: ['@wxt-dev/module-react'],
   srcDir: '.',
   // Not '@': WXT already binds '@' and '~' to srcDir, which is the repo root here.

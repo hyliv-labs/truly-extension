@@ -129,6 +129,22 @@ export default defineBackground({
       void refreshLighterTabs();
     });
 
+    // The toolbar icon opens the side panel, not a popup. Chrome closes a
+    // popup as soon as the browser loses focus (switching to Slack, say),
+    // which dropped the user mid-sync and stopped the trade panel advancing
+    // the trade. The side panel stays beside Lighter until its X is clicked.
+    // The manifest has no default_popup for this to work (wxt.config.ts), so
+    // a browser without the side panel API gets the popup back here.
+    const usePopup = () => void chrome.action.setPopup({ popup: 'popup.html' });
+    if (chrome.sidePanel?.setPanelBehavior) {
+      chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error: unknown) => {
+        console.warn('[truly] side panel unavailable, using the popup', error);
+        usePopup();
+      });
+    } else {
+      usePopup();
+    }
+
     // Reads the shim's export so the module cannot be tree-shaken. Without a
     // referenced binding the bundler drops it, and the worker goes back to
     // dying on URL.createObjectURL before any of this runs.
