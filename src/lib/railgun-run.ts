@@ -40,14 +40,20 @@ import {
   type RailgunERC20AmountRecipient,
   type TransactionGasDetails,
 } from '@railgun-community/shared-models';
-import { ARBITRUM_RPC_URL } from './config';
+import { ARBITRUM_RPC_URL, RAILGUN_SCAN_FROM_BLOCK } from './config';
 import { POI, RailgunEngine } from '@railgun-community/engine';
 import { RAILGUN_CIRCUIT_FILES, RAILGUN_CIRCUIT_PUBLIC_DIR } from './railgun-circuit';
 import { RAILGUN_USDC, SELF_BROADCAST_SPEND_BUCKETS } from './railgun';
 
 const NETWORK = NetworkName.Arbitrum;
 const TXID = TXIDVersion.V2_PoseidonMerkle;
-const WALLET_ID_KEY = 'truly:railgunWalletId';
+/*
+ * v2: wallets made before the creation block moved off the deployment block
+ * must be re-created once to pick it up. The ID is generateID(mnemonic, index),
+ * so re-creating rewrites only the stored creation block and keeps any scan
+ * progress already made.
+ */
+const WALLET_ID_KEY = 'truly:railgunWalletId:v2';
 const PPOI_NODE = 'https://ppoi.fdi.network';
 
 export interface RailgunBalanceSnapshot {
@@ -330,8 +336,10 @@ async function ensureWallet(mnemonic: string): Promise<string> {
     }
   }
 
+  // Not the deployment block: see RAILGUN_SCAN_FROM_BLOCK. Never earlier
+  // than deployment, which would be meaningless to the engine.
   const created = await createRailgunWallet(key, mnemonic, {
-    [NETWORK]: NETWORK_CONFIG[NETWORK].deploymentBlock,
+    [NETWORK]: Math.max(RAILGUN_SCAN_FROM_BLOCK, NETWORK_CONFIG[NETWORK].deploymentBlock),
   });
   writeWalletId(created.id);
   walletId = created.id;

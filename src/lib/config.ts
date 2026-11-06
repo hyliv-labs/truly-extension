@@ -81,6 +81,25 @@ export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ??
   '0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0') as Address;
 
 /**
+ * The block a Truly Railgun wallet starts DECRYPTING from.
+ *
+ * Measured: the Arbitrum Railgun tree holds 134,028 commitments since the
+ * contract's deployment (block 56,109,834). The engine tries to decrypt every
+ * commitment after the wallet's creation block with the viewing key, so a
+ * wallet created at deployment does 134k decryption attempts on its first
+ * read -- that is the long "reading shielded balance" wait.
+ *
+ * Truly's Railgun wallet is derived from the vault seed, and nothing can have
+ * been shielded to it before the vault existed. 521,000,000 is 3 Nov 2026,
+ * 19:20 UTC, before any Truly vault. Lower it ONLY for a seed that held Railgun
+ * funds earlier: notes before this block are invisible to the wallet.
+ *
+ * This does not shorten the merkle-tree sync itself; the whole tree is still
+ * needed to build proofs. It removes the per-commitment decryption.
+ */
+export const RAILGUN_SCAN_FROM_BLOCK = Number(env('WXT_RAILGUN_SCAN_FROM_BLOCK') ?? 521_000_000);
+
+/**
  * KPS gateways the tor-js worker relays through, as "<ip>:<port>:<certhash>".
  *
  * REQUIRED — tor-js has no default and refuses to start without one:
