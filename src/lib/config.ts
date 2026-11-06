@@ -75,12 +75,34 @@ export const PRIVACY_POOL_ADDRESS = env('WXT_PRIVACY_POOL_ADDRESS') as
 export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
 
 /**
- * The pool's scope, which binds a note to one pool. It is an input to
- * generateDepositSecrets, so a wrong scope derives notes for a pool the funds
- * are not in — findable by nobody. OPEN: read it from the pool contract or get
- * it from 0xbow rather than guessing.
+ * The pool's scope. Configured only as a cross-check — src/lib/pool.ts reads
+ * SCOPE() from the chain and that value is authoritative, because a wrong
+ * scope derives notes for a pool the funds are not in and errors nowhere.
  */
 export const PRIVACY_POOL_SCOPE = env('WXT_PRIVACY_POOL_SCOPE');
+
+/**
+ * Read from the entrypoint's assetConfig(USDC) on Arbitrum, in 6-decimal USDC
+ * units. The pool itself REJECTS a deposit below this, so a re-shield that
+ * would land under it must not be attempted.
+ */
+export const POOL_MIN_DEPOSIT_UNITS = 5_000_000n;
+
+/**
+ * Entrypoint vetting fee, 50 BPS = 0.5%, taken from every deposit. Verified on
+ * chain. A re-shield therefore returns less than it sends, which matters when
+ * sizing against POOL_MIN_DEPOSIT_UNITS.
+ */
+export const POOL_VETTING_FEE_BPS = 50n;
+
+/** Relayer fee ceiling the entrypoint enforces, 1000 BPS = 10%. */
+export const POOL_MAX_RELAY_FEE_BPS = 1000n;
+
+/**
+ * fastrelay.xyz charges 10 BPS (0.1%) on Arbitrum USDC — queried live. Its own
+ * minWithdrawAmount is 0, so the floor is ours to enforce.
+ */
+export const RELAYER_FEE_BPS = 10n;
 
 /**
  * Where the Privacy Pools circuit artifacts (.wasm / .zkey) are served from.
