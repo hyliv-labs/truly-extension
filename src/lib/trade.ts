@@ -9,6 +9,7 @@
 
 import type { Address } from 'viem';
 import { currentOwner, retireOwner } from './vault';
+import { skipUsedOwners } from './fresh-owner';
 import { configProblems } from './config';
 import { clearLighterSiteData } from './site-cleanup';
 import type { TradeSession } from './session-types';
@@ -177,6 +178,9 @@ export async function startTrade(): Promise<ActiveTrade> {
   // and the first trade after an install or a crash has no previous at all.
   await clearLighterSiteData();
 
+  // A restored vault starts the index at 0 again; never reissue an address
+  // that already has on-chain history. See fresh-owner.ts.
+  await skipUsedOwners();
   const owner = await currentOwner();
   const trade: ActiveTrade = {
     ownerIndex: owner.index,

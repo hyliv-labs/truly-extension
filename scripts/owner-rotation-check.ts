@@ -21,6 +21,10 @@ process.env.WXT_PRIVACY_POOL_RELAYER_URL = 'https://relayer.example';
 // Imported after the stub exists — these modules touch chrome at call time only.
 const { createVault, currentOwner, getOwnerIndex } = await import('../src/lib/vault.ts');
 const { startTrade, endTrade, getActiveTrade } = await import('../src/lib/trade.ts');
+// Offline: every address reads as never used, so rotation alone is tested here
+// (fresh-owner-check covers skipping used ones).
+const { setHistoryReaderForTests } = await import('../src/lib/fresh-owner.ts');
+setHistoryReaderForTests(async () => ({ nonce: 0, ethWei: 0n, usdcUnits: 0n }));
 
 let failed = false;
 const fail = (msg: string) => {
