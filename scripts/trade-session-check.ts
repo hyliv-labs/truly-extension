@@ -11,7 +11,7 @@ import { installChromeStub } from './chrome-stub.ts';
 
 installChromeStub();
 
-const { driveTx, retryOrder, retryLighterExit, closePosition, classifyFundingError, SessionError } = await import(
+const { driveTx, retryOrder, retryLighterExit, closePosition, classifyFundingError, SessionError, advanceSession } = await import(
   '../src/lib/trade-session.ts'
 );
 const { updateSession, getActiveTrade } = await import('../src/lib/trade.ts');
@@ -207,6 +207,53 @@ await Promise.all([
   const s = (await getActiveTrade())?.session;
   if (s?.creditedUsd !== 9.9 || s?.detail !== 'concurrent') fail('a concurrent session write was lost');
   else pass('concurrent session writes are serialised, none lost');
+}
+
+// --- the tick leaves waiting and failed states alone ----------------------------
+// step() once fell through its default branch into stepWithdraw, so a failed
+// Railgun unshield became "withdraw failed: no withdrawal was stored" on the
+// next tick and its real error was lost. A funded trade would have gone the same way.
+for (const state of ['funding-failed', 'funded'] as const) {
+  await setSession({ state, quote: { ...(quote as object), orderType: 'deposit' }, detail: 'keep me' });
+  await advanceSession();
+  const s = (await getActiveTrade())?.session;
+  if (s?.state !== state || s.detail !== 'keep me') fail(`a tick moved '${state}' to '${s?.state}' (${s?.detail})`);
+  else pass(`a tick leaves '${state}' for the user`);
+}
+
+// --- a record the fall-through already mislabelled is put back -----------------
+const mislabelled = { state: 'withdraw-failed', error: { code: 'no-exit-tx', message: 'missing withdrawal', at: NOW } };
+await setSession({ ...mislabelled, quote: { ...(quote as object), orderType: 'deposit' } });
+await advanceSession();
+{
+  const s = (await getActiveTrade())?.session;
+  if (s?.state !== 'funding-failed') fail(`an unfunded mislabelled record went to '${s?.state}', expected funding-failed`);
+  else pass('a mislabelled record with nothing sent goes back to funding-failed (retry funding)');
+}
+await setSession({ ...mislabelled, quote: { ...(quote as object), orderType: 'deposit' } });
+try {
+  await retryLighterExit();
+} catch (error) {
+  fail(`retrying the exit on a mislabelled record threw ${(error as Error).message}`);
+}
+{
+  const s = (await getActiveTrade())?.session;
+  if (s?.state !== 'funding-failed' || s.exitTx) fail(`"Retry Lighter withdrawal" on a mislabelled record left '${s?.state}' / exitTx ${Boolean(s?.exitTx)}`);
+  else pass('"Retry Lighter withdrawal" on a mislabelled record signs nothing and repairs it');
+}
+{
+  const t = await getActiveTrade();
+  await chrome.storage.local.set({
+    'truly:activeTrade': {
+      ...t,
+      withdrawal: { status: 'confirmed', txHash: '0x' + 'cd'.repeat(32), label: 'railgun', amount: '5000000', childrenCountAtStart: 0, startedAt: NOW },
+      session: { ...t!.session!, ...mislabelled, quote: { ...(quote as object), orderType: 'market' } },
+    },
+  });
+  await advanceSession();
+  const s = (await getActiveTrade())?.session;
+  if (s?.state !== 'withdraw-failed') fail(`a funded order-placing record was replayed to '${s?.state}'`);
+  else pass('a funded record that places its own order is not replayed (no second order)');
 }
 
 // --- funding errors map to the named cases ------------------------------------

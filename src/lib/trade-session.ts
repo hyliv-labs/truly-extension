@@ -300,6 +300,7 @@ async function step(): Promise<TradeSession | null> {
   if (!trade || !session) return null;
 
   try {
+    if (await repairFallThrough(trade, session)) return getSession();
     switch (session.state) {
       case 'funding':
         await stepFunding(trade, session);
@@ -320,13 +321,19 @@ async function step(): Promise<TradeSession | null> {
       case 'closing':
         await stepClose(trade, session);
         break;
-      default:
       case 'withdrawing':
         await stepWithdraw(trade, session);
         break;
       case 'exited':
       case 'reshielding':
         await stepReturn(trade, session);
+        break;
+      default:
+        // Failed states and states that wait for the user (funding-failed,
+        // funded, open, closed, ...) do not advance on a tick. This used to
+        // fall through into stepWithdraw, which turned a failed Railgun
+        // unshield into "withdraw failed: no withdrawal was stored" and lost
+        // the real error. It would have done the same to a funded trade.
         break;
     }
     const after = await getSession();
@@ -744,6 +751,43 @@ async function queueLighterExit(
   );
 }
 
+/**
+ * Put back a record the old step() fall-through mislabelled. Its signature is
+ * 'withdraw-failed' with code 'no-exit-tx' and no stored withdrawal: a real
+ * exit always stores its withdrawal before entering 'withdrawing', so only
+ * the fall-through produces that. Nothing was sent then, but the record named
+ * the wrong step, and its one button ("Retry Lighter withdrawal") would sign a
+ * withdrawal of whatever sits on Lighter.
+ *
+ * Where it goes back to depends on the funding record, never on a guess:
+ * - not sent: 'funding-failed', which offers the funding retry.
+ * - pending: 'funding', which settles that same transaction on chain.
+ * - confirmed, deposit-only: 'awaiting-deposit', which re-reads Lighter and
+ *   never places an order for a deposit-only trade.
+ * A confirmed trade that places its own order is left alone: replaying its
+ * steps could sign a second order.
+ */
+async function repairFallThrough(trade: ActiveTrade, session: TradeSession): Promise<boolean> {
+  if (session.state !== 'withdraw-failed' || session.exitTx || session.error?.code !== 'no-exit-tx') return false;
+  const funding = trade.withdrawal?.status;
+  if (funding === 'pending') {
+    await transition(session.id, 'funding', 'Checking the funding transaction against the chain. It will not be sent again.');
+    return true;
+  }
+  if (funding === 'confirmed') {
+    if (session.quote.orderType !== 'deposit') return false;
+    await transition(session.id, 'awaiting-deposit', 'Funding landed. Checking whether Lighter has credited it.');
+    return true;
+  }
+  await transition(
+    session.id,
+    'funding-failed',
+    'Funding did not complete, and a bug (now fixed) replaced its error. Nothing left the shielded pool. Retry is safe and will show the real error if it fails again.',
+    { code: 'funding-error', message: 'original error not recorded' },
+  );
+  return true;
+}
+
 async function stepWithdraw(trade: ActiveTrade, session: TradeSession): Promise<void> {
   const stored = session.exitTx;
   if (!stored) {
@@ -906,6 +950,7 @@ export async function retryLighterExit(): Promise<TradeSession> {
   const trade = await getActiveTrade();
   const session = trade?.session;
   if (!trade || !session) throw new SessionError('no-session', 'No trade session is active.');
+  if (await repairFallThrough(trade, session)) return requireSession();
   if (session.state !== 'withdraw-failed') {
     throw new SessionError('not-retryable', `A Lighter withdrawal can be retried only after it failed (now: ${session.state}).`);
   }
@@ -1008,9 +1053,15 @@ export interface SessionView {
 
 /** The session plus a live position read, for the popup's card. */
 export async function getSessionView(): Promise<SessionView | null> {
-  const trade = await getActiveTrade();
-  const session = trade?.session;
+  let trade = await getActiveTrade();
+  let session = trade?.session;
   if (!trade || !session) return null;
+  // A mislabelled record sits in a state nothing ticks, so repair it here,
+  // where the panel looks, rather than wait for a click on the wrong button.
+  if (await repairFallThrough(trade, session)) {
+    trade = (await getActiveTrade()) ?? trade;
+    session = trade.session ?? session;
+  }
 
   let position: LighterPosition | undefined;
   let account: SessionView['account'];
