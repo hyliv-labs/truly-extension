@@ -1,12 +1,20 @@
 /**
  * Determines whether a withdrawal must use the ENTRYPOINT's LATEST ASP root.
  *
- * This decides whether ASP batching gates trades. The circuit happily proves
- * against any ASP root (see withdrawal-proof-check.ts), but the pool reverts
- * with IncorrectASPRoot if it demands the newest one. Labels persist across
- * roots either way, so an approved label stays approved -- but the proof must
- * then be built against the CURRENT tree, which means refetching mt-leaves
- * before every withdrawal.
+ * ANSWERED, from PrivacyPool.sol's validWithdrawal modifier:
+ *
+ *   if (_proof.ASPRoot() != ENTRYPOINT.latestRoot()) revert IncorrectASPRoot();
+ *
+ * STRICT EQUALITY against a single value. The entrypoint exposes
+ * rootByIndex(), but the pool never consults it -- historical roots are
+ * readable and NOT accepted. Note the state root is different: that one does
+ * go through _isKnownRoot(), a real history.
+ *
+ * Consequences, which E3 must implement:
+ *  - A proof is invalidated by any updateRoot() landing before inclusion.
+ *  - IncorrectASPRoot is therefore RETRYABLE, not terminal: refetch, re-prove.
+ *  - Labels persist across roots, so an approved label stays approved. Only
+ *    the proof has to be rebuilt, never the screening re-earned.
  */
 
 import { createPublicClient, http, parseAbi } from 'viem';
@@ -33,10 +41,10 @@ const note = (m: string) => console.log('  ', m);
 try {
   const latest = await client.readContract({ address: ENTRYPOINT, abi, functionName: 'latestRoot' });
   pass(`entrypoint.latestRoot() = ${latest}`);
-  note('The entrypoint stores a root HISTORY, not a single value.');
+  note('The entrypoint does store a root history...');
 
-  // If only the latest root were usable there would be no reason to keep a
-  // history. Probe how deep it goes.
+  // The history is readable but NOT accepted by the pool. Probed only to show
+  // that its existence must not be mistaken for tolerance of a stale root.
   let depth = 0;
   for (let i = 0n; i < 8n; i++) {
     try {
@@ -47,12 +55,8 @@ try {
       break;
     }
   }
-  note(`rootByIndex readable for ${depth} entries`);
-  note(
-    depth > 1
-      ? 'A history of accepted roots means a slightly stale proof is still valid.'
-      : 'No readable history: build every withdrawal against the LATEST root.',
-  );
+  note(`rootByIndex readable for at least ${depth} entries (loop limit, not depth)`);
+  note('...but the pool compares against latestRoot() ONLY. Stale roots revert.');
   // The ASP's published mtRoot should BE the entrypoint's latest root. If the
   // two ever diverge, mt-leaves is describing a tree the pool will not accept.
   if (latest === ASP_API_ROOT) {
@@ -60,7 +64,9 @@ try {
   } else {
     note(`ASP API root ${ASP_API_ROOT} != latestRoot() — the ASP has advanced; refetch mt-leaves`);
   }
-  note('Rule adopted: refetch mt-leaves immediately before proving.');
+  note('Rule adopted: cache mt-leaves; before proving compare the cached root');
+  note('with latestRoot() over anon-rpc and refetch ONLY on divergence. That');
+  note('avoids telling 0xbow the moment of every withdrawal.');
 } catch (error) {
   console.log('  latestRoot() not exposed:', (error as Error).message.split('\n')[0]);
   note('Treat the latest ASP root as mandatory and refetch mt-leaves before proving.');

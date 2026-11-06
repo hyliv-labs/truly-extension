@@ -93,8 +93,20 @@ an unfunded seed finds no notes, as it must
 ```
 
 **12 calls, 1.7 seconds.** The 240 deposits independently match the ASP API's
-`totalDeposits`, so the scan is seeing the whole pool. No Hypersync dependency
-and no third party that learns we are interested in this pool.
+`totalDeposits`, so the scan is seeing the whole pool — and with no Hypersync
+dependency.
+
+**Caveat, not yet fixed:** `DataService` takes an `rpcUrl` *string* and builds
+its own transport — `createPublicClient({ transport: http(config.rpcUrl) })`.
+It therefore talks to that URL **directly, bypassing anon-rpc**. Twelve calls
+is cheap enough to route through anon-rpc, but doing so requires subclassing
+`DataService` and overriding its fetch methods to use our own client. Until
+that lands, discovery reveals to the RPC provider that this IP is interested in
+the pool. It does not reveal which notes are ours.
+
+Chunk size is also a property of *that* provider, not of Arbitrum: a different
+`WXT_ARBITRUM_RPC_URL` may cap ranges far lower, so the setting belongs next to
+the RPC config and a range error must fail loudly rather than silently retry.
 
 The decisive negative still holds: an unfunded seed matches nothing. A false
 match there would mean the matcher could mis-assign a real user's notes.
@@ -162,17 +174,36 @@ batch, but it is not what gates the next trade.
 
 `scripts/asp-root-rule-check.ts`:
 
-```
-entrypoint.latestRoot() = 4997529442870423522903312331231415163737618682184249...
-rootByIndex readable for 8 entries
-the ASP API's published mtRoot IS the entrypoint's latestRoot()
+`PrivacyPool.sol`'s `validWithdrawal` modifier settles this:
+
+```solidity
+// Check the state root is known
+if (!_isKnownRoot(_proof.stateRoot())) revert UnknownStateRoot();
+
+// Check the ASP root is the latest
+if (_proof.ASPRoot() != ENTRYPOINT.latestRoot()) revert IncorrectASPRoot();
 ```
 
-The entrypoint keeps a root **history**, so a slightly stale proof is still
-accepted. The ASP's published `mtRoot` is exactly the entrypoint's
-`latestRoot()`, which confirms `mt-leaves` describes the tree the pool
-enforces. **Rule adopted: refetch `mt-leaves` immediately before proving**, so
-a proof is never built against a root that has rotated out of the history.
+The two roots are treated differently and it is easy to conflate them. The
+**state** root goes through `_isKnownRoot()` — a genuine history. The **ASP**
+root is **strict equality against one value**. The entrypoint exposes
+`rootByIndex()`, but the pool never consults it: historical ASP roots are
+readable and *not* accepted.
+
+So a withdrawal proof is invalidated by any `updateRoot()` that lands between
+proving and inclusion. **`IncorrectASPRoot` is therefore retryable, not
+terminal** — refetch the tree, re-prove, resubmit. The label stays approved;
+only the proof has to be rebuilt.
+
+`scripts/asp-root-rule-check.ts` also confirms the ASP API's published `mtRoot`
+is exactly the entrypoint's `latestRoot()`, so `mt-leaves` does describe the
+tree the pool enforces.
+
+**Rule adopted:** cache `mt-leaves`, and immediately before proving compare the
+cached root against `latestRoot()` over anon-rpc, refetching only on
+divergence. Fetching from `api.0xbow.io` seconds before every withdrawal would
+tell 0xbow the exact time of each one; the root changes every few days, so the
+cheap on-chain comparison gives the same safety without the timing leak.
 
 ### What actually limits trade frequency
 
@@ -236,6 +267,8 @@ UI must show:
 
 ## Remaining before mainnet use
 
+0. **Discovery bypasses anon-rpc.** `DataService` builds its own transport;
+   it needs a subclass that routes through our client (see task 3 caveat).
 1. **No funded seed has been tested.** Discovery and spendability are proven
    against synthetic trees and the deployed verifier, but not against a real
    note. This needs real mainnet USDC (5 USDC minimum, plus the 0.5% vetting
