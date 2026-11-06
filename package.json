@@ -33,6 +33,7 @@
     "@noble/hashes": "^2.4.0",
     "@scure/bip32": "^2.4.0",
     "@scure/bip39": "^2.4.0",
+    "events": "^3.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "viem": "^2.57.16"
