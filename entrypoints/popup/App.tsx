@@ -21,6 +21,12 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
   const [phase, setPhase] = useState<{ phase: string; detail: string } | null>(null);
+  const [unshield, setUnshield] = useState<string | null>(null);
+  const [pool, setPool] = useState<{
+    totalUnits: string;
+    noteCount: number;
+    largestUnits: string;
+  } | null>(null);
   const [stranded, setStranded] = useState<
     { index: number; address: string; balance: string }[] | null
   >(null);
@@ -112,6 +118,43 @@ export function App() {
                 </button>
               )}
 
+              {/* E3: the step that funds the trade. Shown only once Lighter
+                  has issued an address, because the recipient is committed to
+                  inside the withdrawal proof and cannot be changed after. */}
+              {status.activeTrade.intentAddress &&
+                (status.activeTrade.withdrawal ? (
+                  <p className="field-label">
+                    Funded from the pool —{' '}
+                    {(Number(status.activeTrade.withdrawal.amount) / 1e6).toFixed(2)} USDC
+                    withdrawn.
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const result = await send({ kind: 'unshield' });
+                          setUnshield(
+                            `Sent ${(Number(result.amountUnits) / 1e6).toFixed(2)} USDC; ` +
+                              `Lighter should see ~${(
+                                Number(result.expectedNetUnits) / 1e6
+                              ).toFixed(2)} after a ${result.feeBPS} BPS relayer fee.`,
+                          );
+                        })
+                      }
+                    >
+                      Fund this trade from Privacy Pools
+                    </button>
+                    <p className="field-label">
+                      Builds a zero-knowledge proof and relays the withdrawal. This takes
+                      a minute and must not be interrupted.
+                    </p>
+                  </>
+                ))}
+
+              {unshield && <p className="field-label">{unshield}</p>}
+
               {status.activeTrade.deposit && (
                 <p className="field-label">
                   {status.activeTrade.deposit.description} (
@@ -144,6 +187,30 @@ export function App() {
             >
               Start trade
             </button>
+          )}
+
+          {/* A full pool scan, so it is asked for rather than polled. Shown
+              before starting a trade, since a trade that cannot be funded
+              should fail here rather than after an owner is burned. */}
+          <button
+            className="link"
+            disabled={busy}
+            onClick={() => run(async () => setPool(await send({ kind: 'poolBalance' })))}
+          >
+            Check pool balance
+          </button>
+
+          {pool && (
+            <div className="phase">
+              <strong>{(Number(pool.totalUnits) / 1e6).toFixed(2)} USDC in the pool</strong>
+              <p>
+                {pool.noteCount === 0
+                  ? 'No spendable notes. A new deposit must clear ASP screening before it can be spent, which is published in batches.'
+                  : `${pool.noteCount} note${pool.noteCount === 1 ? '' : 's'}; largest ${(
+                      Number(pool.largestUnits) / 1e6
+                    ).toFixed(2)} USDC, which bounds a single trade.`}
+              </p>
+            </div>
           )}
 
           {/* Owner addresses are single-use and nothing watches them once
