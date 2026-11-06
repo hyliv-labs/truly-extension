@@ -24,7 +24,19 @@ export const USDC_ADDRESS: Address = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831
  */
 function env(key: string): string | undefined {
   const fromBundler = (import.meta as { env?: Record<string, string | undefined> }).env;
-  return fromBundler?.[key] ?? globalThis.process?.env?.[key];
+  const value = fromBundler?.[key] ?? globalThis.process?.env?.[key];
+
+  // An EMPTY string counts as unset. A .env file written from .env.example
+  // leaves keys blank to mean "use the default", but `??` only falls back on
+  // undefined — so a blank line silently became a real empty value.
+  //
+  // That cost an evening: WXT_ANON_RPC_SPECIFIER= made the anon-rpc harness
+  // read the specifier contract at address '', and every chain read then
+  // failed with "invalid argument 0: hex string has length 0, want 40 for
+  // common.Address" — an error naming neither the variable nor the file.
+  // Downstream it surfaced as "the pool does not answer the Privacy Pools v1
+  // interface", which was simply untrue.
+  return value === undefined || value.trim() === '' ? undefined : value;
 }
 
 /**
