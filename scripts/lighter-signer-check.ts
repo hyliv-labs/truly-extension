@@ -78,13 +78,55 @@ const ci = JSON.parse(close.txInfo) as Record<string, number>;
 if (ci.ReduceOnly !== 1 || ci.IsAsk !== 1) fail('the close order is not reduce-only / ask');
 else pass('a close order is reduce-only on the opposite side');
 
+const ownerKey = generatePrivateKey();
+const owner = privateKeyToAccount(ownerKey);
+const withdrawal = await signer.signWithdraw(account, 4_000_000n, 19);
+const wi = JSON.parse(withdrawal.txInfo) as Record<string, number>;
+if (withdrawal.txType !== 13 || wi.AssetIndex !== 3 || wi.RouteType !== 0 || wi.Amount !== 4_000_000 || wi.Nonce !== 19 || wi.FromAccountIndex !== 123456) {
+  fail(`secure withdraw fields wrong: type ${withdrawal.txType} ${withdrawal.txInfo}`);
+} else pass('SignWithdraw is the secure route: USDC on perps, exact amount, and it is not sent');
+
+const fast = await signer.signFastWithdraw(account, {
+  toAccountIndex: 999,
+  amountUnits: 4_000_000n,
+  feeUnits: 50_000n,
+  toAddress: owner.address,
+  nonce: 21,
+});
+const fi = JSON.parse(fast.txInfo) as Record<string, unknown>;
+const memo = signer.fastWithdrawMemo(owner.address);
+const memoBytes = Array.from({ length: 32 }, (_, i) => Number.parseInt(memo.slice(i * 2, i * 2 + 2), 16));
+const memoOk = JSON.stringify(fi.Memo) === JSON.stringify(memoBytes);
+if (
+  fast.txType !== 12 ||
+  fi.ToAccountIndex !== 999 ||
+  fi.AssetIndex !== 3 ||
+  fi.FromRouteType !== 0 ||
+  fi.ToRouteType !== 0 ||
+  fi.Amount !== 4_000_000 ||
+  fi.USDCFee !== 50_000 ||
+  fi.Nonce !== 21 ||
+  !memoOk ||
+  !fast.messageToSign
+) {
+  fail(`fast withdraw fields wrong: type ${fast.txType} ${fast.txInfo}`);
+} else pass('a fast withdrawal is a transfer to the pool, with the destination in the memo, and it is not sent');
+const fastL1 = await owner.signMessage({ message: fast.messageToSign });
+const fastSigned = signer.withL1Signature(fast, fastL1);
+const fastInfo = JSON.parse(fastSigned.txInfo) as { L1Sig?: string };
+const fastRecovered = await verifyMessage({
+  address: owner.address,
+  message: fast.messageToSign,
+  signature: fastInfo.L1Sig as `0x${string}`,
+});
+if (!fastRecovered) fail('the fast-withdrawal L1 signature does not recover to the owner');
+else pass('the fast withdrawal carries an owner L1 signature');
+
 const lev = await signer.signUpdateLeverage(account, 0, 2000, 19);
 if (lev.txType !== 20) fail(`UpdateLeverage txType ${lev.txType}`);
 else pass('leverage change signs (5x = IMF 2000)');
 
 // ChangePubKey: owner signs Lighter's message with personal_sign.
-const ownerKey = generatePrivateKey();
-const owner = privateKeyToAccount(ownerKey);
 const cpk = await signer.signChangePubKey(account, pair.publicKey, 0);
 if (!cpk.messageToSign.startsWith('Register Lighter Account')) fail('ChangePubKey message is not Lighter\'s registration text');
 const l1 = await owner.signMessage({ message: cpk.messageToSign });

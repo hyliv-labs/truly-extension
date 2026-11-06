@@ -7,7 +7,7 @@
  * trade that is still running.
  */
 
-import { adviseExit, isExitComplete, DUST_USDC } from '../src/lib/exit.ts';
+import { adviseExit, fastWithdrawAmount, fastWithdrawUnits, isExitComplete, DUST_USDC } from '../src/lib/exit.ts';
 
 let failed = false;
 const fail = (msg: string) => {
@@ -73,5 +73,23 @@ if (!isExitComplete(adviseExit(snap({ balance: 0 })))) {
 } else {
   pass('only empty and dust complete the exit');
 }
+
+if (fastWithdrawUnits('25.5') !== 24_500_000n) fail(`25.5 USDC withdrew ${fastWithdrawUnits('25.5')}`);
+else pass('25.50 USDC withdraws 24.50, leaving 1 USDC for the fee');
+
+if (fastWithdrawUnits('5') !== 4_000_000n) fail('5 USDC should withdraw exactly the 4 USDC minimum');
+else pass('5 USDC withdraws 4 USDC');
+
+if (fastWithdrawUnits('4.99') !== null) fail('4.99 USDC must not be a fast withdrawal');
+else pass('below 5 USDC signs nothing');
+
+if (fastWithdrawUnits('nope') !== null) fail('a non-numeric balance must not be withdrawn');
+else pass('a non-numeric balance signs nothing');
+
+if (fastWithdrawAmount('4', 0n) !== 4_000_000n) fail('a 4 USDC balance with no fee should withdraw 4');
+else pass('a quoted fee of 0 withdraws the 4 USDC minimum');
+
+if (fastWithdrawAmount('5', 2_000_000n) !== null) fail('a 2 USDC fee on 5 USDC would leave less than the minimum');
+else pass('a fee that drops the payout under 4 USDC signs nothing');
 
 process.exitCode = failed ? 1 : 0;

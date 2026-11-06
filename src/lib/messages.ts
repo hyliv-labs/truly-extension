@@ -6,16 +6,20 @@ import type { ActiveTrade } from './trade';
 import type { RecoveryState } from './recovery';
 import type { TradeStatus } from './orchestrator';
 import type { PerpMarket } from './lighter-markets';
+import type { ShieldedBalance } from './shielded-balance';
 import type { Direction, TradeQuote } from './trade-plan';
 import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
 
 /** bigint does not survive the message channel, so margin travels as a string. */
 export interface TradeRequestWire {
-  marketId: number;
-  direction: Direction;
+  marketId?: number;
+  direction?: Direction;
   marginUnits: string;
-  leverage: number;
+  leverage?: number;
+  fundingSource?: 'privacy-pools' | 'railgun';
+  /** Fund a new account and stop. The user trades it on the perps site. */
+  depositOnly?: boolean;
 }
 
 export type Request =
@@ -55,6 +59,8 @@ export type Request =
   /** E7: send the owner's USDC back to the pool. Long-running, like unshield. */
   | { kind: 'reshield' }
   | { kind: 'poolBalance' }
+  /** Unlock snapshot. `refresh` reads both pools again; otherwise the stored one. */
+  | { kind: 'shieldedBalance'; refresh?: boolean }
   | { kind: 'checkDeposit' }
   // In-extension market trade (JIT funding)
   | { kind: 'markets' }
@@ -69,6 +75,9 @@ export type Request =
   | { kind: 'retryFunding' }
   | { kind: 'retryOrder' }
   | { kind: 'closePosition' }
+  | { kind: 'retryLighterExit' }
+  /** Fast-withdraw a funded account and shield the USDC back into its pool. */
+  | { kind: 'shieldFunds' }
   /** Starts the WASM signer in the worker and signs a throwaway order offline. */
   | { kind: 'lighterSignerSelfTest' }
   // Orchestrator (E8)
@@ -151,6 +160,7 @@ export interface ResultMap {
     /** Largest note, which bounds what a single trade can draw. */
     largestUnits: string;
   };
+  shieldedBalance: ShieldedBalance;
   checkDeposit: {
     complete: boolean;
     status: string;
@@ -166,6 +176,8 @@ export interface ResultMap {
   retryFunding: null;
   retryOrder: SessionView | null;
   closePosition: SessionView | null;
+  retryLighterExit: SessionView | null;
+  shieldFunds: SessionView | null;
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
 }
 

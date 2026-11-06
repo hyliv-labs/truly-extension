@@ -5,6 +5,9 @@
     <title>Truly offscreen</title>
   </head>
   <body>
+    <!-- Loaded as a classic script on purpose. Bundling snarkjs breaks
+         ffjavascript's field inverse ("r is not a function") at import. -->
+    <script src="/snarkjs/snarkjs.min.js"></script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

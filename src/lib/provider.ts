@@ -16,7 +16,8 @@
 
 import { keccak256, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { getActiveTrade } from './trade';
+import { getActiveTrade, type ActiveTrade } from './trade';
+import { releaseLighterTab, spareLighterTab } from './site-cleanup';
 import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
@@ -60,6 +61,7 @@ export async function handleProviderRequest(
   method: string,
   params: unknown[] = [],
   requestId = '',
+  tabId?: number,
 ): Promise<unknown> {
   const id = requestId || crypto.randomUUID();
   await pruneInFlight();
@@ -68,7 +70,16 @@ export async function handleProviderRequest(
   if (existing) return continueInFlight(existing);
 
   const trade = await getActiveTrade();
-  if (!trade) return refuseWithoutTrade(method, origin);
+  if (!trade) {
+    // Throwing here is what Lighter renders as "Connection cancelled", and
+    // the request is already dead by the time the user starts a trade.
+    // Hold it open instead. Nothing about the owner is returned until a
+    // trade exists and the user approves.
+    if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
+      return connectWhenTradeStarts({ origin, method, params, requestId: id, tabId });
+    }
+    return refuseWithoutTrade(method);
+  }
 
   switch (method) {
     case 'eth_chainId':
@@ -88,7 +99,7 @@ export async function handleProviderRequest(
       return [trade.ownerAddress];
 
     case 'wallet_getPermissions':
-      return [{ parentCapability: 'eth_accounts' }];
+      return accountsPermission(trade.ownerAddress);
 
     case 'eth_requestAccounts':
     case 'wallet_requestPermissions':
@@ -154,35 +165,116 @@ export async function resumePendingApprovals(): Promise<void> {
 }
 
 /**
- * No trade means no owner, so account probes answer empty rather than
- * throwing. A throw here is rendered by the dapp as "connection cancelled",
- * which on a page-load probe looks like Truly is broken.
- *
- * An explicit connect still opens Truly, because silence there leaves the
- * user with no idea why the button failed.
+ * Account probes with no trade answer empty. A throw on eth_accounts during
+ * a page-load check is what a dapp renders as a broken wallet. Connect
+ * methods do not come through here: they wait in connectWhenTradeStarts.
  */
-async function refuseWithoutTrade(method: string, origin?: string): Promise<unknown> {
+async function refuseWithoutTrade(method: string): Promise<unknown> {
   if (method === 'eth_chainId') return CHAIN_ID_HEX;
   if (method === 'eth_accounts' || method === 'wallet_getPermissions') return [];
 
-  if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
-    await openTrulyWindow(origin);
-  }
-
-  // A LOCKED vault and an unlocked one with no trade are different problems
-  // with different first steps, and telling someone to "start a trade" while
-  // the window in front of them asks for a password is worse than saying
-  // nothing. The dapp shows its own wording either way — Lighter says
-  // "Connection cancelled" — so this text has to be right in the one place it
-  // does surface: the service worker log and any dapp that shows the reason.
   const unlocked = await isUnlocked();
-
   throw rpcError(
     4100,
     unlocked
-      ? 'Truly has no active trade. Open Truly and start one (a market trade, or a manual trade on Lighter\'s site), then connect again.'
-      : 'Truly is locked. Unlock it in the window that just opened, start a trade, then connect again.',
+      ? 'Truly has no active trade. Open Truly and start one, then try again.'
+      : 'Truly is locked. Unlock it and start a trade, then try again.',
   );
+}
+
+type TradeWaiter = {
+  resolve: (trade: ActiveTrade) => void;
+  reject: (error: Error) => void;
+};
+
+const tradeWaiters: TradeWaiter[] = [];
+let watchingTrades = false;
+let connectWindowId: number | undefined;
+
+/**
+ * Lighter calls this before any trade exists. Keep the promise pending,
+ * show Truly, and finish the normal approval once the user starts a trade.
+ * The tab is spared so startTrade's session wipe does not close the page
+ * that is waiting on this response.
+ */
+async function connectWhenTradeStarts(input: {
+  origin: string;
+  method: string;
+  params: unknown[];
+  requestId: string;
+  tabId?: number;
+}): Promise<unknown> {
+  if (input.tabId !== undefined) spareLighterTab(input.tabId);
+  try {
+    await openTrulyWindow(input.origin);
+    const trade = await waitForActiveTrade();
+    return approveAndPerform({
+      requestId: input.requestId,
+      origin: input.origin,
+      method: input.method,
+      params: input.params,
+      ownerAddress: trade.ownerAddress,
+      ownerIndex: trade.ownerIndex,
+    });
+  } finally {
+    if (input.tabId !== undefined) releaseLighterTab(input.tabId);
+  }
+}
+
+function waitForActiveTrade(): Promise<ActiveTrade> {
+  return new Promise((resolve, reject) => {
+    const waiter: TradeWaiter = { resolve, reject };
+    tradeWaiters.push(waiter);
+    watchTrades();
+    void getActiveTrade().then((trade) => {
+      if (!trade || !tradeWaiters.includes(waiter)) return;
+      settleWaiter(waiter, trade);
+    });
+  });
+}
+
+function watchTrades(): void {
+  if (watchingTrades) return;
+  watchingTrades = true;
+  chrome.storage.onChanged.addListener(onTradeStorage);
+}
+
+function unwatchTrades(): void {
+  if (!watchingTrades) return;
+  watchingTrades = false;
+  chrome.storage.onChanged.removeListener(onTradeStorage);
+}
+
+function onTradeStorage(_changes: { [key: string]: chrome.storage.StorageChange }, area: string): void {
+  if (area !== 'local' || tradeWaiters.length === 0) return;
+  void getActiveTrade().then((trade) => {
+    if (!trade) return;
+    for (const waiter of [...tradeWaiters]) settleWaiter(waiter, trade);
+  });
+}
+
+function settleWaiter(waiter: TradeWaiter, trade: ActiveTrade): void {
+  const index = tradeWaiters.indexOf(waiter);
+  if (index === -1) return;
+  tradeWaiters.splice(index, 1);
+  if (tradeWaiters.length === 0) unwatchTrades();
+  waiter.resolve(trade);
+}
+
+function failTradeWaiters(error: Error): void {
+  const waiters = tradeWaiters.splice(0);
+  unwatchTrades();
+  for (const waiter of waiters) waiter.reject(error);
+}
+
+/** Wagmi reads caveats[0].value as the connected accounts. Without it the permissions call throws and Lighter asks twice. */
+function accountsPermission(ownerAddress: string): unknown[] {
+  return [
+    {
+      parentCapability: 'eth_accounts',
+      caveats: [{ type: 'restrictReturnedAccounts', value: [ownerAddress] }],
+    },
+  ];
 }
 
 async function approveAndPerform(input: {
@@ -289,7 +381,7 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
       return [record.ownerAddress];
 
     case 'wallet_requestPermissions':
-      return [{ parentCapability: 'eth_accounts' }];
+      return accountsPermission(record.ownerAddress);
 
     case 'personal_sign': {
       const { raw } = parsePersonalSign(record.params, record.ownerAddress);
@@ -498,26 +590,46 @@ async function windowExists(windowId: number): Promise<boolean> {
 }
 
 /**
- * Show Truly itself, so a refused connect leads somewhere.
- *
- * Best effort by design: if the window cannot be opened the caller still
- * throws, so the dapp is never left waiting on a window that is not there.
+ * Show Truly so the user can start the trade this request is waiting on.
+ * One window per connect: a second permissions call focuses it instead of
+ * stacking another. Closing it with no trade rejects the request.
  */
 async function openTrulyWindow(origin?: string): Promise<void> {
-  try {
-    // Carries WHY it opened. Without it the window appears asking for a
-    // password while the dapp says "Connection cancelled", and nothing on
-    // screen connects the two.
-    const url = new URL(chrome.runtime.getURL('/popup.html'));
-    url.searchParams.set('connect', origin ?? '1');
-    await chrome.windows.create({
-      url: url.toString(),
-      type: 'popup',
-      ...APPROVAL_WINDOW,
-    });
-  } catch (error) {
-    console.warn('[truly] could not open the popup window', error);
+  if (connectWindowId !== undefined && (await windowExists(connectWindowId))) {
+    try {
+      await chrome.windows.update(connectWindowId, { focused: true });
+    } catch {
+      // Focus is best effort. The window is already there.
+    }
+    return;
   }
+  connectWindowId = undefined;
+
+  const url = new URL(chrome.runtime.getURL('/popup.html'));
+  url.searchParams.set('connect', origin ?? '1');
+  const created = await chrome.windows.create({
+    url: url.toString(),
+    type: 'popup',
+    ...APPROVAL_WINDOW,
+  });
+  if (created?.id === undefined) {
+    throw rpcError(4001, 'Truly could not open a window to start the trade.');
+  }
+
+  connectWindowId = created.id;
+  const windowId = created.id;
+  const onClosed = (closedId: number) => {
+    if (closedId !== windowId) return;
+    chrome.windows.onRemoved.removeListener(onClosed);
+    if (connectWindowId === windowId) connectWindowId = undefined;
+    // A trade may have started in the same moment the window closed.
+    // Rejecting then would cancel a connect that is about to succeed.
+    void getActiveTrade().then((trade) => {
+      if (trade) return;
+      failTradeWaiters(rpcError(4001, 'User rejected the request.'));
+    });
+  };
+  chrome.windows.onRemoved.addListener(onClosed);
 }
 
 export async function settle(

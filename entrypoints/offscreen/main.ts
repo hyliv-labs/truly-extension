@@ -1,103 +1,135 @@
 /**
  * E2 / E3 host.
  *
- * The anon-rpc harness needs a DOM to hold its sandboxed iframe, and the
- * Privacy Pools proof builder needs real DOM plus workers. An MV3 service
- * worker has neither, so both live here.
+ * The anon-rpc harness needs a DOM to hold its sandboxed iframe, and Railgun
+ * needs IndexedDB, workers and WebAssembly. An MV3 service worker has none
+ * of those, so both live here.
  *
- * Chrome allows exactly one offscreen document per extension. Rather than
- * letting the harness create its own and fight ours for the slot, we mount its
- * host here and pass offscreenUrl: false in the worker.
+ * The listener is registered by this small module, before the Railgun SDK is
+ * imported. A static import of the SDK parses an 8 MB bundle first, and a
+ * message sent during that parse gets "Receiving end does not exist" because
+ * nothing is listening yet. The heavy modules load on the first message that
+ * needs them.
  */
 
-import { mountOffscreenHost } from '@anon-rpc/browser-extension-harness/offscreen';
-import { assertArtifactsPresent } from '@truly/lib/proving';
-import { requestSeedSignature, MetaMaskError } from '@truly/lib/metamask';
-import { runWithdrawalProof } from '@truly/lib/prove-withdrawal-run';
+import '@truly/shims/railgun-browser';
 
 /** Whether the anon-rpc host mounted. Reported by 'ping'. */
 let hostMounted = false;
 let hostError: string | null = null;
 
-/**
- * THE LISTENER IS REGISTERED FIRST, before the anon-rpc host is mounted.
- *
- * It used to be the other way round, and that made any failure inside
- * mountOffscreenHost() fatal to the entire document: the module threw, the
- * listener was never added, and the offscreen page sat there loaded and
- * completely deaf. The service worker then reported 'offscreen document
- * disconnected' / 'Receiving end does not exist', which names neither
- * anon-rpc nor the real error.
- *
- * Registering first means a broken harness costs us anon-rpc — loudly — but
- * not proving, not MetaMask recovery, and not the ability to say what went
- * wrong.
- */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target !== 'truly:offscreen') return false;
 
-  switch (message.kind) {
-    case 'ping':
-      // Reports the host's state too, so a caller can tell 'offscreen is
-      // alive but anon-rpc is broken' from 'offscreen is not there'.
-      sendResponse({ ok: true, value: { hostMounted, hostError } });
-      return true;
-
-    case 'circuitsReady':
-      // Answered here rather than in the worker: only this document can fetch
-      // the artifacts and run the WASM that uses them.
-      assertArtifactsPresent()
-        .then(() => sendResponse({ ok: true, value: true }))
-        .catch((error: Error) => sendResponse({ ok: false, error: error.message }));
-      return true;
-
-    case 'metamaskSign':
-      // Held here rather than in the popup: MetaMask's approval window takes
-      // focus and closes the popup, which would tear down the port mid-request.
-      requestSeedSignature(message.version)
-        .then((value) => sendResponse({ ok: true, value }))
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-            reason: error instanceof MetaMaskError ? error.reason : 'failed',
-          }),
-        );
-      return true;
-
-    case 'proveWithdrawal':
-      // snarkjs needs real DOM, workers and WebAssembly, none of which the
-      // service worker has — so the orchestration stays there and only the
-      // proof crosses.
-      //
-      // message.input carries the note's nullifier and secret, i.e. spend
-      // authority. It is never logged here and never included in an error.
-      runWithdrawalProof(message.input)
-        .then((value) => sendResponse({ ok: true, value }))
-        .catch((error: unknown) =>
-          sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : 'Proof generation failed.',
-          }),
-        );
-      return true;
-
-    default:
-      sendResponse({ ok: false, error: `unknown kind: ${message.kind}` });
-      return true;
-  }
+  void handle(message as OffscreenMessage)
+    .then((value) => {
+      if (isResponse(value)) sendResponse(value);
+      else sendResponse({ ok: true, value });
+    })
+    .catch((error: unknown) => sendResponse({ ok: false, error: text(error) }));
+  return true;
 });
 
-// Mounted AFTER the listener, and never allowed to take the document down
-// with it. Only claims ports named 'anon-rpc.worker', so it coexists with the
-// proof handling above.
-try {
-  mountOffscreenHost();
-  hostMounted = true;
-  console.info('[truly] offscreen: anon-rpc host mounted');
-} catch (error) {
-  hostError = error instanceof Error ? error.message : String(error);
-  console.error('[truly] offscreen: anon-rpc host FAILED to mount:', error);
+void bootHost();
+
+async function bootHost(): Promise<void> {
+  try {
+    const { mountOffscreenHost } = await import('@anon-rpc/browser-extension-harness/offscreen');
+    mountOffscreenHost();
+    hostMounted = true;
+    console.info('[truly] offscreen: anon-rpc host mounted');
+  } catch (error) {
+    hostError = text(error);
+    console.error('[truly] offscreen: anon-rpc host FAILED to mount:', error);
+  }
 }
 
-console.info('[truly] offscreen ready; anon-rpc host mounted:', hostMounted);
+interface OffscreenMessage {
+  kind?: string;
+  version?: 'v1' | 'v2';
+  input?: unknown;
+  mnemonic?: string;
+  recipient?: string;
+  amountUnits?: string;
+  fromAddress?: string;
+  shieldPrivateKey?: string;
+}
+
+function isResponse(value: unknown): value is { ok: boolean } {
+  return typeof value === 'object' && value !== null && 'ok' in value;
+}
+
+async function handle(message: OffscreenMessage): Promise<unknown> {
+  switch (message.kind) {
+    case 'ping':
+      return { hostMounted, hostError };
+
+    case 'circuitsReady': {
+      const { assertArtifactsPresent } = await import('@truly/lib/proving');
+      await assertArtifactsPresent();
+      return true;
+    }
+
+    case 'metamaskSign': {
+      const { requestSeedSignature, MetaMaskError } = await import('@truly/lib/metamask');
+      try {
+        return await requestSeedSignature(message.version ?? 'v2');
+      } catch (error) {
+        return {
+          ok: false,
+          error: text(error),
+          reason: error instanceof MetaMaskError ? error.reason : 'failed',
+        };
+      }
+    }
+
+    case 'railgunBalances':
+    case 'railgunUnshield':
+    case 'railgunShield':
+    case 'railgunShieldCall':
+      return railgunMessage(message);
+
+    case 'proveWithdrawal': {
+      const { runWithdrawalProof } = await import('@truly/lib/prove-withdrawal-run');
+      return runWithdrawalProof(message.input as Parameters<typeof runWithdrawalProof>[0]);
+    }
+
+    default:
+      throw new Error(`unknown kind: ${String(message.kind)}`);
+  }
+}
+
+async function railgunMessage(message: OffscreenMessage): Promise<unknown> {
+  if (typeof message.mnemonic !== 'string' || message.mnemonic.length === 0) {
+    throw new Error('Railgun needs the unlocked vault.');
+  }
+  const railgun = await import('@truly/lib/railgun-run');
+  if (message.kind === 'railgunBalances') return railgun.runRailgunBalances(message.mnemonic);
+  if (message.kind === 'railgunUnshield') {
+    return railgun.runRailgunUnshield({
+      mnemonic: message.mnemonic,
+      recipient: String(message.recipient),
+      amountUnits: String(message.amountUnits),
+      fromAddress: String(message.fromAddress),
+    });
+  }
+  if (message.kind === 'railgunShieldCall') {
+    return railgun.runRailgunShieldCall({
+      mnemonic: message.mnemonic,
+      shieldPrivateKey: String(message.shieldPrivateKey),
+      amountUnits: String(message.amountUnits),
+    });
+  }
+  return railgun.runRailgunShield({
+    mnemonic: message.mnemonic,
+    shieldPrivateKey: String(message.shieldPrivateKey),
+    amountUnits: String(message.amountUnits),
+    fromAddress: String(message.fromAddress),
+  });
+}
+
+function text(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+console.info('[truly] offscreen ready');

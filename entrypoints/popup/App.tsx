@@ -13,6 +13,7 @@ import {
   type VaultStatus,
   SLOW_TIMEOUT_MS,
 } from '@truly/lib/messages';
+import type { ShieldedBalance } from '@truly/lib/shielded-balance';
 
 export function App() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
@@ -23,12 +24,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
   const [phase, setPhase] = useState<{ phase: string; detail: string } | null>(null);
-  const [unshield, setUnshield] = useState<string | null>(null);
   /**
-   * Set when the provider opened this window because a dapp tried to connect.
-   * The dapp shows its own wording — Lighter just says "Connection cancelled"
-   * — so without this the window appears asking for a password and nothing on
-   * screen explains why.
+   * Set when the provider opened this window because a dapp is waiting on
+   * eth_requestAccounts. The request stays open until a trade starts.
+   * Closing the window rejects it.
    */
   const [connectOrigin] = useState<string | null>(() => {
     const raw = new URLSearchParams(window.location.search).get('connect');
@@ -39,12 +38,9 @@ export function App() {
       return 'A site';
     }
   });
-  const [reshieldNote, setReshieldNote] = useState<string | null>(null);
-  const [pool, setPool] = useState<{
-    totalUnits: string;
-    noteCount: number;
-    largestUnits: string;
-  } | null>(null);
+  const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
+  const [shieldedError, setShieldedError] = useState<string | null>(null);
+  const [shieldedLoading, setShieldedLoading] = useState(false);
   const [stranded, setStranded] = useState<
     { index: number; address: string; balance: string }[] | null
   >(null);
@@ -63,9 +59,36 @@ export function App() {
     }
   }, []);
 
+  const loadBalance = useCallback(async (refreshBalance = false) => {
+    setShieldedLoading(true);
+    setShieldedError(null);
+    try {
+      setShielded(await send({ kind: 'shieldedBalance', refresh: refreshBalance }, SLOW_TIMEOUT_MS));
+    } catch (e) {
+      setShieldedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setShieldedLoading(false);
+    }
+  }, []);
+
+  const refreshShielded = useCallback(() => loadBalance(true), [loadBalance]);
+  // A failed trade already started a fresh read in the worker. Joining that
+  // read, rather than starting a second scan, is the check.
+  const rereadShielded = useCallback(() => loadBalance(false), [loadBalance]);
+
   useEffect(() => {
     void refresh().catch((e: Error) => setError(e.message));
   }, [refresh]);
+
+  useEffect(() => {
+    if (!status?.unlocked) {
+      setShielded(null);
+      setShieldedError(null);
+      setShieldedLoading(false);
+      return;
+    }
+    void loadBalance(false);
+  }, [status?.unlocked, loadBalance]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -85,29 +108,17 @@ export function App() {
     <main className="popup">
       <header>
         <h1>Truly</h1>
-        <p className="tagline">One trade, one address.</p>
+        <p className="tagline">A new account, funded once.</p>
       </header>
 
       {connectOrigin && !status?.activeTrade && (
         <div className="connect-hint">
           <p>
-            <strong>{connectOrigin}</strong> asked to connect.
+            <strong>{connectOrigin}</strong> is waiting to connect.
             {status?.unlocked
-              ? ' It needs an owner address, and there is a new one every trade.'
-              : ' Unlock Truly first, then start a trade for it.'}
+              ? ' The shielded balance is at the top. Fund a new address from it and Truly connects that address. Closing this window cancels the request.'
+              : ' Unlock Truly, then fund a new address. Closing this window cancels the request.'}
           </p>
-          {/* The action, not a pointer to it. 'Start a trade below' sent people
-              to the Market trade form, which is the OTHER path -- that one
-              places the order itself and never connects the site. A dapp
-              asking to connect wants this one. */}
-          {status?.unlocked && (
-            <button
-              disabled={busy}
-              onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
-            >
-              Start a trade for {connectOrigin}
-            </button>
-          )}
         </div>
       )}
 
@@ -135,10 +146,25 @@ export function App() {
         </section>
       ) : status.unlocked ? (
         <section className="panel">
+          {!status.activeTrade && (
+            <TradeForm
+              busy={busy}
+              connecting={connectOrigin !== null}
+              onOpened={refresh}
+              balance={shielded}
+              balanceError={shieldedError}
+              balanceLoading={shieldedLoading}
+              onRefreshBalance={refreshShielded}
+            />
+          )}
+
           <p className="who">
-            <span className="field-label">Owner address #{status.ownerIndex}</span>
+            <span className="field-label">Lighter address #{status.ownerIndex}</span>
             <code>{owner ?? '…'}</code>
           </p>
+          {!status.activeTrade && (
+            <p className="field-label">This address is what Lighter connects to. The shielded USDC is the Railgun balance above, not at this address.</p>
+          )}
 
           {backup && (
             <div className="backup">
@@ -157,14 +183,22 @@ export function App() {
 
           {/* A market-trade session reports its own progress; the exit phases
               (withdraw from Lighter, re-shield) apply again once it is closed. */}
-          {phase && (!status.activeTrade?.session || status.activeTrade.session.state === 'closed') && (
+          {phase && (!status.activeTrade?.session || ['closed', 'exited', 'withdraw-failed'].includes(status.activeTrade.session.state)) && (
             <div className="phase">
               <strong>{phase.phase.replace(/-/g, ' ')}</strong>
               <p>{phase.detail}</p>
             </div>
           )}
 
-          {status.activeTrade?.session && <SessionPanel busy={busy} onChanged={refresh} />}
+          {status.activeTrade?.session && (
+            <SessionPanel
+              busy={busy}
+              onChanged={refresh}
+              balance={shielded}
+              balanceLoading={shieldedLoading}
+              onRefreshBalance={rereadShielded}
+            />
+          )}
 
           {status.activeTrade && (
             <>
@@ -191,71 +225,18 @@ export function App() {
                 !status.activeTrade.session &&
                 (status.activeTrade.withdrawal?.status === 'confirmed' ? (
                   <p className="field-label">
-                    Funded from the pool —{' '}
+                    Funded from Railgun —{' '}
                     {(Number(status.activeTrade.withdrawal.amount) / 1e6).toFixed(2)} USDC
                     withdrawn.
                   </p>
                 ) : status.activeTrade.withdrawal?.status === 'pending' ? (
-                  // In flight. Offering the button here is what would send a
-                  // second payment to the same intent address.
                   <p className="field-label">
                     Funding withdrawal in progress
                     {status.activeTrade.withdrawal.txHash
                       ? ' — waiting for it to confirm.'
                       : ' — its outcome is being checked against the chain.'}
                   </p>
-                ) : (
-                  <>
-                    <button
-                      disabled={busy}
-                      onClick={() =>
-                        run(async () => {
-                          const result = await send({ kind: 'unshield' }, SLOW_TIMEOUT_MS);
-                          setUnshield(
-                            `Sent ${(Number(result.amountUnits) / 1e6).toFixed(2)} USDC; ` +
-                              `Lighter should see ~${(
-                                Number(result.expectedNetUnits) / 1e6
-                              ).toFixed(2)} after a ${result.feeBPS} BPS relayer fee.`,
-                          );
-                        })
-                      }
-                    >
-                      Fund this trade from Privacy Pools
-                    </button>
-                    <p className="field-label">
-                      Builds a zero-knowledge proof and relays the withdrawal. This takes
-                      a minute and must not be interrupted.
-                    </p>
-                  </>
-                ))}
-
-              {unshield && <p className="field-label">{unshield}</p>}
-
-              {phase?.phase === 'withdrawn' && (
-                <>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () => {
-                        const result = await send({ kind: 'reshield' }, 300_000);
-                        setReshieldNote(
-                          `Re-shielded ${(Number(result.deposited) / 1e6).toFixed(2)} USDC into Privacy Pools.`,
-                        );
-                      })
-                    }
-                  >
-                    {status.activeTrade.reshield?.userOpHash
-                      ? 'Check re-shield'
-                      : 'Re-shield into Privacy Pools'}
-                  </button>
-                  <p className="field-label">
-                    Sends this owner&apos;s USDC back to the pool. Gas is paid in USDC, so the
-                    address never needs ETH. Leave this open until it confirms.
-                  </p>
-                </>
-              )}
-
-              {reshieldNote && <p className="field-label">{reshieldNote}</p>}
+                ) : null)}
 
               {status.activeTrade.deposit && (
                 <p className="field-label">
@@ -295,43 +276,7 @@ export function App() {
                 Abandon trade
               </button>
             </>
-          ) : (
-            <>
-              <TradeForm busy={busy} onOpened={refresh} />
-              {/* The original flow: connect Lighter's own site to a fresh owner. */}
-              <button
-                className="link"
-                disabled={busy}
-                onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
-              >
-                Start a manual trade on Lighter&apos;s site instead
-              </button>
-            </>
-          )}
-
-          {/* A full pool scan, so it is asked for rather than polled. Shown
-              before starting a trade, since a trade that cannot be funded
-              should fail here rather than after an owner is burned. */}
-          <button
-            className="link"
-            disabled={busy}
-            onClick={() => run(async () => setPool(await send({ kind: 'poolBalance' }, SLOW_TIMEOUT_MS)))}
-          >
-            Check pool balance
-          </button>
-
-          {pool && (
-            <div className="phase">
-              <strong>{(Number(pool.totalUnits) / 1e6).toFixed(2)} USDC in the pool</strong>
-              <p>
-                {pool.noteCount === 0
-                  ? 'No spendable notes. A new deposit must clear ASP screening before it can be spent, which is published in batches.'
-                  : `${pool.noteCount} note${pool.noteCount === 1 ? '' : 's'}; largest ${(
-                      Number(pool.largestUnits) / 1e6
-                    ).toFixed(2)} USDC, which bounds a single trade.`}
-              </p>
-            </div>
-          )}
+          ) : null}
 
           {/* Owner addresses are single-use and nothing watches them once
               retired, so leftover funds need somewhere to be found. */}

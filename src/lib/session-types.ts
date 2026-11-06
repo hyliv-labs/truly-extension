@@ -16,6 +16,8 @@ export type SessionState =
   | 'awaiting-deposit'
   /** Lighter reports the deposit failed or claimable. Needs a human. */
   | 'deposit-problem'
+  /** Deposit credited. The user trades this account on the perps site. */
+  | 'funded'
   | 'registering-key'
   | 'setting-leverage'
   | 'submitting-order'
@@ -26,7 +28,17 @@ export type SessionState =
   | 'open'
   | 'closing'
   | 'close-failed'
-  /** Flat on Lighter. Withdraw from Lighter, then re-shield. */
+  /** Flat on Lighter. A fast withdrawal is signed and being sent once. */
+  | 'withdrawing'
+  /** The stored withdrawal was refused or expired unsent. A new one is allowed. */
+  | 'withdraw-failed'
+  /** Lighter accepted the withdrawal. USDC is on its way to the owner. */
+  | 'exited'
+  /** Owner USDC is being deposited back into the pool. */
+  | 'reshielding'
+  /** Re-shield confirmed. The trade can be retired. */
+  | 'complete'
+  /** Flat, and the balance cannot take the fast route. */
   | 'closed';
 
 export interface SubmittedTx {
@@ -108,6 +120,15 @@ export interface TradeSession {
   readonly failedOrders?: OrderAttempt[];
   readonly close?: OrderAttempt;
   readonly closeHistory?: OrderAttempt[];
+  /**
+   * The one fast withdrawal off Lighter. Same rule as an order: signed once,
+   * resent only as these exact bytes.
+   */
+  readonly exitTx?: SubmittedTx & {
+    readonly amountUnits: string;
+    /** Set for a fast withdrawal. Absent on a secure withdrawal, which is not sent. */
+    readonly toAddress?: string;
+  };
   readonly closedAt?: number;
 }
 
@@ -120,4 +141,7 @@ export const ACTIVE_SESSION_STATES: readonly SessionState[] = [
   'submitting-order',
   'order-uncertain',
   'closing',
+  'withdrawing',
+  'exited',
+  'reshielding',
 ];

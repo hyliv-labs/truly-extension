@@ -203,5 +203,36 @@ const avg = plan.classifyOrder(order('filled', 0.02), 0.02);
 if (avg.state !== 'filled' || Math.abs((avg.averagePrice ?? 0) - 2221) > 1e-9) fail('average price not derived from filled quote/base');
 else pass('average execution price = filled quote / filled base');
 
+const rail = plan.validateRailgunTrade({
+  market: eth,
+  request: { marketId: eth.marketId, direction: 'long', marginUnits: USDC(10), leverage: 2, fundingSource: 'railgun' },
+  referencePrice: 2221.51,
+  spendableUnits: USDC(30),
+  pendingUnits: USDC(100),
+  feeBps: 25n,
+});
+if (rail.fundingSource !== 'Railgun') fail('railgun quote lost its source');
+else if (BigInt(rail.expectedNetUnits) !== USDC(10)) fail('railgun quote does not land the margin');
+else if (BigInt(rail.grossWithdrawalUnits) <= USDC(10)) fail('railgun quote does not include the unshield fee');
+else pass('a Railgun quote unshields the margin plus the fee, not the whole balance');
+expectCode('railgun balance not synced yet', 'pending-asp', () =>
+  plan.validateRailgunTrade({
+    market: eth,
+    request: { marketId: eth.marketId, direction: 'long', marginUnits: USDC(10), leverage: 2 },
+    referencePrice: 2221.51,
+    spendableUnits: 0n,
+    pendingUnits: USDC(30),
+    feeBps: 25n,
+  }),
+);
+
+const deposit = plan.validateDeposit({ amountUnits: USDC(10), approvedNotes: [note(40)], pendingNotes: [] });
+if (deposit.orderType !== 'deposit') fail('a deposit quote is still an order');
+else if (BigInt(deposit.expectedNetUnits) < USDC(10)) fail('a deposit does not land the amount');
+else pass('a deposit funds an account and does not size an order');
+expectCode('deposit under the Lighter minimum', 'below-lighter-minimum', () =>
+  plan.validateDeposit({ amountUnits: USDC(4), approvedNotes: [note(40)], pendingNotes: [] }),
+);
+
 console.log(failed ? '\nFAILED' : '\ntrade plan OK');
 process.exit(failed ? 1 : 0);

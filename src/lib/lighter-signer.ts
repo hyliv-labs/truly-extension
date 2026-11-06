@@ -222,6 +222,91 @@ export interface MarketOrderParams {
   readonly reduceOnly: boolean;
 }
 
+/** lighter-go USDC asset id and the perps collateral route. */
+export const USDC_ASSET_INDEX = 3;
+export const ROUTE_PERPS = 0;
+
+/**
+ * Secure withdrawal. Lighter settles this on Ethereum, at the account owner's
+ * address. It cannot be re-shielded on Arbitrum. The return path uses
+ * `signFastWithdraw`.
+ */
+export async function signWithdraw(
+  account: SignerAccount,
+  amountUnits: bigint,
+  nonce: number,
+): Promise<SignedTx> {
+  if (amountUnits <= 0n || amountUnits > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new LighterSignerError('Withdrawal amount is outside the range the signer accepts.');
+  }
+  await bind(account);
+  return signed(
+    'SignWithdraw',
+    USDC_ASSET_INDEX,
+    ROUTE_PERPS,
+    Number(amountUnits),
+    0,
+    nonce,
+    account.apiKeyIndex,
+    account.accountIndex,
+  );
+}
+
+/** 20-byte address plus 12 zero bytes, the memo a fast withdrawal commits to. */
+export function fastWithdrawMemo(address: string): string {
+  const hex = address.toLowerCase().replace(/^0x/, '');
+  if (!/^[\da-f]{40}$/.test(hex)) {
+    throw new LighterSignerError('Fast withdrawal destination is not an address.');
+  }
+  return `${hex}${'00'.repeat(12)}`;
+}
+
+export interface FastWithdrawParams {
+  /** Lighter's fast-withdraw pool, from `/fastwithdraw/info`. */
+  readonly toAccountIndex: number;
+  /** USDC that leaves, in 6-decimal units. The fee is extra and stays behind. */
+  readonly amountUnits: bigint;
+  /** `transfer_fee_usdc` from Lighter. It has to match exactly. */
+  readonly feeUnits: bigint;
+  /** Where the pool pays the USDC. On this product, the fresh owner. */
+  readonly toAddress: string;
+  readonly nonce: number;
+}
+
+/**
+ * Fast withdrawal: a transfer to Lighter's pool with the destination in the
+ * memo. The owner must `personal_sign` `messageToSign` and the result is
+ * posted to `/fastwithdraw`, not `sendTx`. USDC arrives on Arbitrum.
+ */
+export async function signFastWithdraw(
+  account: SignerAccount,
+  params: FastWithdrawParams,
+): Promise<SignedTx & { messageToSign: string }> {
+  if (params.amountUnits <= 0n || params.amountUnits > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new LighterSignerError('Withdrawal amount is outside the range the signer accepts.');
+  }
+  if (params.feeUnits < 0n || params.feeUnits > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new LighterSignerError('Withdrawal fee is outside the range the signer accepts.');
+  }
+  await bind(account);
+  const tx = signed(
+    'SignTransfer',
+    params.toAccountIndex,
+    USDC_ASSET_INDEX,
+    ROUTE_PERPS,
+    ROUTE_PERPS,
+    Number(params.amountUnits),
+    Number(params.feeUnits),
+    fastWithdrawMemo(params.toAddress),
+    0,
+    params.nonce,
+    account.apiKeyIndex,
+    account.accountIndex,
+  );
+  if (!tx.messageToSign) throw new LighterSignerError('The fast withdrawal returned no L1 message.');
+  return tx as SignedTx & { messageToSign: string };
+}
+
 /** An immediate-or-cancel market order. Nothing rests on the book. */
 export async function signMarketOrder(
   account: SignerAccount,

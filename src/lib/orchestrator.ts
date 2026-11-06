@@ -55,7 +55,10 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   if (!trade.withdrawal) {
     return {
       phase: 'unshielding',
-      detail: 'Ready to fund this trade from Privacy Pools.',
+      detail:
+        trade.session?.quote.fundingSource === 'Railgun'
+          ? 'Ready to fund this trade from Railgun.'
+          : 'Ready to fund this trade from Privacy Pools.',
     };
   }
 
@@ -84,6 +87,18 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   // whether it has left again.
   const snapshot = await readAccount(trade.ownerAddress);
   const advice = adviseExit(snapshot);
+
+  // A withdrawal Truly already signed is the truth. The account still shows
+  // the balance until Lighter sequences it, and advising "withdraw on Lighter"
+  // then would invite a second one.
+  const exitState = trade.session?.state;
+  if (exitState === 'withdrawing' || exitState === 'withdraw-failed' || (exitState === 'exited' && snapshot.balance > 1)) {
+    return {
+      phase: 'exiting',
+      detail: trade.session?.detail ?? 'Lighter withdrawal is in progress.',
+      advice,
+    };
+  }
 
   if (!isExitComplete(advice)) {
     return {
@@ -115,7 +130,10 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   if (trade.reshield?.status === 'confirmed') {
     return {
       phase: 'reshielded',
-      detail: 'Everything is back in the pool. This trade can be retired.',
+      detail:
+        trade.session?.quote.fundingSource === 'Railgun'
+          ? 'Everything is back in Railgun. This trade can be retired.'
+          : 'Everything is back in the pool. This trade can be retired.',
       advice,
       ownerBalance,
     };

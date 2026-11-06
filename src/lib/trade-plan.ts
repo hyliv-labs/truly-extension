@@ -13,6 +13,7 @@ import type { DiscoveredNote } from './discovery';
 import type { PerpMarket } from './lighter-markets';
 import { MARGIN_FRACTION_SCALE } from './lighter-markets';
 import { planUnshield, LIGHTER_MIN_UNITS, UnshieldError } from './unshield';
+import { planRailgunUnshield, RailgunFundingError, railgunGrossForNet } from './railgun';
 import {
   POOL_VETTING_FEE_BPS,
   RELAYER_BASE_FEE_BPS,
@@ -61,14 +62,34 @@ export interface TradeRequest {
   /** USDC units (6 decimals). */
   readonly marginUnits: bigint;
   readonly leverage: number;
+  /** Defaults to Privacy Pools. */
+  readonly fundingSource?: FundingSource;
+  /**
+   * Create a fresh account and deposit this amount. No market order is sized
+   * or sent; the user trades the account on the perps site.
+   */
+  readonly depositOnly?: boolean;
 }
+
+/**
+ * Where a REQUEST asks to be funded from. These are ids, deliberately the
+ * same union as TradeRequestWire.fundingSource in messages.ts, because the
+ * session compares `request.fundingSource === 'railgun'`.
+ *
+ * Not the same as TradeQuote.fundingSource, which holds the DISPLAY name
+ * ('Privacy Pools' | 'Railgun'). Declaring this as the display union would
+ * have made that comparison permanently false, and every Railgun request
+ * would have funded from Privacy Pools without any error.
+ */
+export type FundingSource = 'privacy-pools' | 'railgun';
 
 export interface TradeQuote {
   readonly marketId: number;
   readonly symbol: string;
   readonly direction: Direction;
-  readonly orderType: 'market';
+  readonly orderType: 'market' | 'deposit';
   readonly leverage: number;
+  /** The market's cap when quoted. 1 for a deposit-only quote, which sends no order. */
   readonly maxLeverage: number;
   readonly marginUnits: string;
   /** What the order is sized from: margin less the safety buffer. */
@@ -89,7 +110,7 @@ export interface TradeQuote {
   readonly poolVettingFeeBps: number;
   readonly spendableUnits: string;
   readonly pendingAspUnits: string;
-  readonly fundingSource: 'Privacy Pools';
+  readonly fundingSource: 'Privacy Pools' | 'Railgun';
   readonly warnings: string[];
 }
 
@@ -265,6 +286,232 @@ export function validateTrade(input: {
     spendableUnits: spendable.toString(),
     pendingAspUnits: pending.toString(),
     fundingSource: 'Privacy Pools',
+    warnings,
+  };
+}
+
+/** A deposit ticket: amount and fees, with no market and no order. */
+function depositQuote(
+  amountUnits: bigint,
+  plan: { amountUnits: bigint; expectedNetUnits: bigint },
+  feeUnits: bigint,
+  spendable: bigint,
+  pending: bigint,
+  fundingSource: 'Privacy Pools' | 'Railgun',
+  feeBps: number,
+  warnings: string[],
+): TradeQuote {
+  return {
+    marketId: 0,
+    symbol: 'Account',
+    direction: 'long',
+    orderType: 'deposit',
+    leverage: 1,
+    maxLeverage: 1,
+    marginUnits: amountUnits.toString(),
+    sizingMarginUsd: usd(amountUnits),
+    notionalUsd: usd(amountUnits),
+    referencePrice: 0,
+    estimatedSize: 0,
+    sizeDecimals: 6,
+    priceDecimals: 6,
+    grossWithdrawalUnits: plan.amountUnits.toString(),
+    relayerFeeEstimateUnits: feeUnits.toString(),
+    expectedNetUnits: plan.expectedNetUnits.toString(),
+    takerFeePct: 0,
+    takerFeeEstimateUsd: 0,
+    reshieldGasReserveUnits: RESHIELD_GAS_RESERVE_UNITS.toString(),
+    poolVettingFeeBps: feeBps,
+    spendableUnits: spendable.toString(),
+    pendingAspUnits: pending.toString(),
+    fundingSource,
+    warnings,
+  };
+}
+
+/**
+ * Fund a fresh account. Checks the amount and the shielded balance only.
+ * Does not look at a market, a side, or leverage, and does not size an order.
+ */
+export function validateDeposit(input: {
+  readonly amountUnits: bigint;
+  readonly approvedNotes: readonly DiscoveredNote[];
+  readonly pendingNotes: readonly DiscoveredNote[];
+}): TradeQuote {
+  const { amountUnits, approvedNotes, pendingNotes } = input;
+  if (amountUnits <= 0n) {
+    throw new TradeValidationError('invalid-margin', 'Enter a deposit amount in USDC.');
+  }
+  if (amountUnits < LIGHTER_MIN_UNITS) {
+    throw new TradeValidationError(
+      'below-lighter-minimum',
+      `Lighter credits deposits of at least ${fmt(LIGHTER_MIN_UNITS)}.`,
+    );
+  }
+  const grossWanted = grossForNet(amountUnits);
+  const spendable = approvedNotes.reduce((s, n) => s + n.value, 0n);
+  const pending = pendingNotes.reduce((s, n) => s + n.value, 0n);
+  let plan: ReturnType<typeof planUnshield>;
+  try {
+    plan = planUnshield(approvedNotes, grossWanted);
+  } catch (error) {
+    if (pending > 0n && pendingNotes.some((n) => n.value >= grossWanted)) {
+      throw new TradeValidationError(
+        'pending-asp',
+        `${fmt(pending)} is still waiting for ASP approval and cannot be spent yet. Spendable now: ${fmt(spendable)}.`,
+      );
+    }
+    throw new TradeValidationError(
+      'insufficient-balance',
+      error instanceof UnshieldError ? error.message : 'Not enough spendable USDC in Privacy Pools.',
+    );
+  }
+  if (plan.expectedNetUnits < amountUnits) {
+    throw new TradeValidationError(
+      'insufficient-balance',
+      `A single withdrawal cannot land ${fmt(amountUnits)} after the relayer fee.`,
+    );
+  }
+  const warnings = [
+    'A new account is created and funded. Truly does not place an order — trade it on Lighter.',
+  ];
+  if (plan.expectedNetUnits > amountUnits + 1_000_000n) {
+    warnings.push(
+      `The note is spent whole, so ~${fmt(plan.expectedNetUnits - amountUnits)} extra arrives on the account.`,
+    );
+  }
+  if (pending > 0n) warnings.push(`${fmt(pending)} is waiting on ASP approval and is not counted.`);
+  return depositQuote(
+    amountUnits,
+    plan,
+    estimateRelayerFeeUnits(plan.amountUnits),
+    spendable,
+    pending,
+    'Privacy Pools',
+    Number(POOL_VETTING_FEE_BPS),
+    warnings,
+  );
+}
+
+/** Same deposit, funded from Railgun. The unshield fee comes out of the shielded balance. */
+export function validateRailgunDeposit(input: {
+  readonly amountUnits: bigint;
+  readonly spendableUnits: bigint;
+  readonly pendingUnits: bigint;
+  readonly feeBps: bigint;
+}): TradeQuote {
+  const { amountUnits } = input;
+  if (amountUnits <= 0n) {
+    throw new TradeValidationError('invalid-margin', 'Enter a deposit amount in USDC.');
+  }
+  if (amountUnits < LIGHTER_MIN_UNITS) {
+    throw new TradeValidationError(
+      'below-lighter-minimum',
+      `Lighter credits deposits of at least ${fmt(LIGHTER_MIN_UNITS)}.`,
+    );
+  }
+  const gross = railgunGrossForNet(amountUnits, input.feeBps);
+  const fee = gross - amountUnits;
+  let plan: ReturnType<typeof planRailgunUnshield>;
+  try {
+    plan = planRailgunUnshield({
+      spendableUnits: input.spendableUnits,
+      pendingUnits: input.pendingUnits,
+      desiredNetUnits: amountUnits,
+      feeUnits: fee,
+    });
+  } catch (error) {
+    if (error instanceof RailgunFundingError && error.code === 'pending-ppoi') {
+      throw new TradeValidationError('pending-asp', error.message);
+    }
+    throw new TradeValidationError(
+      'insufficient-balance',
+      error instanceof RailgunFundingError ? error.message : 'Not enough spendable Railgun USDC.',
+    );
+  }
+  if (plan.netUnits < amountUnits) {
+    throw new TradeValidationError('insufficient-balance', 'Not enough Railgun USDC to fund this account.');
+  }
+  const warnings = [
+    'A new account is created and funded. Truly does not place an order — trade it on Lighter.',
+  ];
+  if (input.pendingUnits > 0n) {
+    warnings.push('Some Railgun USDC is still syncing or blocked, so it is not counted.');
+  }
+  return depositQuote(
+    amountUnits,
+    { amountUnits: gross, expectedNetUnits: amountUnits },
+    fee,
+    input.spendableUnits,
+    input.pendingUnits,
+    'Railgun',
+    Number(input.feeBps),
+    warnings,
+  );
+}
+
+export function validateRailgunTrade(input: {
+  readonly market: PerpMarket;
+  readonly request: TradeRequest;
+  readonly referencePrice: number;
+  readonly spendableUnits: bigint;
+  readonly pendingUnits: bigint;
+  readonly feeBps: bigint;
+}): TradeQuote {
+  const { market, request, referencePrice } = input;
+  const { sizingMarginUsd, notionalUsd, estimatedSize } = checkRequest(market, request, referencePrice);
+  const gross = railgunGrossForNet(request.marginUnits, input.feeBps);
+  const fee = gross - request.marginUnits;
+  let plan: ReturnType<typeof planRailgunUnshield>;
+  try {
+    plan = planRailgunUnshield({
+      spendableUnits: input.spendableUnits,
+      pendingUnits: input.pendingUnits,
+      desiredNetUnits: request.marginUnits,
+      feeUnits: fee,
+    });
+  } catch (error) {
+    if (error instanceof RailgunFundingError && error.code === 'pending-ppoi') {
+      throw new TradeValidationError('pending-asp', error.message);
+    }
+    throw new TradeValidationError(
+      'insufficient-balance',
+      error instanceof RailgunFundingError ? error.message : 'Not enough spendable Railgun USDC.',
+    );
+  }
+
+  const warnings: string[] = [];
+  if (input.pendingUnits > 0n) {
+    warnings.push('Some Railgun USDC is still syncing or blocked, so it is not counted.');
+  }
+  if (plan.netUnits > request.marginUnits + 1_000_000n) {
+    warnings.push('Spendable Railgun USDC covers this trade. Only the margin, plus the unshield fee, is sent to Lighter.');
+  }
+
+  return {
+    marketId: market.marketId,
+    symbol: market.symbol,
+    direction: request.direction,
+    orderType: 'market',
+    leverage: request.leverage,
+    maxLeverage: market.maxLeverage,
+    marginUnits: request.marginUnits.toString(),
+    sizingMarginUsd,
+    notionalUsd,
+    referencePrice,
+    estimatedSize,
+    sizeDecimals: market.sizeDecimals,
+    priceDecimals: market.priceDecimals,
+    grossWithdrawalUnits: gross.toString(),
+    relayerFeeEstimateUnits: fee.toString(),
+    expectedNetUnits: request.marginUnits.toString(),
+    takerFeePct: market.takerFeePct,
+    takerFeeEstimateUsd: (notionalUsd * (market.takerFeePct || 0)) / 100,
+    reshieldGasReserveUnits: RESHIELD_GAS_RESERVE_UNITS.toString(),
+    poolVettingFeeBps: Number(input.feeBps),
+    spendableUnits: input.spendableUnits.toString(),
+    pendingAspUnits: input.pendingUnits.toString(),
+    fundingSource: 'Railgun',
     warnings,
   };
 }

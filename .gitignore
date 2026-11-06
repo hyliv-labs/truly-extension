@@ -18,8 +18,14 @@ public/anon-rpc/
 # Fetched and hash-verified by scripts/fetch-circuits.ts at build time.
 public/privacy-pools/
 
+# Fetched and hash-verified by scripts/fetch-railgun-circuit.ts at build time.
+public/railgun/
+
 # Built and hash-verified by scripts/build-lighter-signer.ts at build time.
 public/lighter/
+
+# Copied from snarkjs's published browser build by scripts/copy-snarkjs.ts.
+public/snarkjs/
 
 # Local agent tooling. Machine-specific and not part of the extension, so it
 # stays out of the repo -- neither has ever been committed, so history is

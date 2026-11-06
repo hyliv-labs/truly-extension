@@ -40,6 +40,11 @@ export interface ActiveTrade {
     readonly depositIndex: number;
     readonly deposited: string;
     readonly confirmedAt: number;
+    /**
+     * Set only for an older ETH-paid Railgun shield. A paymaster shield has
+     * no raw transaction; its userOpHash is waited on through the bundler.
+     */
+    readonly raw?: string;
   };
   /**
    * E3: set once the pool withdrawal is CONFIRMED on chain. Mirrors `reshield`
@@ -67,6 +72,8 @@ export interface ActiveTrade {
     readonly withdrawalIndex?: number;
     readonly startedAt: number;
     readonly confirmedAt?: number;
+    /** Signed Railgun transaction, resent as these exact bytes. */
+    readonly raw?: string;
   };
   /** E8: last phase recorded, so the popup has something before the first poll. */
   readonly phase?: string;

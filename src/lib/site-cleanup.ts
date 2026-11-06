@@ -24,6 +24,23 @@ export interface CleanupResult {
 }
 
 /**
+ * Tabs left open on purpose. A Lighter tab with eth_requestAccounts still
+ * in flight is one of these: closing it is what makes the dapp say the
+ * connection was cancelled the moment a trade starts.
+ */
+const sparedTabIds = new Map<number, number>();
+
+export function spareLighterTab(tabId: number): void {
+  sparedTabIds.set(tabId, (sparedTabIds.get(tabId) ?? 0) + 1);
+}
+
+export function releaseLighterTab(tabId: number): void {
+  const next = (sparedTabIds.get(tabId) ?? 0) - 1;
+  if (next <= 0) sparedTabIds.delete(tabId);
+  else sparedTabIds.set(tabId, next);
+}
+
+/**
  * Remove every trace of the current Lighter session.
  *
  * Open tabs are closed first: a live page holds its state in memory and will
@@ -54,7 +71,7 @@ async function closeLighterTabs(): Promise<number> {
 
   const ids = tabs
     .map((tab) => tab.id)
-    .filter((id): id is number => typeof id === 'number');
+    .filter((id): id is number => typeof id === 'number' && !sparedTabIds.has(id));
 
   if (ids.length > 0) await chrome.tabs.remove(ids);
   return ids.length;

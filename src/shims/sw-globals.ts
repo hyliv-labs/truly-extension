@@ -34,7 +34,13 @@ const UNAVAILABLE = `data:application/javascript,${encodeURIComponent(
   'throw new Error("truly: a Worker was spawned from the service worker, where URL.createObjectURL does not exist. Proving must run in the offscreen document.");',
 )}`;
 
+function installGlobal(): void {
+  const root = globalThis as typeof globalThis & { global?: typeof globalThis };
+  if (typeof root.global === 'undefined') root.global = root;
+}
+
 function installCreateObjectURL(): boolean {
+  installGlobal();
   const url = globalThis.URL as unknown as {
     createObjectURL?: (blob: unknown) => string;
     revokeObjectURL?: (url: string) => void;

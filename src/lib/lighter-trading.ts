@@ -42,16 +42,42 @@ function isAmbiguousRefusal(message: string): boolean {
 
 export async function sendTx(tx: SignedTx, fetchImpl: typeof fetch = fetch): Promise<SendOutcome> {
   const body = new URLSearchParams({ tx_type: String(tx.txType), tx_info: tx.txInfo });
+  return postForm(LIGHTER_SEND_URL, body, {}, tx.txHash, 'sendTx', fetchImpl);
+}
+
+/**
+ * Submit a signed fast withdrawal. This is not sendTx: Lighter's pool pays
+ * `toAddress` on Arbitrum only when the transfer is posted here, with the
+ * owner's L1 signature already inside `tx.txInfo`.
+ */
+export async function sendFastWithdraw(
+  tx: SignedTx,
+  toAddress: string,
+  authToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SendOutcome> {
+  const body = new URLSearchParams({ tx_info: tx.txInfo, to_address: toAddress });
+  return postForm(LIGHTER_FAST_WITHDRAW_URL, body, { authorization: authToken }, tx.txHash, 'fastwithdraw', fetchImpl);
+}
+
+async function postForm(
+  url: string,
+  body: URLSearchParams,
+  headers: Record<string, string>,
+  fallbackHash: string,
+  label: string,
+  fetchImpl: typeof fetch,
+): Promise<SendOutcome> {
   let response: Response;
   try {
-    response = await fetchImpl(`${LIGHTER_SEND_URL}`, {
+    response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
       body,
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   } catch (error) {
-    return { kind: 'uncertain', message: `sendTx did not answer: ${(error as Error).message}` };
+    return { kind: 'uncertain', message: `${label} did not answer: ${(error as Error).message}` };
   }
 
   let json: { code?: number; message?: string; tx_hash?: string } | undefined;
@@ -59,20 +85,56 @@ export async function sendTx(tx: SignedTx, fetchImpl: typeof fetch = fetch): Pro
     json = (await response.json()) as typeof json;
   } catch {
     // A gateway error page can arrive after the sequencer accepted the tx.
-    return { kind: 'uncertain', message: `sendTx returned non-JSON (${response.status})` };
+    return { kind: 'uncertain', message: `${label} returned non-JSON (${response.status})` };
   }
 
   if (response.ok && json?.code === 200) {
-    return { kind: 'accepted', txHash: json.tx_hash || tx.txHash };
+    return { kind: 'accepted', txHash: json.tx_hash || fallbackHash };
   }
-  const message = json?.message ?? `sendTx failed (${response.status})`;
+  const message = json?.message ?? `${label} failed (${response.status})`;
   if (response.status >= 500 || isAmbiguousRefusal(message)) {
     return { kind: 'uncertain', message };
   }
   return { kind: 'rejected', ...(json?.code !== undefined ? { code: json.code } : {}), message };
 }
 
+/** Pool account a fast withdrawal transfers into. Requires an auth token. */
+export async function fastWithdrawPool(
+  accountIndex: number,
+  authToken: string,
+): Promise<{ toAccountIndex: number }> {
+  const json = await request<{ to_account_index?: number }>(
+    `/fastwithdraw/info?account_index=${accountIndex}`,
+    { headers: { authorization: authToken } },
+  );
+  if (typeof json.to_account_index !== 'number') {
+    throw new LighterApiError('Lighter returned no fast-withdraw pool.');
+  }
+  return { toAccountIndex: json.to_account_index };
+}
+
+/** Fee charged on top of a transfer. The signed fee has to match this exactly. */
+export async function transferFeeUnits(
+  accountIndex: number,
+  toAccountIndex: number,
+  authToken: string,
+): Promise<bigint> {
+  const json = await request<{ transfer_fee_usdc?: number }>(
+    `/transferFeeInfo?account_index=${accountIndex}&to_account_index=${toAccountIndex}`,
+    { headers: { authorization: authToken } },
+  );
+  if (
+    typeof json.transfer_fee_usdc !== 'number' ||
+    !Number.isSafeInteger(json.transfer_fee_usdc) ||
+    json.transfer_fee_usdc < 0
+  ) {
+    throw new LighterApiError('Lighter returned no transfer fee.');
+  }
+  return BigInt(json.transfer_fee_usdc);
+}
+
 const LIGHTER_SEND_URL = 'https://mainnet.zklighter.elliot.ai/api/v1/sendTx';
+const LIGHTER_FAST_WITHDRAW_URL = 'https://mainnet.zklighter.elliot.ai/api/v1/fastwithdraw';
 
 export type TxLookup =
   | { readonly found: false }
@@ -248,6 +310,8 @@ export interface LighterPosition {
 export interface TradingAccount {
   readonly accountIndex: number;
   readonly collateral: number;
+  /** Lighter's own decimal string, so a withdrawal is not sized from a float. */
+  readonly collateralRaw: string;
   readonly availableBalance: number;
   readonly positions: LighterPosition[];
 }
@@ -257,7 +321,8 @@ export function parseAccount(accountIndex: number, json: { accounts?: Record<str
   if (!account) {
     throw new LighterApiError(`Lighter returned no account for index ${accountIndex}.`);
   }
-  const collateral = Number(account.collateral);
+  const collateralRaw = typeof account.collateral === 'string' ? account.collateral : String(account.collateral ?? '');
+  const collateral = Number(collateralRaw);
   if (!Number.isFinite(collateral)) {
     throw new LighterApiError(`Lighter account ${accountIndex} has no readable collateral.`);
   }
@@ -279,6 +344,7 @@ export function parseAccount(accountIndex: number, json: { accounts?: Record<str
   return {
     accountIndex,
     collateral,
+    collateralRaw,
     availableBalance: Number(account.available_balance ?? collateral),
     positions,
   };

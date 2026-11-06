@@ -11,7 +11,7 @@ import { installChromeStub } from './chrome-stub.ts';
 
 installChromeStub();
 
-const { driveTx, retryOrder, closePosition, classifyFundingError, SessionError } = await import(
+const { driveTx, retryOrder, retryLighterExit, closePosition, classifyFundingError, SessionError } = await import(
   '../src/lib/trade-session.ts'
 );
 const { updateSession, getActiveTrade } = await import('../src/lib/trade.ts');
@@ -166,6 +166,18 @@ try {
 } catch (error) {
   if (error instanceof SessionError && error.code === 'close-in-flight') pass('a second close is refused while one is in flight');
   else fail(`in-flight close threw ${(error as Error).message}`);
+}
+
+await setSession({
+  state: 'withdrawing',
+  exitTx: { ...signed({ status: 'uncertain' }), amountUnits: '4000000' },
+});
+try {
+  await retryLighterExit();
+  fail('a second Lighter withdrawal was signed while the first outcome is unknown');
+} catch (error) {
+  if (error instanceof SessionError) pass('no second Lighter withdrawal while the first is uncertain');
+  else fail(`uncertain withdrawal retry threw ${(error as Error).message}`);
 }
 
 await setSession({ state: 'awaiting-deposit' });

@@ -1,5 +1,8 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'wxt';
 import { resolve } from 'node:path';
+
+const require = createRequire(import.meta.url);
 
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
@@ -15,7 +18,7 @@ export default defineConfig({
      * import and never registered (Chrome: "Service worker registration
      * failed. Status code: 15").
      */
-    assert: resolve('src/shims/assert.ts'),
+    assert: resolve('src/shims/assert.cjs'),
   },
   /**
    * Keep the service-worker global shim in its OWN chunk.
@@ -27,6 +30,16 @@ export default defineConfig({
    * ours is first in background.ts.
    */
   vite: () => ({
+    resolve: {
+      // The Railgun SDK imports Node's crypto and buffer. In the offscreen
+      // document those have to be the browser builds, or artifact checks and
+      // AES throw on an empty module.
+      alias: {
+        crypto: require.resolve('crypto-browserify'),
+        buffer: require.resolve('buffer/'),
+        stream: require.resolve('stream-browserify'),
+      },
+    },
     plugins: [
       {
         name: 'truly:sw-globals-chunk',
@@ -93,6 +106,12 @@ export default defineConfig({
       // matching entry here.
       'https://fastrelay.xyz/*',
       'https://api.0xbow.io/*',
+      // Railgun: Arbitrum reads for the engine, proof artifacts, the PPOI
+      // node, and the Arbitrum merkletree quicksync.
+      'https://arbitrum.gateway.tenderly.co/*',
+      'https://ipfs-lb.com/*',
+      'https://ppoi.fdi.network/*',
+      'https://rail-squid.squids.live/*',
     ],
     // Puts the anon-rpc worker at an opaque origin with its own CSP. The '*'
     // is a real wildcard, which is what keeps this entry stable even though

@@ -25,12 +25,19 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { ownerAt } from './vault';
 import { getActiveTrade, startTrade, updateActiveTrade, updateSession, type ActiveTrade } from './trade';
 import { prepareDeposit, checkDeposit } from './deposit';
-import { resolvePendingWithdrawal, scanNotesByApproval, unshieldForTrade } from './unshield';
+import { resolvePendingWithdrawal, unshieldForTrade } from './unshield';
+import { settleRailgunFunding, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
+import { loadShieldedBalance, notesForQuote, poolsReady, railgunReady } from './shielded-balance';
+import { POOL_MIN_DEPOSIT_UNITS } from './config';
+import { fastWithdrawAmount } from './exit';
+import { ownerUsdcBalance } from './reshield';
+import { reshieldActiveTrade } from './reshield-trade';
 import { fetchMarket, fetchTopOfBook, referencePrice } from './lighter-markets';
 import {
   createAuthToken,
   generateApiKey,
   signChangePubKey,
+  signFastWithdraw,
   signMarketOrder,
   signUpdateLeverage,
   txExpiresAt,
@@ -43,10 +50,13 @@ import {
   fetchOrderFills,
   findOrderByClientIndex,
   isApiKeyRegistered,
+  fastWithdrawPool,
   lookupTx,
   nextNonce,
   readTradingAccount,
+  sendFastWithdraw,
   sendTx,
+  transferFeeUnits,
   type LighterPosition,
   type TradingAccount,
 } from './lighter-trading';
@@ -58,6 +68,9 @@ import {
   sizeCloseOrder,
   sizeMarketOrder,
   validateTrade,
+  validateDeposit,
+  validateRailgunDeposit,
+  validateRailgunTrade,
   type TradeQuote,
   type TradeRequest,
 } from './trade-plan';
@@ -90,17 +103,60 @@ export class SessionError extends Error {
 // ---------------------------------------------------------------------------
 
 /** Validate against live market data and the spendable (ASP-approved) balance. */
+/**
+ * Validate against the live market and the shielded balance read at unlock.
+ * Does not scan the pool. The withdrawal scans again before any money moves.
+ */
 export async function quoteTrade(request: TradeRequest): Promise<TradeQuote> {
+  if (request.depositOnly) {
+    const balance = await loadShieldedBalance();
+    if (request.fundingSource === 'railgun') {
+      if (!railgunReady(balance.railgun)) {
+        throw new TradeValidationError('insufficient-balance', `Railgun balance is unavailable: ${balance.railgun.error}`);
+      }
+      return validateRailgunDeposit({
+        amountUnits: request.marginUnits,
+        spendableUnits: BigInt(balance.railgun.spendableUnits),
+        pendingUnits: BigInt(balance.railgun.pendingUnits),
+        feeBps: BigInt(balance.railgun.feeBps),
+      });
+    }
+    if (!poolsReady(balance.privacyPools)) {
+      throw new TradeValidationError('insufficient-balance', `Privacy Pools balance is unavailable: ${balance.privacyPools.error}`);
+    }
+    return validateDeposit({
+      amountUnits: request.marginUnits,
+      approvedNotes: notesForQuote(balance.privacyPools.approvedValues),
+      pendingNotes: notesForQuote(balance.privacyPools.pendingValues),
+    });
+  }
   const market = await fetchMarket(request.marketId);
-  // Cheap rules first: a bad leverage must not wait on a pool scan over Tor.
-  checkRequest(market, request, referencePrice(market));
-  const notes = await scanNotesByApproval();
+  const price = referencePrice(market);
+  // Cheap rules first: a bad leverage must not wait on anything else.
+  checkRequest(market, request, price);
+  const balance = await loadShieldedBalance();
+  if (request.fundingSource === 'railgun') {
+    if (!railgunReady(balance.railgun)) {
+      throw new TradeValidationError('insufficient-balance', `Railgun balance is unavailable: ${balance.railgun.error}`);
+    }
+    return validateRailgunTrade({
+      market,
+      request,
+      referencePrice: price,
+      spendableUnits: BigInt(balance.railgun.spendableUnits),
+      pendingUnits: BigInt(balance.railgun.pendingUnits),
+      feeBps: BigInt(balance.railgun.feeBps),
+    });
+  }
+  if (!poolsReady(balance.privacyPools)) {
+    throw new TradeValidationError('insufficient-balance', `Privacy Pools balance is unavailable: ${balance.privacyPools.error}`);
+  }
   return validateTrade({
     market,
     request,
-    referencePrice: referencePrice(market),
-    approvedNotes: notes.approved,
-    pendingNotes: notes.pending,
+    referencePrice: price,
+    approvedNotes: notesForQuote(balance.privacyPools.approvedValues),
+    pendingNotes: notesForQuote(balance.privacyPools.pendingValues),
   });
 }
 
@@ -112,7 +168,8 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
   if (await getActiveTrade()) {
     throw new SessionError('trade-active', 'A trade is already active. Finish or abandon it first.');
   }
-  // Re-validated here, not trusted from the popup: balances and markets move.
+  // Market is read live. The shielded balance is the unlock snapshot;
+  // runFunding scans again and refuses if the notes have moved.
   const quote = await quoteTrade(request);
 
   const trade = await startTrade();
@@ -128,7 +185,9 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
     marginUnits: quote.marginUnits,
     quote,
     state: 'funding',
-    detail: 'Getting a Lighter deposit address for a fresh owner.',
+    detail: request.depositOnly
+      ? 'Getting a Lighter deposit address for a new account.'
+      : 'Getting a Lighter deposit address for a fresh owner.',
   };
   await updateActiveTrade({ session });
 
@@ -159,12 +218,23 @@ export async function runFunding(): Promise<void> {
 
   fundingRunning = true;
   try {
-    await transition(session.id, 'funding', 'Building the withdrawal proof and relaying it. This takes a minute or two.');
-    const result = await unshieldForTrade(BigInt(session.quote.grossWithdrawalUnits));
+    const fromRailgun = session.quote.fundingSource === 'Railgun';
+    await transition(
+      session.id,
+      'funding',
+      fromRailgun
+        ? 'Building the Railgun unshield proof. This takes a minute or two.'
+        : 'Building the withdrawal proof and relaying it. This takes a minute or two.',
+    );
+    const result = fromRailgun
+      ? await unshieldRailgunForTrade(BigInt(session.quote.expectedNetUnits))
+      : await unshieldForTrade(BigInt(session.quote.grossWithdrawalUnits));
     await transition(
       session.id,
       'awaiting-deposit',
-      `Withdrew ${usd(result.amountUnits)} USDC from Privacy Pools (tx ${short(result.txHash)}). Waiting for Lighter to credit it.`,
+      fromRailgun
+        ? `Unshielded ${usd(result.amountUnits)} USDC from Railgun (tx ${short(result.txHash)}). Waiting for Lighter to credit it.`
+        : `Withdrew ${usd(result.amountUnits)} USDC from Privacy Pools (tx ${short(result.txHash)}). Waiting for Lighter to credit it.`,
     );
   } catch (error) {
     const trade = await getActiveTrade();
@@ -192,7 +262,8 @@ export async function runFunding(): Promise<void> {
 /** Map a funding failure to the error the spec names. */
 export function classifyFundingError(error: unknown): string {
   const m = messageOf(error).toLowerCase();
-  if (/asp|not yet been approved|waiting for asp/.test(m)) return 'pending-asp';
+  // ppoi is Railgun's equivalent of the ASP wait, so both map to pending.
+  if (/asp|not yet been approved|waiting for asp|ppoi/.test(m)) return 'pending-asp';
   if (/no spendable|not large enough|insufficient|no note/.test(m)) return 'insufficient-balance';
   if (/proof|prove|circuit|snark/.test(m)) return 'proof-failed';
   if (/relayer/.test(m)) return 'relayer-rejected';
@@ -242,6 +313,12 @@ async function step(): Promise<TradeSession | null> {
         await stepClose(trade, session);
         break;
       default:
+      case 'withdrawing':
+        await stepWithdraw(trade, session);
+        break;
+      case 'exited':
+      case 'reshielding':
+        await stepReturn(trade, session);
         break;
     }
     const after = await getSession();
@@ -264,6 +341,10 @@ async function step(): Promise<TradeSession | null> {
 
 async function stepFunding(trade: ActiveTrade, session: TradeSession): Promise<void> {
   if (fundingRunning) return;
+  if (session.quote.fundingSource === 'Railgun') {
+    await stepRailgunFunding(session, trade);
+    return;
+  }
   if (trade.withdrawal?.status === 'confirmed') {
     await transition(session.id, 'awaiting-deposit', 'Funding confirmed. Waiting for Lighter to credit it.');
     return;
@@ -311,6 +392,14 @@ async function stepDeposit(trade: ActiveTrade, session: TradeSession): Promise<v
     return;
   }
   await updateSession(session.id, () => ({ creditedUsd: account.collateral }));
+  if (session.quote.orderType === 'deposit') {
+    await transition(
+      session.id,
+      'funded',
+      `Lighter credited ${account.collateral.toFixed(2)} USDC to account #${account.accountIndex}. Open Lighter and trade there. Truly did not place an order.`,
+    );
+    return;
+  }
   await transition(
     session.id,
     'registering-key',
@@ -538,10 +627,11 @@ async function stepClose(trade: ActiveTrade, session: TradeSession): Promise<voi
     return;
   }
   await updateSession(session.id, () => ({ closedAt: Date.now() }));
-  await transition(
-    session.id,
-    'closed',
-    `Position closed at ${fmtPrice(ex.averagePrice)}. ${account.collateral.toFixed(2)} USDC is on Lighter: withdraw it to the owner address on Lighter, then re-shield.`,
+  await queueLighterExit(
+    trade,
+    session,
+    account.collateralRaw,
+    `Position closed at ${fmtPrice(ex.averagePrice)}.`,
   );
 }
 
@@ -587,6 +677,239 @@ export async function retryOrder(): Promise<TradeSession> {
 }
 
 /** Close the whole position with a reduce-only market order. */
+/**
+ * Sign one fast withdrawal. The fee Lighter quotes is left on the account.
+ * Below the 4 USDC minimum nothing is signed: the other route lands on Ethereum.
+ */
+async function queueLighterExit(
+  trade: ActiveTrade,
+  session: TradeSession,
+  collateralRaw: string,
+  headline: string,
+): Promise<void> {
+  const existing = session.exitTx;
+  if (existing && existing.status !== 'rejected' && existing.status !== 'expired') {
+    if (!existing.toAddress) {
+      await transition(
+        session.id,
+        'withdraw-failed',
+        `${headline} The stored withdrawal is the secure route, so it was not sent. That one pays on Ethereum.`,
+      );
+      return;
+    }
+    await transition(session.id, 'withdrawing', session.detail);
+    return;
+  }
+  const signer = await signerFor(trade, session);
+  const owner = privateKeyToAccount((await ownerAt(trade.ownerIndex)).privateKey);
+  const auth = await createAuthToken(signer);
+  const pool = await fastWithdrawPool(signer.accountIndex, auth);
+  const fee = await transferFeeUnits(signer.accountIndex, pool.toAccountIndex, auth);
+  const units = fastWithdrawAmount(collateralRaw, fee);
+  if (units === null) {
+    await transition(
+      session.id,
+      'closed',
+      `${headline} The balance cannot cover a fast withdrawal, so nothing was sent. A secure withdrawal lands on Ethereum and cannot be re-shielded here.`,
+    );
+    return;
+  }
+  const nonce = await nextNonce(requireAccount(trade), signer.apiKeyIndex);
+  const unsigned = await signFastWithdraw(signer, {
+    toAccountIndex: pool.toAccountIndex,
+    amountUnits: units,
+    feeUnits: fee,
+    toAddress: owner.address,
+    nonce,
+  });
+  const l1 = await owner.signMessage({ message: unsigned.messageToSign });
+  const tx = record(withL1Signature(unsigned, l1), nonce);
+  await updateSession(session.id, () => ({
+    exitTx: { ...tx, amountUnits: units.toString(), toAddress: owner.address },
+  }));
+  const usd = (Number(units) / 1e6).toFixed(2);
+  const feeUsd = (Number(fee) / 1e6).toFixed(2);
+  await transition(
+    session.id,
+    'withdrawing',
+    `${headline} Withdrawing ${usd} USDC to this owner on Arbitrum. ${feeUsd} USDC stays on Lighter for the fee. This withdrawal is sent once.`,
+  );
+}
+
+async function stepWithdraw(trade: ActiveTrade, session: TradeSession): Promise<void> {
+  const stored = session.exitTx;
+  if (!stored) {
+    await transition(session.id, 'withdraw-failed', 'No withdrawal was stored, so nothing was sent.', {
+      code: 'no-exit-tx',
+      message: 'missing withdrawal',
+    });
+    return;
+  }
+  if (!stored.toAddress || stored.txType === 13) {
+    await transition(
+      session.id,
+      'withdraw-failed',
+      'The stored withdrawal is the secure route, so it was not sent. That one pays on Ethereum.',
+      { code: 'secure-withdraw', message: 'stored withdrawal has no Arbitrum destination' },
+    );
+    return;
+  }
+  const signer = await signerFor(trade, session);
+  const destination = stored.toAddress;
+  const tx = await driveTx(stored, requireAccount(trade), signer.apiKeyIndex, {
+    send: async (signed) => {
+      try {
+        const auth = await createAuthToken(signer);
+        return await sendFastWithdraw(signed, destination, auth);
+      } catch (error) {
+        return { kind: 'uncertain', message: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  });
+  await updateSession(session.id, (s) => ({ exitTx: s.exitTx ? { ...s.exitTx, ...tx, amountUnits: s.exitTx.amountUnits } : s.exitTx }));
+  if (tx.status === 'rejected' || tx.status === 'expired') {
+    await transition(
+      session.id,
+      'withdraw-failed',
+      `Lighter did not take the withdrawal (${tx.message ?? tx.status}). The position is already closed. Retry signs a new one.`,
+      { code: 'withdraw-failed', message: tx.message ?? tx.status },
+    );
+    return;
+  }
+  if (tx.status === 'accepted') {
+    const usd = (Number(stored.amountUnits) / 1e6).toFixed(2);
+    await transition(
+      session.id,
+      'exited',
+      `Lighter accepted a withdrawal of ${usd} USDC to the owner on Arbitrum. Re-shield once it arrives. Truly will not send a second withdrawal.`,
+    );
+    return;
+  }
+  await updateSession(session.id, () => ({
+    detail: `Withdrawal outcome unknown (${tx.message ?? 'no answer'}). Checking this same transaction. It will not be signed again.`,
+  }));
+}
+
+/**
+ * After Lighter accepts the withdrawal, wait until USDC is actually at the
+ * owner, then re-shield. Acceptance is not arrival: Lighter can zero its
+ * balance before the Arbitrum transfer lands.
+ */
+async function stepRailgunFunding(session: TradeSession, trade: ActiveTrade): Promise<void> {
+  if (trade.withdrawal?.status === 'confirmed') {
+    await transition(session.id, 'awaiting-deposit', 'Railgun funding confirmed. Waiting for Lighter to credit it.');
+    return;
+  }
+  if (trade.withdrawal?.status === 'pending') {
+    const outcome = await settleRailgunFunding();
+    if (outcome === 'landed') {
+      await transition(session.id, 'awaiting-deposit', 'Railgun unshield confirmed on chain. Waiting for Lighter to credit it.');
+    } else if (outcome === 'reverted') {
+      await transition(session.id, 'funding-failed', 'The Railgun unshield reverted. Nothing was spent. Retry builds a new proof.');
+    }
+    return;
+  }
+  if (trade.intentAddress) {
+    await transition(session.id, 'funding-failed', 'Railgun funding was interrupted before a proof was broadcast. Retry is safe.');
+  }
+}
+
+async function stepReturn(trade: ActiveTrade, session: TradeSession): Promise<void> {
+  if (session.quote.fundingSource === 'Railgun') {
+    await stepReturnRailgun(trade, session);
+    return;
+  }
+  const fresh = await getActiveTrade();
+  if (fresh?.reshield?.status === 'confirmed') {
+    await transition(session.id, 'complete', 'Funds are back in Privacy Pools. This trade can be retired.');
+    return;
+  }
+  const submitted = fresh?.reshield?.status === 'pending' && fresh.reshield.userOpHash;
+  const balance = await ownerUsdcBalance(trade.ownerAddress);
+  if (!submitted && balance < POOL_MIN_DEPOSIT_UNITS) {
+    const usd = (Number(balance) / 1e6).toFixed(2);
+    await updateSession(session.id, () => ({
+      detail:
+        balance === 0n
+          ? 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Truly re-shields it.'
+          : `${usd} USDC is at the owner, under the pool minimum, so it is not re-shielded yet.`,
+    }));
+    return;
+  }
+  await transition(session.id, 'reshielding', 'USDC is at the owner. Re-shielding into Privacy Pools.');
+  await reshieldActiveTrade();
+}
+
+async function stepReturnRailgun(trade: ActiveTrade, session: TradeSession): Promise<void> {
+  const fresh = await getActiveTrade();
+  if (fresh?.reshield?.status === 'confirmed') {
+    await transition(session.id, 'complete', 'Funds are back in Railgun. This trade can be retired.');
+    return;
+  }
+  const submitted = fresh?.reshield?.status === 'pending' && fresh.reshield.userOpHash;
+  const balance = await ownerUsdcBalance(trade.ownerAddress);
+  if (!submitted && balance === 0n) {
+    await updateSession(session.id, () => ({
+      detail: 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Truly shields it back into Railgun.',
+    }));
+    return;
+  }
+  await transition(session.id, 'reshielding', 'USDC is at the owner. Shielding it back into Railgun, with gas paid in USDC.');
+  await shieldOwnerUsdcToRailgun();
+  await transition(session.id, 'complete', 'Funds are back in Railgun. This trade can be retired.');
+}
+
+/**
+ * The user traded on Lighter. Bring the collateral back to the owner with a
+ * fast withdrawal, then the session tick shields it into the pool it left.
+ * An open position is refused: closing it is the user's trade, not ours.
+ */
+export async function shieldFundedAccount(): Promise<TradeSession> {
+  const trade = await getActiveTrade();
+  const session = trade?.session;
+  if (!trade || !session) throw new SessionError('no-session', 'No account is active.');
+  if (session.quote.orderType !== 'deposit' || session.state !== 'funded') {
+    throw new SessionError('not-shieldable', 'Shielding is available once this account is funded and the deposit has landed.');
+  }
+  const account = await readTradingAccount(requireAccount(trade));
+  if (account.positions.length > 0) {
+    throw new SessionError(
+      'position-open',
+      'Close the position on Lighter first. Nothing was withdrawn, and nothing was shielded.',
+    );
+  }
+  const signer = await signerFor(trade, session);
+  const auth = await createAuthToken(signer);
+  const pool = await fastWithdrawPool(signer.accountIndex, auth);
+  const fee = await transferFeeUnits(signer.accountIndex, pool.toAccountIndex, auth);
+  if (fastWithdrawAmount(account.collateralRaw, fee) === null) {
+    throw new SessionError(
+      'below-fast-minimum',
+      'The balance cannot cover a fast withdrawal, so nothing was sent. A secure withdrawal lands on Ethereum and cannot be shielded here.',
+    );
+  }
+  const where = session.quote.fundingSource === 'Railgun' ? 'Railgun' : 'Privacy Pools';
+  await queueLighterExit(trade, session, account.collateralRaw, `Withdrawing USDC from Lighter to shield it back into ${where}.`);
+  return (await advanceSession()) ?? (await requireSession());
+}
+
+/** A refused or expired withdrawal can be signed again. An uncertain one cannot. */
+export async function retryLighterExit(): Promise<TradeSession> {
+  const trade = await getActiveTrade();
+  const session = trade?.session;
+  if (!trade || !session) throw new SessionError('no-session', 'No trade session is active.');
+  if (session.state !== 'withdraw-failed') {
+    throw new SessionError('not-retryable', `A Lighter withdrawal can be retried only after it failed (now: ${session.state}).`);
+  }
+  const previous = session.exitTx;
+  if (previous && previous.status !== 'rejected' && previous.status !== 'expired') {
+    throw new SessionError('exit-in-flight', 'The previous withdrawal is not confirmed dead.');
+  }
+  const account = await readTradingAccount(requireAccount(trade));
+  await queueLighterExit(trade, session, account.collateralRaw, 'Retrying the Lighter withdrawal.');
+  return (await advanceSession()) ?? (await requireSession());
+}
+
 export async function closePosition(): Promise<TradeSession> {
   const trade = await getActiveTrade();
   const session = trade?.session;
@@ -605,6 +928,11 @@ export async function closePosition(): Promise<TradeSession> {
   if (!position) {
     await updateSession(session.id, () => ({ closedAt: Date.now() }));
     await transition(session.id, 'closed', 'No open position on Lighter. Withdraw the balance on Lighter, then re-shield.');
+    await queueLighterExit(trade, session, account.collateralRaw, 'No open position on Lighter.');
+    // Must stop here. Without this return the function went on to size a
+    // close order from position.sign on an account that has no position --
+    // a TypeError at best, and at worst a reduce order sent to a flat
+    // account straight after the session was marked closed.
     return requireSession();
   }
 
@@ -679,7 +1007,7 @@ export async function getSessionView(): Promise<SessionView | null> {
   let position: LighterPosition | undefined;
   let account: SessionView['account'];
   let liveError: string | undefined;
-  if (trade.accountIndex !== undefined && ['open', 'closing', 'close-failed', 'closed', 'order-failed', 'order-uncertain'].includes(session.state)) {
+  if (trade.accountIndex !== undefined && ['open', 'closing', 'close-failed', 'closed', 'withdrawing', 'withdraw-failed', 'exited', 'funded', 'order-failed', 'order-uncertain'].includes(session.state)) {
     try {
       const live = await readTradingAccount(trade.accountIndex);
       position = live.positions.find((p) => p.marketId === session.marketId);
@@ -863,11 +1191,17 @@ async function transition(
   detail: string,
   error?: { code: string; message: string },
 ): Promise<TradeSession> {
-  return updateSession(sessionId, () => ({
+  const next = await updateSession(sessionId, () => ({
     state,
     detail,
     error: error ? { ...error, at: Date.now() } : undefined,
   }));
+  // The ticket was priced from the unlock snapshot. A failure is the moment
+  // that snapshot is allowed to be wrong, so read the pools again.
+  if (state === 'funding-failed' || state === 'deposit-problem' || state === 'order-failed' || state === 'close-failed' || state === 'withdraw-failed') {
+    void loadShieldedBalance(true).catch((error: unknown) => console.warn('[truly] shielded balance refresh failed', error));
+  }
+  return next;
 }
 
 export async function getSession(): Promise<TradeSession | null> {

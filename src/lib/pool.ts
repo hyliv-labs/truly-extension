@@ -8,8 +8,8 @@
  * never the other way round.
  */
 
-import { parseAbi, type Address } from 'viem';
-import { publicClient } from './chain';
+import { decodeFunctionResult, encodeFunctionData, parseAbi, type Address, type Hex } from 'viem';
+import { anonRpcCall } from './anon-rpc';
 import {
   PRIVACY_POOL_ADDRESS,
   PRIVACY_POOL_ENTRYPOINT,
@@ -53,27 +53,35 @@ export async function readPoolIdentity(): Promise<PoolIdentity> {
     throw new PoolMismatch('No pool address configured.');
   }
 
-  // Bound to a local: TypeScript does not carry the narrowing above into the
-  // closure, and `address` must be concrete for readContract's overloads.
-  const read = <T>(functionName: 'SCOPE' | 'ASSET' | 'ENTRYPOINT' | 'dead') =>
-    publicClient.readContract({ address, abi: poolAbi, functionName }) as Promise<T>;
+  // Not publicClient.readContract. viem's eth_call catch always dynamic-imports
+  // its CCIP handler before it looks at ccipRead, and Chrome forbids that import
+  // in a service worker. Any failed read then surfaces as "An unknown error
+  // occurred" and the real RPC error is discarded.
+  const read = (functionName: 'SCOPE' | 'ASSET' | 'ENTRYPOINT' | 'dead') =>
+    readPoolView(address, functionName);
 
   let identity: PoolIdentity;
   try {
     const [scope, asset, entrypoint, isDead] = await Promise.all([
-      read<bigint>('SCOPE'),
-      read<Address>('ASSET'),
-      read<Address>('ENTRYPOINT'),
-      read<boolean>('dead'),
+      read('SCOPE'),
+      read('ASSET'),
+      read('ENTRYPOINT'),
+      read('dead'),
     ]);
-    identity = { pool: address, scope, asset, entrypoint, dead: isDead };
+    identity = {
+      pool: address,
+      scope: scope as bigint,
+      asset: asset as Address,
+      entrypoint: entrypoint as Address,
+      dead: isDead as boolean,
+    };
   } catch (error) {
-    // A pool that cannot answer this surface is not a privacy-pools-core pool
-    // — which is exactly what a v2 address, or a wrong chain, would look like.
+    const detail = errorText(error);
+    const transport = /anon-rpc|timed? ?out|429|403|fetch|gateway|network/i.test(detail);
     throw new PoolMismatch(
-      `${address} does not answer the Privacy Pools v1 interface: ${
-        error instanceof Error ? error.message.split('\n')[0] : String(error)
-      }`,
+      transport
+        ? `Could not read Privacy Pools at ${address}: ${detail}`
+        : `${address} does not answer the Privacy Pools v1 interface: ${detail}`,
     );
   }
 
@@ -110,4 +118,25 @@ export async function readPoolIdentity(): Promise<PoolIdentity> {
  */
 export async function authoritativeScope(): Promise<bigint> {
   return (await readPoolIdentity()).scope;
+}
+
+async function readPoolView(
+  address: Address,
+  functionName: 'SCOPE' | 'ASSET' | 'ENTRYPOINT' | 'dead',
+): Promise<bigint | Address | boolean> {
+  const data = encodeFunctionData({ abi: poolAbi, functionName });
+  const result = await anonRpcCall('eth_call', [{ to: address, data }, 'latest']);
+  if (typeof result !== 'string' || !result.startsWith('0x') || result === '0x') {
+    throw new Error(`${functionName} returned no data`);
+  }
+  return decodeFunctionResult({ abi: poolAbi, functionName, data: result as Hex });
+}
+
+function errorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const nested = (error as { cause?: unknown }).cause;
+  const own = error.message.split('\n')[0] ?? error.message;
+  if (!nested) return own;
+  const deeper = errorText(nested);
+  return deeper && deeper !== own && !own.includes(deeper) ? `${own}: ${deeper}` : own;
 }

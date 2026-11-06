@@ -149,3 +149,38 @@ export function adviseExit(snapshot: AccountSnapshot): ExitAdvice {
 export function isExitComplete(advice: ExitAdvice): boolean {
   return advice.kind === 'empty' || advice.kind === 'dust';
 }
+
+/** Lighter's USDC unit. Matches lighter-go's OneUSDC. */
+const USDC_UNITS = 1_000_000n;
+/** Left on the account so a fee that sits on top of the amount can still be paid. */
+const FAST_WITHDRAW_FEE_UNITS = 1_000_000n;
+
+/**
+ * USDC amount, in 6-decimal units, to put in a fast Lighter withdrawal.
+ *
+ * Returns null when the balance cannot cover the minimum plus the fee reserve.
+ * The reserve stays on Lighter; a fast withdrawal that spends the last dollar
+ * can be rejected and leave the rest stuck.
+ */
+/**
+ * Amount to fast-withdraw when the transfer fee is known.
+ * The fee is charged on top of the amount, so it stays on Lighter.
+ * Returns null when the remainder would be under the 4 USDC minimum.
+ */
+export function fastWithdrawAmount(collateralRaw: string, feeUnits: bigint): bigint | null {
+  if (feeUnits < 0n) return null;
+  const match = collateralRaw.trim().match(/^(\d+)(?:\.(\d+))?$/);
+  if (!match) return null;
+  const whole = BigInt(match[1] ?? '0');
+  const frac = (match[2] ?? '').slice(0, 6).padEnd(6, '0');
+  const units = whole * USDC_UNITS + BigInt(frac);
+  const minimum = BigInt(MIN_FAST_WITHDRAWAL_USDC) * USDC_UNITS;
+  if (units < minimum + feeUnits) return null;
+  const amount = units - feeUnits;
+  return amount >= minimum ? amount : null;
+}
+
+/** Same sizing with the 1 USDC reserve used before the fee is known. */
+export function fastWithdrawUnits(collateralRaw: string): bigint | null {
+  return fastWithdrawAmount(collateralRaw, FAST_WITHDRAW_FEE_UNITS);
+}

@@ -66,9 +66,12 @@ import {
   openTradeSession,
   quoteTrade,
   retryFunding,
+  retryLighterExit,
   retryOrder,
   runFunding,
+  shieldFundedAccount,
 } from '@truly/lib/trade-session';
+import { forgetShieldedBalance, loadShieldedBalance } from '@truly/lib/shielded-balance';
 import { ACTIVE_SESSION_STATES } from '@truly/lib/session-types';
 import type { TradeRequest } from '@truly/lib/trade-plan';
 import type { TradeRequestWire } from '@truly/lib/messages';
@@ -187,12 +190,14 @@ async function handle(
     case 'createVault': {
       const result = await createVault(message.password, message.mnemonic);
       await touchAutoLock();
+      void loadShieldedBalance().catch((error: unknown) => console.warn('[truly] shielded balance', error));
       return result;
     }
 
     case 'unlock':
       await unlock(message.password);
       await touchAutoLock();
+      void loadShieldedBalance().catch((error: unknown) => console.warn('[truly] shielded balance', error));
       return null;
 
     case 'lock':
@@ -252,6 +257,7 @@ async function handle(
         message.method,
         message.params,
         message.requestId,
+        sender.tab?.id,
       );
       await touchAutoLock();
       return result;
@@ -361,6 +367,9 @@ async function handle(
       };
     }
 
+    case 'shieldedBalance':
+      return loadShieldedBalance(message.refresh === true);
+
     case 'poolBalance': {
       // A full pool scan, so not cheap: the popup asks for it, rather than
       // polling it.
@@ -443,6 +452,18 @@ async function handle(
       await armSessionTick();
       return getSessionView();
 
+    case 'retryLighterExit':
+      await retryLighterExit();
+      await touchAutoLock();
+      await armSessionTick();
+      return getSessionView();
+
+    case 'shieldFunds':
+      await shieldFundedAccount();
+      await touchAutoLock();
+      await armSessionTick();
+      return getSessionView();
+
     case 'lighterSignerSelfTest': {
       // A throwaway key and a fictitious account: nothing here is ever sent.
       const started = Date.now();
@@ -486,6 +507,7 @@ async function refreshLighterTabs(): Promise<void> {
 
 async function autoLock(): Promise<void> {
   await lock();
+  await forgetShieldedBalance();
   await chrome.alarms.clear(AUTO_LOCK_ALARM);
   console.info('[truly] locked');
 }
@@ -549,11 +571,16 @@ async function pollDeposit(): Promise<void> {
 
 function toTradeRequest(wire: TradeRequestWire): TradeRequest {
   if (!/^\d+$/.test(wire.marginUnits ?? '')) throw new Error('Margin must be a whole number of USDC units.');
+  const fundingSource = wire.depositOnly || wire.fundingSource === 'railgun' ? 'railgun' : 'privacy-pools';
+  if (wire.depositOnly) {
+    return { marketId: 0, direction: 'long', marginUnits: BigInt(wire.marginUnits), leverage: 1, fundingSource: 'railgun', depositOnly: true };
+  }
   return {
     marketId: Number(wire.marketId),
-    direction: wire.direction,
+    direction: wire.direction ?? 'long',
     marginUnits: BigInt(wire.marginUnits),
     leverage: Number(wire.leverage),
+    fundingSource,
   };
 }
 

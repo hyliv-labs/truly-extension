@@ -1,14 +1,13 @@
 /**
- * The market trade: pick a market, LONG or SHORT, margin and leverage, review,
- * confirm. Everything after confirm — funding from Privacy Pools, Lighter
- * credit, the order — runs in the background and is followed here from the
- * session record, so closing the popup never loses a step.
+ * Fund a new account. The user picks an amount and a shielded source. Truly
+ * creates a fresh owner, deposits to its Lighter account, and stops. The
+ * order is placed on Lighter's own site, with Truly as that account's wallet.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { send, SLOW_TIMEOUT_MS } from '@truly/lib/messages';
-import type { PerpMarket } from '@truly/lib/lighter-markets';
-import type { Direction, TradeQuote } from '@truly/lib/trade-plan';
+import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
+import type { TradeQuote } from '@truly/lib/trade-plan';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
 
@@ -23,71 +22,50 @@ function toUnits(input: string): string | null {
   return (BigInt(whole!) * 1_000_000n + BigInt(frac.padEnd(6, '0'))).toString();
 }
 
-export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => Promise<void> }) {
-  const [markets, setMarkets] = useState<PerpMarket[] | null>(null);
-  const [filter, setFilter] = useState('');
-  const [marketId, setMarketId] = useState<number | null>(null);
-  const [direction, setDirection] = useState<Direction>('long');
+export function TradeForm({
+  busy,
+  connecting = false,
+  onOpened,
+  balance,
+  balanceError,
+  balanceLoading,
+  onRefreshBalance,
+}: {
+  busy: boolean;
+  connecting?: boolean;
+  onOpened: () => Promise<void>;
+  balance: ShieldedBalance | null;
+  balanceError: string | null;
+  balanceLoading: boolean;
+  onRefreshBalance: () => Promise<void>;
+}) {
   const [margin, setMargin] = useState('10');
-  const [leverage, setLeverage] = useState(2);
   const [quote, setQuote] = useState<TradeQuote | null>(null);
   const [working, setWorking] = useState<'quote' | 'open' | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Null until known; the notice says so rather than assuming either way. */
   const [funding, setFunding] = useState<{ fastBridgeLimit: string; fast: boolean } | null>(null);
 
-  const loadMarkets = useCallback(async () => {
-    setError(null);
-    try {
-      const list = await send({ kind: 'markets' }, 20_000);
-      setMarkets(list);
-      setMarketId((current) => current ?? list.find((m) => m.tradable)?.marketId ?? null);
-    } catch (e) {
-      setError(`Markets unavailable: ${(e as Error).message}`);
-    }
-    // Best effort: a trade is still placeable if this read fails, so a
-    // failure leaves the notice in its 'checking' wording rather than
-    // blocking the form.
-    try {
-      setFunding(await send({ kind: 'fundingSpeed' }, 20_000));
-    } catch {
-      setFunding(null);
-    }
+  useEffect(() => {
+    void send({ kind: 'fundingSpeed' }, 20_000).then(setFunding).catch(() => setFunding(null));
   }, []);
 
-  useEffect(() => {
-    void loadMarkets();
-  }, [loadMarkets]);
-
-  const market = markets?.find((m) => m.marketId === marketId) ?? null;
-  const visible = useMemo(
-    () =>
-      (markets ?? []).filter((m) => !filter || m.symbol.toLowerCase().includes(filter.toLowerCase())).slice(0, 80),
-    [markets, filter],
-  );
-
-  // Any change invalidates the reviewed summary.
-  useEffect(() => setQuote(null), [marketId, direction, margin, leverage]);
-  useEffect(() => {
-    if (market && leverage > market.maxLeverage) setLeverage(market.maxLeverage);
-  }, [market, leverage]);
+  useEffect(() => setQuote(null), [margin]);
 
   const marginUnits = toUnits(margin);
   const marginNum = marginUnits ? Number(marginUnits) / 1e6 : 0;
-  const notional = marginNum * leverage;
-  const ref = market ? (market.markPrice > 0 ? market.markPrice : market.lastPrice) : 0;
   const marginInvalid = margin.trim().length > 0 && marginUnits === null;
 
   const wire = () => {
-    if (!market || !marginUnits) throw new Error('Choose a market and a margin.');
-    return { marketId: market.marketId, direction, marginUnits, leverage };
+    if (!marginUnits) throw new Error('Enter a deposit amount.');
+    return { marginUnits, fundingSource: 'railgun' as const, depositOnly: true as const };
   };
 
   const review = async () => {
     setWorking('quote');
     setError(null);
     try {
-      setQuote(await send({ kind: 'quoteTrade', trade: wire() }, SLOW_TIMEOUT_MS));
+      setQuote(await send({ kind: 'quoteTrade', trade: wire() }, 30_000));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -109,50 +87,27 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
   };
 
   const disabled = busy || working !== null;
+  const railgunOk = balance !== null && railgunReady(balance.railgun);
+  const canReview = railgunOk;
 
   return (
     <div className="trade">
+      <BalanceStrip
+        balance={balance}
+        error={balanceError}
+        loading={balanceLoading}
+        onRefresh={() => void onRefreshBalance()}
+      />
       <div className="trade-head">
-        <strong>Market trade</strong>
-        <span className="field-label">One market order, funded from Privacy Pools when you confirm</span>
+        <strong>{connecting ? 'Connect to Lighter' : 'New account'}</strong>
+        <span className="field-label">
+          {connecting
+            ? 'The Railgun balance is above. Truly funds a new address and connects it. You trade on Lighter.'
+            : 'A fresh address, funded from Railgun. You trade it on Lighter.'}
+        </span>
       </div>
 
-      <div className="market-group">
-        <input placeholder="Search markets" aria-label="Search markets" value={filter} disabled={disabled || markets === null} onChange={(e) => setFilter(e.target.value)} />
-        {markets === null ? (
-          <div className="skeleton" role="status">{error ? <span className="error">{error}</span> : 'Loading markets'}</div>
-        ) : (
-          <select
-            aria-label="Market"
-            value={marketId ?? ''}
-            disabled={disabled}
-            onChange={(e) => setMarketId(Number(e.target.value))}
-          >
-            {visible.map((m) => (
-              <option key={m.marketId} value={m.marketId} disabled={!m.tradable}>
-                {m.symbol}-PERP · {price(m.markPrice > 0 ? m.markPrice : m.lastPrice)}
-                {m.tradable ? ` · ${m.maxLeverage}x` : ` · ${m.unavailableReason}`}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-      {market && (
-        <p className="field-label">
-          24h {Number.isFinite(market.dailyChangePct) ? `${market.dailyChangePct.toFixed(2)}%` : '—'} · max {market.maxLeverage}× · min {market.minQuoteAmount} USDC notional
-        </p>
-      )}
-
-      <div className="sides" role="group" aria-label="Direction">
-        <button className={direction === 'long' ? 'long active' : 'long'} disabled={disabled} aria-pressed={direction === 'long'} onClick={() => setDirection('long')}>
-          LONG
-        </button>
-        <button className={direction === 'short' ? 'short active' : 'short'} disabled={disabled} aria-pressed={direction === 'short'} onClick={() => setDirection('short')}>
-          SHORT
-        </button>
-      </div>
-
-      <label className="field-label" htmlFor="margin">Margin</label>
+      <label className="field-label" htmlFor="margin">Deposit</label>
       <div className={`affix${marginInvalid ? ' invalid' : ''}`}>
         <input
           id="margin"
@@ -167,62 +122,41 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
       {marginInvalid ? (
         <p className="error">Enter a USDC amount, up to 6 decimals.</p>
       ) : (
-        <p className="field-label">Withdrawn from Privacy Pools. Lighter credits at least 5 USDC.</p>
+        <p className="field-label">
+          Unshielded from Railgun to the new account. The sender pays the unshield gas in ETH. Lighter credits at least 5 USDC.
+        </p>
       )}
 
-      <div className="lev-label">
-        <label className="field-label" htmlFor="leverage">Leverage</label>
-        <span>{leverage}×</span>
-      </div>
-      <input
-        id="leverage"
-        type="range"
-        min={1}
-        max={market?.maxLeverage ?? 1}
-        step={1}
-        value={Math.min(leverage, market?.maxLeverage ?? leverage)}
-        disabled={disabled || !market}
-        onChange={(e) => setLeverage(Number(e.target.value))}
-      />
-
       <div className="ticket">
-        <span className="ticket-kicker">Notional</span>
-        <span className="ticket-figure">{money(notional)}</span>
-        <span className="ticket-meta">
-          Notional = {marginNum.toFixed(2)} × {leverage} = {money(notional)}
-          {ref > 0 && ` · ≈ ${(notional / ref).toPrecision(4)} ${market?.symbol ?? ''}`}
-        </span>
+        <span className="ticket-kicker">Deposit</span>
+        <span className="ticket-figure">{money(marginNum)}</span>
+        <span className="ticket-meta">Lands on a new Lighter account. The order is placed on Lighter, not here.</span>
       </div>
 
       {quote && <OrderSummary quote={quote} />}
 
-      {/* Stated BEFORE confirming, not discovered during the wait.
-          stepOrder re-reads the book and the credited balance, so the order
-          is sized correctly either way -- but it is sized at the price when
-          funding lands, which is not the price on screen now. Saying so is
-          the difference between a slow trade and a surprising one. */}
       {quote && (
         <p className={funding?.fast ? 'field-label' : 'warn'}>
           {funding === null
             ? 'Checking how fast Lighter will credit this…'
             : funding.fast
-              ? 'Lighter’s fast bridge has capacity, so funding should credit in moments. Your order is priced when it lands.'
-              : 'Lighter’s fast bridge is at zero capacity, so funding takes about 15–20 minutes. Your order is placed at the market price when it lands — not the price shown here.'}
+              ? 'Lighter’s fast bridge has capacity, so the deposit should credit in moments. Then open Lighter and trade.'
+              : 'Lighter’s fast bridge is at zero capacity, so the deposit takes about 15–20 minutes. Then open Lighter and trade.'}
         </p>
       )}
 
       {quote ? (
-        <button className={direction} disabled={disabled} onClick={() => void confirm()}>
-          {working === 'open' ? 'Starting…' : `Confirm ${direction.toUpperCase()} ${quote.symbol}`}
+        <button disabled={disabled} onClick={() => void confirm()}>
+          {working === 'open' ? 'Connecting…' : connecting ? 'Fund and connect' : 'Create account and deposit'}
         </button>
       ) : (
-        <button disabled={disabled || !market?.tradable || !marginUnits} onClick={() => void review()}>
-          {working === 'quote' ? 'Checking spendable balance…' : 'Review order'}
+        <button disabled={disabled || !marginUnits || !canReview} onClick={() => void review()}>
+          {balance === null && balanceLoading ? 'Reading shielded balance…' : working === 'quote' ? 'Reviewing…' : connecting ? 'Review connection' : 'Review deposit'}
         </button>
       )}
       {quote && (
         <button className="link" disabled={disabled} onClick={() => setQuote(null)}>
-          Edit order
+          Edit amount
         </button>
       )}
 
@@ -231,22 +165,74 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
   );
 }
 
+function BalanceStrip({
+  balance,
+  error,
+  loading,
+  onRefresh,
+}: {
+  balance: ShieldedBalance | null;
+  error: string | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const railgun = balance && railgunReady(balance.railgun) ? balance.railgun : null;
+  const railgunError = balance && !railgun && 'error' in balance.railgun ? balance.railgun.error : null;
+  return (
+    <div className="balances">
+      {balance === null && loading ? (
+        <div className="balance-card skeleton" role="status">Reading Railgun</div>
+      ) : balance === null ? (
+        <div className="balance-missing">
+          <p className="error">{error ?? 'Shielded balance has not been read yet.'}</p>
+          <button className="secondary" onClick={onRefresh}>Read balance</button>
+        </div>
+      ) : (
+        <>
+          <div className="balance-card active" aria-current="true">
+            <span className="name">Railgun</span>
+            <span className="amount">{railgun ? usdc(railgun.spendableUnits) : '—'}</span>
+            <span className="field-label">
+              {railgun
+                ? Number(railgun.pendingUnits) > 0
+                  ? `${usdc(railgun.pendingUnits)} still syncing`
+                  : 'Spendable USDC'
+                : 'Spendable USDC'}
+            </span>
+          </div>
+          {railgunError && <p className="error">{railgunError}</p>}
+          <div className="balance-meta">
+            <span className="field-label">{readLabel(balance.fetchedAt)}. Checked again only if the trade fails.</span>
+            <button className="link" disabled={loading} onClick={onRefresh}>
+              {loading ? 'Reading…' : 'Refresh'}
+            </button>
+          </div>
+          {error && <p className="error balance-error">{error}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function readLabel(at: number): string {
+  const mins = Math.max(0, Math.floor((Date.now() - at) / 60_000));
+  if (mins < 1) return 'Read just now';
+  return `Read ${mins} minute${mins === 1 ? '' : 's'} ago`;
+}
+
 function OrderSummary({ quote }: { quote: TradeQuote }) {
   const pending = Number(quote.pendingAspUnits) > 0 ? ` · ${usdc(quote.pendingAspUnits)} awaiting ASP` : '';
   return (
     <div className="summary">
-      <p className="summary-lead">
-        {quote.direction.toUpperCase()} {quote.symbol}-PERP · {quote.leverage}× · market
-      </p>
-      <div className="row"><span>Size</span><span>{quote.estimatedSize} {quote.symbol} at ~{price(quote.referencePrice)}</span></div>
-      <div className="row"><span>Margin</span><span>{usdc(quote.marginUnits)} USDC from {quote.fundingSource}</span></div>
-      <div className="row"><span>Withdrawal</span><span>{usdc(quote.grossWithdrawalUnits)} gross, ~{usdc(quote.expectedNetUnits)} to Lighter</span></div>
-      <div className="row"><span>Fees</span><span>~{usdc(quote.relayerFeeEstimateUnits)} relayer · {quote.takerFeePct}% Lighter · ≤{usdc(quote.reshieldGasReserveUnits)} to exit</span></div>
+      <p className="summary-lead">New Lighter account · no order from Truly</p>
+      <div className="row"><span>Deposit</span><span>{usdc(quote.marginUnits)} USDC from {quote.fundingSource}</span></div>
+      <div className="row"><span>Sent</span><span>{usdc(quote.grossWithdrawalUnits)} gross, ~{usdc(quote.expectedNetUnits)} to the account</span></div>
+      <div className="row"><span>Fee</span><span>~{usdc(quote.relayerFeeEstimateUnits)} from the shielded balance</span></div>
       <div className="row"><span>Spendable</span><span>{usdc(quote.spendableUnits)} USDC{pending}</span></div>
       {quote.warnings.map((w) => (
         <p key={w} className="hint">{w}</p>
       ))}
-      <p className="hint">Sized from margin less a 2% buffer. A fresh owner and a fresh Lighter account, used once.</p>
+      <p className="hint">A new owner and a new Lighter account. Open Lighter after it credits and trade there.</p>
     </div>
   );
 }
@@ -258,23 +244,52 @@ function waitedMinutes(since: number): string {
   return `${mins} minute${mins === 1 ? '' : 's'}`;
 }
 
-const STEPS: { label: string; states: SessionState[] }[] = [
-  { label: 'Withdraw from Privacy Pools', states: ['funding', 'funding-failed'] },
+const ORDER_STEPS: { label: string; states: SessionState[] }[] = [
+  { label: 'Unshield from Railgun', states: ['funding', 'funding-failed'] },
   { label: 'Lighter credits the deposit', states: ['awaiting-deposit', 'deposit-problem'] },
   { label: 'Authorise trading key', states: ['registering-key'] },
   { label: 'Set leverage', states: ['setting-leverage'] },
   { label: 'Market order executed', states: ['submitting-order', 'order-uncertain', 'order-failed'] },
   { label: 'Position open', states: ['open', 'closing', 'close-failed'] },
-  { label: 'Closed', states: ['closed'] },
+  { label: 'Closed', states: ['closed', 'withdrawing', 'withdraw-failed', 'exited', 'reshielding', 'complete'] },
 ];
 
-export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: () => Promise<void> }) {
+const DEPOSIT_STEPS: { label: string; states: SessionState[] }[] = [
+  { label: 'Withdraw from the shielded balance', states: ['funding', 'funding-failed'] },
+  { label: 'Lighter credits the deposit', states: ['awaiting-deposit', 'deposit-problem'] },
+  { label: 'Trade on Lighter', states: ['funded'] },
+  { label: 'Withdraw from Lighter', states: ['withdrawing', 'withdraw-failed'] },
+  { label: 'Shield back', states: ['exited', 'reshielding', 'complete', 'closed'] },
+];
+
+export function SessionPanel({
+  busy,
+  onChanged,
+  balance,
+  balanceLoading,
+  onRefreshBalance,
+}: {
+  busy: boolean;
+  onChanged: () => Promise<void>;
+  balance: ShieldedBalance | null;
+  balanceLoading: boolean;
+  onRefreshBalance: () => Promise<void>;
+}) {
   const [view, setView] = useState<SessionView | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const state = view?.session.state;
   const active = state ? ACTIVE_SESSION_STATES.includes(state) : false;
+  const failureKey =
+    view && ['funding-failed', 'deposit-problem', 'order-failed', 'close-failed', 'withdraw-failed'].includes(view.session.state)
+      ? `${view.session.id}:${view.session.state}`
+      : null;
+
+  useEffect(() => {
+    if (!failureKey) return;
+    void onRefreshBalance();
+  }, [failureKey, onRefreshBalance]);
 
   const poll = useCallback(async () => {
     try {
@@ -307,7 +322,9 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
 
   if (!view) return <div className="skeleton tall" role="status">Loading trade</div>;
   const s = view.session;
-  const current = Math.max(0, STEPS.findIndex((st) => st.states.includes(s.state)));
+  const deposit = s.quote.orderType === 'deposit';
+  const steps = deposit ? DEPOSIT_STEPS : ORDER_STEPS;
+  const current = Math.max(0, steps.findIndex((st) => st.states.includes(s.state)));
   const failed = ['funding-failed', 'deposit-problem', 'order-failed', 'close-failed'].includes(s.state);
   const ex = s.order?.execution;
   const pos = view.position;
@@ -326,7 +343,7 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
     <div className="trade">
       <div className="ticket">
         <span className="ticket-kicker">
-          {s.direction.toUpperCase()} {s.symbol}-PERP · {s.leverage}× · {usdc(s.marginUnits)} USDC
+          {deposit ? `New account · ${usdc(s.marginUnits)} USDC` : `${s.direction.toUpperCase()} ${s.symbol}-PERP · ${s.leverage}× · ${usdc(s.marginUnits)} USDC`}
         </span>
         {!failed && (
           <>
@@ -337,10 +354,11 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
       </div>
 
       <div className="meter" aria-hidden>
-        <span className={failed ? 'failed' : ''} style={{ width: `${((current + 1) / STEPS.length) * 100}%` }} />
+        <span className={failed ? 'failed' : ''} style={{ width: `${((current + 1) / steps.length) * 100}%` }} />
       </div>
       <p className="field-label">
-        {current + 1} of {STEPS.length} · {STEPS[current]?.label}
+        {current + 1} of {steps.length} ·{' '}
+        {steps[current]?.label}
       </p>
 
       {showNarrative && (
@@ -353,7 +371,7 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
           {s.state === 'awaiting-deposit' && (
             <p className="field-label">
               Waiting {waitedMinutes(s.updatedAt)} · Lighter usually credits in 15–20 minutes while
-              its fast bridge has no capacity. Your order is priced when it lands.
+              its fast bridge has no capacity.
             </p>
           )}
           {s.blocked === 'locked' && <p className="error">Unlock Truly to continue. This step signs with the trade&apos;s keys.</p>}
@@ -363,6 +381,17 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
             </p>
           )}
           {s.error?.code === 'transient' && <p className="hint">Last check failed, retrying: {s.error.message}</p>}
+          {failed && (
+            <p className="field-label">
+              {balanceLoading
+                ? 'Checking the shielded balance…'
+                : balance
+                  ? `Shielded now: ${
+                      railgunReady(balance.railgun) ? usdc(balance.railgun.spendableUnits) : '—'
+                    } Railgun`
+                  : 'Could not re-read the shielded balance.'}
+            </p>
+          )}
         </div>
       )}
 
@@ -390,6 +419,29 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
       )}
       {view.liveError && <p className="hint">Could not read the live position: {view.liveError}</p>}
 
+      {s.state === 'funded' && (
+        <div className="summary">
+          <p className="summary-lead">Trade this account on Lighter</p>
+          <div className="row"><span>Credited</span><span>{money(s.creditedUsd)}</span></div>
+          <div className="row"><span>Owner</span><code>{view.ownerAddress}</code></div>
+          <p className="hint">Connect Truly on Lighter. This extension will not place or close an order.</p>
+          <button disabled={disabled} onClick={() => void act('shield', () => send({ kind: 'shieldFunds' }, SLOW_TIMEOUT_MS))}>
+            {working === 'shield' ? 'Starting shield…' : `Shield back into ${s.quote.fundingSource}`}
+          </button>
+          <p className="hint">
+            After you flatten on Lighter, this withdraws the USDC to this owner and shields it
+            back into {s.quote.fundingSource}. An open position is left untouched.
+          </p>
+        </div>
+      )}
+      {deposit && (s.state === 'reshielding' || s.state === 'complete') && (
+        <p className="hint">
+          {s.state === 'complete'
+            ? `Shielded back into ${s.quote.fundingSource}. This account can be retired.`
+            : `Shielding the USDC back into ${s.quote.fundingSource}. Leave this open until it confirms.`}
+        </p>
+      )}
+
       {(s.state === 'open' || s.state === 'close-failed') && (
         <button className="short" disabled={disabled} onClick={() => void act('close', () => send({ kind: 'closePosition' }, SLOW_TIMEOUT_MS))}>
           {working === 'close' ? 'Closing…' : 'CLOSE POSITION'}
@@ -397,7 +449,7 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
       )}
       {s.state === 'funding-failed' && (
         <button disabled={disabled} onClick={() => void act('fund', () => send({ kind: 'retryFunding' }))}>
-          Retry funding from Privacy Pools
+          Retry funding from {s.quote.fundingSource}
         </button>
       )}
       {s.state === 'order-failed' && (
@@ -411,7 +463,12 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
           </button>
         </>
       )}
-      {(s.state === 'order-uncertain' || s.state === 'submitting-order' || s.state === 'closing') && (
+      {s.state === 'withdraw-failed' && (
+        <button disabled={disabled} onClick={() => void act('exit', () => send({ kind: 'retryLighterExit' }, SLOW_TIMEOUT_MS))}>
+          Retry Lighter withdrawal
+        </button>
+      )}
+      {(s.state === 'order-uncertain' || s.state === 'submitting-order' || s.state === 'closing' || s.state === 'withdrawing') && (
         <button className="secondary" disabled={disabled} onClick={() => void act('check', () => send({ kind: 'advanceTrade' }, SLOW_TIMEOUT_MS))}>
           Check order status on Lighter
         </button>
@@ -426,6 +483,7 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
         <div className="row"><span>Lighter deposit</span><code>{view.depositStatus ?? '—'}</code></div>
         <div className="row"><span>Open order</span><code>{s.order ? `client ${s.order.clientOrderIndex} · tx ${s.order.tx.txHash.slice(0, 16)}… · ${s.order.tx.status}` : '—'}</code></div>
         <div className="row"><span>Close order</span><code>{s.close ? `client ${s.close.clientOrderIndex} · ${s.close.execution?.lighterStatus ?? s.close.tx.status}` : '—'}</code></div>
+        <div className="row"><span>Lighter withdrawal</span><code>{s.exitTx ? `${s.exitTx.amountUnits} units · ${s.exitTx.status}` : '—'}</code></div>
         <div className="row"><span>Re-shield</span><code>{view.reshieldUserOpHash ? `${view.reshieldStatus} · ${view.reshieldUserOpHash}` : '—'}</code></div>
         {(s.failedOrders?.length ?? 0) > 0 && <div className="row"><span>Failed attempts</span><code>{s.failedOrders!.length}</code></div>}
       </details>
