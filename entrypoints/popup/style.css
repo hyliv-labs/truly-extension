@@ -520,3 +520,17 @@ input[type='range'] {
 .connect-hint strong {
   color: #6fe3c4;
 }
+
+/* A fact the user should read BEFORE confirming, not an error. Warm rather
+   than red: the trade is fine, it is the timing that needs saying. */
+.warn {
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #6b5520;
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: #241f11;
+  color: #e8d7a8;
+  font-size: 12px;
+  line-height: 1.5;
+}
