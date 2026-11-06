@@ -97,6 +97,20 @@ export const ANON_RPC_GATEWAYS: string[] = (
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
 
+/**
+ * How long to wait for one anonymised read, in ms.
+ *
+ * Bounded on purpose. If a KPS gateway is unreachable the WebRTC dial does
+ * not fail — it simply never answers, and the whole extension waits forever
+ * on a spinner. Observed directly: with no gateway the worker errors in under
+ * two seconds; with an unreachable one it sat silent for five minutes and
+ * made no network request at all.
+ *
+ * Generous enough for a real Tor bootstrap, which adopters.json5 warns about,
+ * but finite so the failure is reportable.
+ */
+export const ANON_RPC_TIMEOUT_MS = Number(env('WXT_ANON_RPC_TIMEOUT_MS') ?? 120_000);
+
 /** Destination the anon-client proxies reads to. */
 export const ARBITRUM_RPC_URL =
   env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';

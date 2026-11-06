@@ -10,6 +10,7 @@ import { AnonRpcWorker } from '@anon-rpc/browser-extension-harness';
 import type { RpcProvider } from '@anon-rpc/browser-harness';
 import {
   ANON_RPC_GATEWAYS,
+  ANON_RPC_TIMEOUT_MS,
   ANON_RPC_SPECIFIER,
   ARBITRUM_RPC_URL,
   BOOTSTRAP_RPC_URL,
@@ -120,11 +121,28 @@ export async function anonRpcCall(
     );
   }
 
-  const response = await active.fetch(ARBITRUM_RPC_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  });
+  // A dead gateway does not refuse the dial, it just never answers. Without a
+  // deadline the read never settles and every caller waits forever.
+  let response: Response;
+  try {
+    response = await active.fetch(ARBITRUM_RPC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      signal: AbortSignal.timeout(ANON_RPC_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const aborted =
+      error instanceof DOMException &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError');
+    if (aborted) {
+      throw new AnonRpcUnavailable(
+        `No response from the anon-rpc gateway within ${Math.round(ANON_RPC_TIMEOUT_MS / 1000)}s. ` +
+          'The configured KPS gateway may be down or saturated — the published one is a demonstration gateway with no availability guarantee. Set WXT_ANON_RPC_GATEWAYS to another.',
+      );
+    }
+    throw new AnonRpcUnavailable(error instanceof Error ? error.message : String(error));
+  }
 
   if (!response.ok) {
     throw new AnonRpcUnavailable(`anon-rpc returned ${response.status}`);
