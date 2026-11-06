@@ -55,6 +55,22 @@ import {
 import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
+import { fetchMarkets } from '@truly/lib/lighter-markets';
+import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
+import {
+  advanceSession,
+  closePosition,
+  getSession,
+  getSessionView,
+  openTradeSession,
+  quoteTrade,
+  retryFunding,
+  retryOrder,
+  runFunding,
+} from '@truly/lib/trade-session';
+import { ACTIVE_SESSION_STATES } from '@truly/lib/session-types';
+import type { TradeRequest } from '@truly/lib/trade-plan';
+import type { TradeRequestWire } from '@truly/lib/messages';
 
 const AUTO_LOCK_ALARM = 'truly:auto-lock';
 const AUTO_LOCK_MINUTES = 15;
@@ -66,6 +82,13 @@ const AUTO_LOCK_MINUTES = 15;
  */
 const DEPOSIT_ALARM = 'truly:deposit-poll';
 const DEPOSIT_POLL_MINUTES = 1;
+
+/**
+ * Drives an in-extension trade session through the steps that wait on the
+ * outside world: deposit credit, key registration, order execution. The popup
+ * advances it faster while open; this keeps it moving when it is closed.
+ */
+const SESSION_ALARM = 'truly:session-tick';
 
 export default defineBackground({
   /**
@@ -106,11 +129,14 @@ export default defineBackground({
     // the user reopening the popup.
     chrome.runtime.onStartup.addListener(() => {
       void resumeDepositWatch();
+      void armSessionTick();
     });
+    void armSessionTick();
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
       if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
+      if (alarm.name === SESSION_ALARM) void tickSession();
     });
 
     chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
@@ -188,6 +214,7 @@ async function handle(
       }
       await endTrade();
       await chrome.alarms.clear(DEPOSIT_ALARM);
+      await chrome.alarms.clear(SESSION_ALARM);
       await announceTradeEnded();
       return null;
     }
@@ -200,6 +227,7 @@ async function handle(
       // there is no trade: that tick would be a network call tying this owner
       // to a moment after the trade closed.
       await chrome.alarms.clear(DEPOSIT_ALARM);
+      await chrome.alarms.clear(SESSION_ALARM);
       await announceTradeEnded();
       return null;
 
@@ -353,6 +381,62 @@ async function handle(
       await settle(message.id, message.approved);
       return null;
 
+    case 'markets':
+      return fetchMarkets();
+
+    case 'quoteTrade': {
+      const quote = await quoteTrade(toTradeRequest(message.trade));
+      await touchAutoLock();
+      return quote;
+    }
+
+    case 'openTrade': {
+      const session = await openTradeSession(toTradeRequest(message.trade));
+      await touchAutoLock();
+      await broadcastProviderEvent('accountsChanged', [[(await getActiveTrade())!.ownerAddress]]);
+      await armSessionTick();
+      // Funding moves money and takes minutes; the record, not this reply,
+      // is what the popup follows.
+      void runFunding().catch((error: unknown) => console.error('[truly] funding failed', error));
+      return session;
+    }
+
+    case 'tradeSession':
+      return getSessionView();
+
+    case 'advanceTrade':
+      await advanceSession();
+      return getSessionView();
+
+    case 'retryFunding':
+      await touchAutoLock();
+      void retryFunding().catch((error: unknown) => console.error('[truly] funding retry failed', error));
+      return null;
+
+    case 'retryOrder':
+      await retryOrder();
+      await touchAutoLock();
+      await armSessionTick();
+      return getSessionView();
+
+    case 'closePosition':
+      await closePosition();
+      await touchAutoLock();
+      await armSessionTick();
+      return getSessionView();
+
+    case 'lighterSignerSelfTest': {
+      // A throwaway key and a fictitious account: nothing here is ever sent.
+      const started = Date.now();
+      const key = await generateApiKey();
+      const tx = await signMarketOrder(
+        { privateKey: key.privateKey, apiKeyIndex: 4, accountIndex: 1 },
+        { marketIndex: 0, clientOrderIndex: 1, baseAmount: 1, price: 1, isAsk: false, reduceOnly: false },
+        0,
+      );
+      return { txType: tx.txType, txHash: tx.txHash, loadMs: Date.now() - started };
+    }
+
     default: {
       const unreachable: never = message;
       throw new Error(`unknown request: ${JSON.stringify(unreachable)}`);
@@ -377,6 +461,8 @@ async function touchAutoLock(): Promise<void> {
 async function resumeDepositWatch(): Promise<void> {
   const trade = await getActiveTrade();
   if (!trade?.intentAddress || trade.accountIndex !== undefined) return;
+  // A market-trade session polls the deposit itself, on its own alarm.
+  if (trade.session) return;
 
   await chrome.alarms.create(DEPOSIT_ALARM, {
     periodInMinutes: DEPOSIT_POLL_MINUTES,
@@ -418,6 +504,36 @@ async function pollDeposit(): Promise<void> {
       return;
     }
     console.warn('[truly] deposit poll failed, will retry', error);
+  }
+}
+
+function toTradeRequest(wire: TradeRequestWire): TradeRequest {
+  if (!/^\d+$/.test(wire.marginUnits ?? '')) throw new Error('Margin must be a whole number of USDC units.');
+  return {
+    marketId: Number(wire.marketId),
+    direction: wire.direction,
+    marginUnits: BigInt(wire.marginUnits),
+    leverage: Number(wire.leverage),
+  };
+}
+
+/** Tick while a session waits on the outside world; stop once it waits on the user. */
+async function armSessionTick(): Promise<void> {
+  const session = await getSession();
+  if (session && ACTIVE_SESSION_STATES.includes(session.state)) {
+    await chrome.alarms.create(SESSION_ALARM, { periodInMinutes: 1 });
+  } else {
+    await chrome.alarms.clear(SESSION_ALARM);
+  }
+}
+
+async function tickSession(): Promise<void> {
+  try {
+    await advanceSession();
+  } catch (error) {
+    console.warn('[truly] session tick failed', error);
+  } finally {
+    await armSessionTick();
   }
 }
 

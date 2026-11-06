@@ -28,6 +28,7 @@
 import type { Address } from 'viem';
 import { findSpendableNotes, type DiscoveredNote } from './discovery';
 import { withdrawFromPool, type WithdrawResult } from './withdraw';
+import { getAssociationSet, isLabelApproved } from './asp';
 import { authoritativeScope } from './pool';
 import { requireUnlockedMnemonic } from './vault';
 import { getActiveTrade, updateActiveTrade } from './trade';
@@ -123,6 +124,33 @@ function fmt(units: bigint): string {
   return `${(Number(units) / 1_000_000).toFixed(2)} USDC`;
 }
 
+export interface NotesByApproval {
+  /** In the ASP's approved set: a proof can spend these. */
+  readonly approved: DiscoveredNote[];
+  /** Deposited but not yet approved. Real money, not spendable yet. */
+  readonly pending: DiscoveredNote[];
+}
+
+/** Split notes by ASP approval. A pending deposit must never be planned against. */
+export async function splitByAspApproval(
+  notes: readonly DiscoveredNote[],
+  scope: bigint,
+): Promise<NotesByApproval> {
+  if (notes.length === 0) return { approved: [], pending: [] };
+  const { set } = await getAssociationSet(scope);
+  const approved: DiscoveredNote[] = [];
+  const pending: DiscoveredNote[] = [];
+  for (const note of notes) (isLabelApproved(set, note.label) ? approved : pending).push(note);
+  return { approved, pending };
+}
+
+/** Scan the pool and split by approval. A full scan over anon-rpc; not cheap. */
+export async function scanNotesByApproval(): Promise<NotesByApproval> {
+  const mnemonic = await requireUnlockedMnemonic();
+  const scope = await authoritativeScope();
+  return splitByAspApproval(await findSpendableNotes(mnemonic, scope), scope);
+}
+
 type PendingRecord = NonNullable<
   Awaited<ReturnType<typeof getActiveTrade>> extends infer T
     ? T extends { withdrawal?: infer W }
@@ -190,6 +218,16 @@ async function resolvePending(record: PendingRecord): Promise<'landed' | 'did-no
   }
 }
 
+/**
+ * Settle a pending funding record against the chain without withdrawing.
+ * For a resumed session: it decides whether funding happened, never retries it.
+ */
+export async function resolvePendingWithdrawal(): Promise<'landed' | 'did-not-land' | 'none'> {
+  const trade = await getActiveTrade();
+  if (trade?.withdrawal?.status !== 'pending') return 'none';
+  return resolvePending(trade.withdrawal);
+}
+
 export interface UnshieldResult extends WithdrawResult {
   readonly recipient: Address;
   readonly expectedNetUnits: bigint;
@@ -240,7 +278,13 @@ export async function unshieldForTrade(
   const scope = await authoritativeScope();
 
   const notes = await findSpendableNotes(mnemonic, scope);
-  const plan = planUnshield(notes, desiredUnits);
+  const { approved, pending } = await splitByAspApproval(notes, scope);
+  if (approved.length === 0 && pending.length > 0) {
+    throw new UnshieldError(
+      'Every note in the pool is still waiting for ASP approval, so none can be withdrawn yet. Approvals are published in batches.',
+    );
+  }
+  const plan = planUnshield(approved, desiredUnits);
 
   // WRITTEN BEFORE THE QUOTE, not after the receipt. This is the orchestrator's
   // own rule — persist that something irreversible is about to happen before

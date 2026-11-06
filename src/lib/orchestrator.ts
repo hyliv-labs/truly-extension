@@ -144,7 +144,7 @@ function describe(advice: ExitAdvice): string {
     case 'not-funded':
       return 'Lighter has not credited the deposit yet.';
     case 'has-positions':
-      return `Position open on Lighter. Close it there to end the trade.`;
+      return `Position open on Lighter. Close it (in Truly or on Lighter) to end the trade.`;
     case 'withdraw-fast':
       // Truly cannot see resting orders, so it says so rather than implying
       // the account is clear.

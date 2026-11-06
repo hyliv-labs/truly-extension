@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Onboarding } from './Onboarding';
+import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
   type AnonRpcStatus,
@@ -113,16 +114,20 @@ export function App() {
               : 'No active trade. Lighter cannot connect.'}
           </p>
 
-          {phase && (
+          {/* A market-trade session reports its own progress; the exit phases
+              (withdraw from Lighter, re-shield) apply again once it is closed. */}
+          {phase && (!status.activeTrade?.session || status.activeTrade.session.state === 'closed') && (
             <div className="phase">
               <strong>{phase.phase.replace(/-/g, ' ')}</strong>
               <p>{phase.detail}</p>
             </div>
           )}
 
+          {status.activeTrade?.session && <SessionPanel busy={busy} onChanged={refresh} />}
+
           {status.activeTrade && (
             <>
-              {status.activeTrade.intentAddress ? (
+              {status.activeTrade.session ? null : status.activeTrade.intentAddress ? (
                 <>
                   <label className="field-label">
                     Deposit address (the relayer sends here)
@@ -142,6 +147,7 @@ export function App() {
                   has issued an address, because the recipient is committed to
                   inside the withdrawal proof and cannot be changed after. */}
               {status.activeTrade.intentAddress &&
+                !status.activeTrade.session &&
                 (status.activeTrade.withdrawal?.status === 'confirmed' ? (
                   <p className="field-label">
                     Funded from the pool —{' '}
@@ -249,12 +255,17 @@ export function App() {
               </button>
             </>
           ) : (
-            <button
-              disabled={busy}
-              onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
-            >
-              Start trade
-            </button>
+            <>
+              <TradeForm busy={busy} onOpened={refresh} />
+              {/* The original flow: connect Lighter's own site to a fresh owner. */}
+              <button
+                className="link"
+                disabled={busy}
+                onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
+              >
+                Start a manual trade on Lighter&apos;s site instead
+              </button>
+            </>
           )}
 
           {/* A full pool scan, so it is asked for rather than polled. Shown

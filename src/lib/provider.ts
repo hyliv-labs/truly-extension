@@ -170,7 +170,7 @@ async function refuseWithoutTrade(method: string): Promise<unknown> {
   }
   throw rpcError(
     4100,
-    'Truly has no active trade. Open Truly and press "Start trade", then connect again.',
+    'Truly has no active trade. Open Truly and start one (a market trade, or a manual trade on Lighter\'s site), then connect again.',
   );
 }
 

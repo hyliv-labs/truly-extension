@@ -5,6 +5,18 @@ import type { ApprovalRecord } from './approvals';
 import type { ActiveTrade } from './trade';
 import type { RecoveryState } from './recovery';
 import type { TradeStatus } from './orchestrator';
+import type { PerpMarket } from './lighter-markets';
+import type { Direction, TradeQuote } from './trade-plan';
+import type { SessionView } from './trade-session';
+import type { TradeSession } from './session-types';
+
+/** bigint does not survive the message channel, so margin travels as a string. */
+export interface TradeRequestWire {
+  marketId: number;
+  direction: Direction;
+  marginUnits: string;
+  leverage: number;
+}
 
 export type Request =
   // Popup
@@ -44,6 +56,17 @@ export type Request =
   | { kind: 'reshield' }
   | { kind: 'poolBalance' }
   | { kind: 'checkDeposit' }
+  // In-extension market trade (JIT funding)
+  | { kind: 'markets' }
+  | { kind: 'quoteTrade'; trade: TradeRequestWire }
+  | { kind: 'openTrade'; trade: TradeRequestWire }
+  | { kind: 'tradeSession' }
+  | { kind: 'advanceTrade' }
+  | { kind: 'retryFunding' }
+  | { kind: 'retryOrder' }
+  | { kind: 'closePosition' }
+  /** Starts the WASM signer in the worker and signs a throwaway order offline. */
+  | { kind: 'lighterSignerSelfTest' }
   // Orchestrator (E8)
   | { kind: 'tradeStatus' }
   | { kind: 'scanStranded' }
@@ -130,6 +153,15 @@ export interface ResultMap {
     description: string;
     accountIndex: number | null;
   };
+  markets: PerpMarket[];
+  quoteTrade: TradeQuote;
+  openTrade: TradeSession;
+  tradeSession: SessionView | null;
+  advanceTrade: SessionView | null;
+  retryFunding: null;
+  retryOrder: SessionView | null;
+  closePosition: SessionView | null;
+  lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
 }
 
 /**

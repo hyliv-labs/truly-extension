@@ -17,3 +17,6 @@ public/anon-rpc/
 
 # Fetched and hash-verified by scripts/fetch-circuits.ts at build time.
 public/privacy-pools/
+
+# Built and hash-verified by scripts/build-lighter-signer.ts at build time.
+public/lighter/

@@ -39,7 +39,9 @@ export class LighterApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export const LIGHTER_API_BASE = API_BASE;
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, init);
   const text = await response.text();
 
