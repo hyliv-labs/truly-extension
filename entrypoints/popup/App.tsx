@@ -13,6 +13,7 @@ import {
   type VaultStatus,
   SLOW_TIMEOUT_MS,
 } from '@truly/lib/messages';
+import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { ShieldedBalance } from '@truly/lib/shielded-balance';
 
 export function App() {
@@ -51,6 +52,7 @@ export function App() {
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
   const [shieldedLoading, setShieldedLoading] = useState(false);
+  const [sync, setSync] = useState<RailgunSyncStatus | null>(null);
   const [stranded, setStranded] = useState<
     { index: number; address: string; balance: string }[] | null
   >(null);
@@ -72,14 +74,47 @@ export function App() {
   const loadBalance = useCallback(async (refreshBalance = false) => {
     setShieldedLoading(true);
     setShieldedError(null);
+    let refreshNow = refreshBalance;
     try {
-      setShielded(await send({ kind: 'shieldedBalance', refresh: refreshBalance }, SLOW_TIMEOUT_MS));
+      // A first Railgun sync outlasts one request: it takes minutes, and the
+      // popup used to give up at SLOW_TIMEOUT_MS and report a failure while
+      // the sync carried on fine. If the sync is still MOVING, wait on it
+      // again -- joining the read already in flight, never restarting it.
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+          setShielded(await send({ kind: 'shieldedBalance', refresh: refreshNow }, SLOW_TIMEOUT_MS));
+          return;
+        } catch (e) {
+          const sync = await send({ kind: 'railgunSyncStatus' }).catch(() => null);
+          const moving = sync !== null && ['starting', 'syncing', 'scanning-wallet'].includes(sync.phase);
+          if (!moving) throw e;
+          refreshNow = false;
+        }
+      }
+      throw new Error('The Railgun sync is still running. Leave Truly unlocked and check back.');
     } catch (e) {
       setShieldedError(e instanceof Error ? e.message : String(e));
     } finally {
       setShieldedLoading(false);
     }
   }, []);
+
+  // While a read is in flight, show where the sync actually is. Cheap: the
+  // offscreen document answers from a variable.
+  useEffect(() => {
+    if (!shieldedLoading) return;
+    let alive = true;
+    const tick = async () => {
+      const next = await send({ kind: 'railgunSyncStatus' }).catch(() => null);
+      if (alive && next) setSync(next);
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 2_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [shieldedLoading]);
 
   const refreshShielded = useCallback(() => loadBalance(true), [loadBalance]);
   // A failed trade already started a fresh read in the worker. Joining that
@@ -196,6 +231,7 @@ export function App() {
               balanceError={shieldedError}
               balanceLoading={shieldedLoading}
               onRefreshBalance={refreshShielded}
+              sync={sync}
             />
           )}
 

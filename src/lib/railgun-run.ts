@@ -41,6 +41,16 @@ import {
   type TransactionGasDetails,
 } from '@railgun-community/shared-models';
 import { ARBITRUM_RPC_URL, RAILGUN_SCAN_FROM_BLOCK } from './config';
+import { countRailgunRpcError, getRailgunSyncStatus, setRailgunSyncStatus } from './railgun-sync-status';
+import { installRpcThrottle } from './rpc-throttle';
+
+/**
+ * RPC endpoints for the Railgun engine. The engine talks to these DIRECTLY
+ * (ethers, normal headers), not through anon-rpc, so arb1 works here even
+ * though the mixnet hop's dropped content-type rules it out for anon-rpc.
+ * Two providers, so one failing does not stall the sync.
+ */
+const RAILGUN_RPC_URLS = [...new Set(['https://arb1.arbitrum.io/rpc', ARBITRUM_RPC_URL])];
 import { POI, RailgunEngine } from '@railgun-community/engine';
 import { RAILGUN_CIRCUIT_FILES, RAILGUN_CIRCUIT_PUBLIC_DIR } from './railgun-circuit';
 import { RAILGUN_USDC, SELF_BROADCAST_SPEND_BUCKETS } from './railgun';
@@ -76,10 +86,22 @@ let booting: Promise<{ feeBps: bigint }> | null = null;
 let walletId: string | null = null;
 
 export async function runRailgunBalances(mnemonic: string): Promise<RailgunBalanceSnapshot> {
+  try {
+    return await readBalances(mnemonic);
+  } catch (error) {
+    setRailgunSyncStatus({ phase: 'error', error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
+}
+
+async function readBalances(mnemonic: string): Promise<RailgunBalanceSnapshot> {
+  setRailgunSyncStatus({ phase: 'starting', progress: 0, error: undefined });
   const { feeBps } = await ensureEngine();
   const id = await ensureWallet(mnemonic);
   const chain = NETWORK_CONFIG[NETWORK].chain;
+  setRailgunSyncStatus({ phase: 'syncing' });
   await refreshBalances(chain, [id]);
+  setRailgunSyncStatus({ phase: 'scanning-wallet', progress: 0 });
   await awaitWalletScan(id, chain);
 
   const wallet = walletForID(id);
@@ -89,6 +111,7 @@ export async function runRailgunBalances(mnemonic: string): Promise<RailgunBalan
   const address = getRailgunAddress(id);
   if (!address) throw new Error('Railgun wallet has no 0zk address.');
 
+  setRailgunSyncStatus({ phase: 'ready', progress: 1 });
   return {
     spendableUnits: spendable.toString(),
     pendingUnits: pending.toString(),
@@ -273,12 +296,41 @@ async function boot(): Promise<{ feeBps: bigint }> {
   // These read the live engine. Calling them before startRailgunEngine throws
   // "RAILGUN Engine not yet initialized."
   setOnBalanceUpdateCallback(() => undefined);
-  setOnUTXOMerkletreeScanCallback(() => undefined);
+  // Was `() => undefined`: the engine reported progress and we dropped it,
+  // so the popup could only spin, and a STALLED sync looked like a slow one.
+  setOnUTXOMerkletreeScanCallback((event: { scanStatus?: string; progress?: number }) => {
+    const progress = typeof event?.progress === 'number' ? event.progress : 0;
+    if (event?.scanStatus === 'Error' || event?.scanStatus === 'Incomplete') {
+      setRailgunSyncStatus({ error: `Railgun tree scan ${event.scanStatus.toLowerCase()}` });
+    }
+    // A late tree event must not drag the phase back from the wallet scan.
+    const phase = getRailgunSyncStatus().phase;
+    if (phase === 'starting' || phase === 'syncing') {
+      setRailgunSyncStatus({ phase: 'syncing', progress });
+    }
+  });
   getEngine().prover.setSnarkJSGroth16(snarkGroth16());
+  // Before the first RPC call. The first sync's slow-scan phase fires
+  // hundreds of calls at once and public endpoints answer with 429s; without
+  // this the sync sits at 67% for good. See rpc-throttle.ts.
+  installRpcThrottle({
+    hosts: RAILGUN_RPC_URLS.map((url) => new URL(url).host),
+    concurrency: 4,
+    maxRetries: 8,
+    baseDelayMs: 500,
+    maxDelayMs: 10_000,
+    onRateLimited: () => countRailgunRpcError(),
+  });
   const loaded = await loadProvider(
     {
       chainId: 42161,
-      providers: [{ provider: ARBITRUM_RPC_URL, priority: 1, weight: 2, maxLogsPerBatch: 2_000 }],
+      providers: RAILGUN_RPC_URLS.map((provider, index) => ({
+        provider,
+        priority: index + 1,
+        weight: 2,
+        maxLogsPerBatch: 2_000,
+        stallTimeout: 2_500,
+      })),
     },
     NETWORK,
     30_000,

@@ -6,6 +6,7 @@ import type { ActiveTrade } from './trade';
 import type { RecoveryState } from './recovery';
 import type { TradeStatus } from './orchestrator';
 import type { PerpMarket } from './lighter-markets';
+import type { RailgunSyncStatus } from './railgun-sync-status';
 import type { ShieldedBalance } from './shielded-balance';
 import type { Direction, TradeQuote } from './trade-plan';
 import type { SessionView } from './trade-session';
@@ -64,6 +65,8 @@ export type Request =
   | { kind: 'poolBalance' }
   /** Unlock snapshot. `refresh` reads both pools again; otherwise the stored one. */
   | { kind: 'shieldedBalance'; refresh?: boolean }
+  // How far the Railgun sync has got; polled by the popup while it waits.
+  | { kind: 'railgunSyncStatus' }
   | { kind: 'checkDeposit' }
   // In-extension market trade (JIT funding)
   | { kind: 'markets' }
@@ -172,6 +175,7 @@ export interface ResultMap {
   };
   markets: PerpMarket[];
   connectToSite: { ownerAddress: string };
+  railgunSyncStatus: RailgunSyncStatus;
   fundingSpeed: { fastBridgeLimit: string; fast: boolean };
   quoteTrade: TradeQuote;
   openTrade: TradeSession;

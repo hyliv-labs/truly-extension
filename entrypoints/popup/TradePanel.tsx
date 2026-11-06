@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { send, SLOW_TIMEOUT_MS } from '@truly/lib/messages';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 import type { TradeQuote } from '@truly/lib/trade-plan';
+import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
 
@@ -30,6 +31,7 @@ export function TradeForm({
   balanceError,
   balanceLoading,
   onRefreshBalance,
+  sync = null,
 }: {
   busy: boolean;
   connecting?: boolean;
@@ -38,6 +40,7 @@ export function TradeForm({
   balanceError: string | null;
   balanceLoading: boolean;
   onRefreshBalance: () => Promise<void>;
+  sync?: RailgunSyncStatus | null;
 }) {
   const [margin, setMargin] = useState('10');
   const [quote, setQuote] = useState<TradeQuote | null>(null);
@@ -96,6 +99,7 @@ export function TradeForm({
         balance={balance}
         error={balanceError}
         loading={balanceLoading}
+        sync={sync}
         onRefresh={() => void onRefreshBalance()}
       />
       <div className="trade-head">
@@ -169,11 +173,13 @@ function BalanceStrip({
   balance,
   error,
   loading,
+  sync,
   onRefresh,
 }: {
   balance: ShieldedBalance | null;
   error: string | null;
   loading: boolean;
+  sync: RailgunSyncStatus | null;
   onRefresh: () => void;
 }) {
   const railgun = balance && railgunReady(balance.railgun) ? balance.railgun : null;
@@ -181,7 +187,9 @@ function BalanceStrip({
   return (
     <div className="balances">
       {balance === null && loading ? (
-        <div className="balance-card skeleton" role="status">Reading Railgun</div>
+        <div className="balance-card skeleton" role="status">
+          <SyncProgress sync={sync} />
+        </div>
       ) : balance === null ? (
         <div className="balance-missing">
           <p className="error">{error ?? 'Shielded balance has not been read yet.'}</p>
@@ -210,6 +218,54 @@ function BalanceStrip({
           {error && <p className="error balance-error">{error}</p>}
         </>
       )}
+    </div>
+  );
+}
+
+const SYNC_LABEL: Record<RailgunSyncStatus['phase'], string> = {
+  idle: 'Reading Railgun',
+  starting: 'Starting the Railgun engine',
+  syncing: 'Syncing Railgun',
+  'scanning-wallet': 'Finding your notes',
+  ready: 'Railgun ready',
+  error: 'Railgun sync failed',
+};
+
+/**
+ * Progress for the first Railgun sync, which downloads and hashes ~134k
+ * commitments and takes minutes. Only the first time: it is stored, and later
+ * reads fetch only what is new.
+ *
+ * The rate-limit line is the important one. A stalled sync and a slow sync
+ * used to look identical; when the RPC is refusing calls, progress stops while
+ * the error count climbs, and saying so beats an indefinite spinner.
+ */
+function SyncProgress({ sync }: { sync: RailgunSyncStatus | null }) {
+  if (!sync) return <span>Reading Railgun</span>;
+  const pct = Math.round(sync.progress * 100);
+  const mins = sync.startedAt ? Math.floor((Date.now() - sync.startedAt) / 60_000) : 0;
+  const stalled = sync.rpcErrors > 0 && Date.now() - sync.updatedAt > 30_000;
+  return (
+    <div className="sync">
+      <span>
+        {SYNC_LABEL[sync.phase]}
+        {sync.phase === 'syncing' || sync.phase === 'scanning-wallet' ? ` · ${pct}%` : ''}
+        {mins > 0 ? ` · ${mins} min` : ''}
+      </span>
+      {(sync.phase === 'syncing' || sync.phase === 'scanning-wallet') && (
+        <div className="meter" aria-hidden>
+          <span style={{ width: `${Math.max(3, pct)}%` }} />
+        </div>
+      )}
+      {sync.phase === 'syncing' && (
+        <span className="field-label">First time only — later reads take seconds.</span>
+      )}
+      {stalled && (
+        <span className="error">
+          The RPC is refusing requests ({sync.rpcErrors} failed). Progress will resume when it recovers.
+        </span>
+      )}
+      {sync.phase === 'error' && sync.error && <span className="error">{sync.error}</span>}
     </div>
   );
 }

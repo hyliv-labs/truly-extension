@@ -45,6 +45,7 @@ import { readUserOperationReceipt } from './reshield';
 import { discardReshield, getActiveTrade, updateActiveTrade, type ActiveTrade } from './trade';
 import { ownerAt, requireUnlockedMnemonic } from './vault';
 import type { PopulatedRailgunTx, RailgunBalanceSnapshot } from './railgun-run';
+import type { RailgunSyncStatus } from './railgun-sync-status';
 
 export interface RailgunUsdcBalances {
   readonly spendableUnits: bigint;
@@ -425,6 +426,14 @@ async function broadcast(raw: Hex): Promise<void> {
     if (/already known|nonce too low|replacement transaction underpriced/i.test(message)) return;
     throw error;
   });
+}
+
+/**
+ * Where the Railgun sync has got to. Cheap: the offscreen document answers
+ * from a variable, without the SDK and without waiting on the sync.
+ */
+export async function railgunSyncStatus(): Promise<RailgunSyncStatus> {
+  return ask<RailgunSyncStatus>({ kind: 'railgunSyncStatus' });
 }
 
 async function ask<T>(message: Record<string, unknown>): Promise<T> {

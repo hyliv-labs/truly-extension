@@ -73,6 +73,7 @@ import {
   shieldFundedAccount,
 } from '@truly/lib/trade-session';
 import { forgetShieldedBalance, loadShieldedBalance } from '@truly/lib/shielded-balance';
+import { railgunSyncStatus } from '@truly/lib/railgun-client';
 import { ACTIVE_SESSION_STATES } from '@truly/lib/session-types';
 import type { TradeRequest } from '@truly/lib/trade-plan';
 import type { TradeRequestWire } from '@truly/lib/messages';
@@ -380,6 +381,9 @@ async function handle(
 
     case 'shieldedBalance':
       return loadShieldedBalance(message.refresh === true);
+
+    case 'railgunSyncStatus':
+      return railgunSyncStatus();
 
     case 'poolBalance': {
       // A full pool scan, so not cheap: the popup asks for it, rather than

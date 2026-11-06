@@ -635,3 +635,25 @@ input[type='range'] {
 .connect-steps strong {
   color: #6fe3c4;
 }
+
+/* First Railgun sync: label, meter, and the rate-limit warning when stalled. */
+.sync {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.sync .meter {
+  height: 4px;
+  border-radius: 2px;
+  background: #1c2a27;
+  overflow: hidden;
+}
+
+.sync .meter span {
+  display: block;
+  height: 100%;
+  background: #6fe3c4;
+  transition: width 0.4s ease;
+}

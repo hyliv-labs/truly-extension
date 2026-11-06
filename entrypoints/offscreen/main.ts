@@ -18,6 +18,8 @@ import '@truly/shims/railgun-browser';
 let hostMounted = false;
 let hostError: string | null = null;
 
+import { countRailgunRpcError, getRailgunSyncStatus } from '@truly/lib/railgun-sync-status';
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target !== 'truly:offscreen') return false;
 
@@ -31,6 +33,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 void bootHost();
+
+// The Railgun engine's RPC failures surface as unhandled rejections. Counting
+// them is how a rate-limited stall shows up: progress stops moving while this
+// number climbs. Measured: tenderly's public gateway returns 429 "rate limit
+// exceeded" during the first sync, and the scan then sits at 67% for good.
+addEventListener('unhandledrejection', (event) => {
+  const message = event.reason instanceof Error ? event.reason.message : String(event.reason);
+  if (/rate limit|429|retry limit|SERVER_ERROR|timeout/i.test(message)) countRailgunRpcError();
+});
 
 async function bootHost(): Promise<void> {
   try {
@@ -63,6 +74,11 @@ async function handle(message: OffscreenMessage): Promise<unknown> {
   switch (message.kind) {
     case 'ping':
       return { hostMounted, hostError };
+
+    case 'railgunSyncStatus':
+      // Answered from a plain variable: never loads the SDK, never waits on
+      // the sync it is reporting.
+      return getRailgunSyncStatus();
 
     case 'circuitsReady': {
       const { assertArtifactsPresent } = await import('@truly/lib/proving');
