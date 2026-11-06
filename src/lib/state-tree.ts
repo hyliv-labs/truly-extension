@@ -22,8 +22,7 @@
 
 import { parseAbi, parseAbiItem } from 'viem';
 import { publicClient } from './chain';
-import { LOG_CHUNK_SIZE, PRIVACY_POOL_ADDRESS } from './config';
-import { POOL_DEPLOYMENT_BLOCK } from './discovery';
+import { LOG_CHUNK_SIZE, POOL_DEPLOYMENT_BLOCK, PRIVACY_POOL_ADDRESS } from './config';
 
 const LEAF_INSERTED = parseAbiItem(
   'event LeafInserted(uint256 _index, uint256 _leaf, uint256 _root)',

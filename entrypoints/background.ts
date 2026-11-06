@@ -54,41 +54,60 @@ const AUTO_LOCK_MINUTES = 15;
 const DEPOSIT_ALARM = 'truly:deposit-poll';
 const DEPOSIT_POLL_MINUTES = 1;
 
-export default defineBackground(() => {
-  chrome.runtime.onInstalled.addListener(() => {
-    console.info('[truly] installed');
-  });
+export default defineBackground({
+  /**
+   * An ES MODULE service worker, not the default single IIFE bundle.
+   *
+   * E3 pulls the Privacy Pools SDK into the worker — note discovery needs
+   * AccountService and DataService — and that SDK contains dynamic import()s.
+   * The bundler then wants to code-split, which IIFE cannot express, and the
+   * build fails with "Invalid value 'iife' for option output.format", naming
+   * neither the SDK nor the import that caused it.
+   *
+   * WXT routes a module background through its ESM group rather than lib mode
+   * (see group-entrypoints), so splitting is allowed there. MV3 supports
+   * "type": "module" on the service worker.
+   *
+   * Unrelated to the anon-rpc blob: importScripts in the CSP below — those run
+   * in the sandboxed Worker inside the offscreen document, not in this worker.
+   */
+  type: 'module',
+  main() {
+    chrome.runtime.onInstalled.addListener(() => {
+      console.info('[truly] installed');
+    });
 
-  // Chrome may drop alarms across a browser restart. A deposit in flight has
-  // real money sitting at an intent address, so re-arm rather than relying on
-  // the user reopening the popup.
-  chrome.runtime.onStartup.addListener(() => {
-    void resumeDepositWatch();
-  });
+    // Chrome may drop alarms across a browser restart. A deposit in flight has
+    // real money sitting at an intent address, so re-arm rather than relying on
+    // the user reopening the popup.
+    chrome.runtime.onStartup.addListener(() => {
+      void resumeDepositWatch();
+    });
 
-  chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
-    if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
-  });
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
+      if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
+    });
 
-  chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
-    if (typeof message?.kind !== 'string') return false;
+    chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
+      if (typeof message?.kind !== 'string') return false;
 
-    handle(message, sender)
-      .then((value) => sendResponse({ ok: true, value } satisfies Response<unknown>))
-      .catch((error: unknown) =>
-        sendResponse({
-          ok: false,
-          error: errorMessage(error),
-          // Preserve the EIP-1193 code so the dapp can tell a user rejection
-          // (4001) from an unsupported method (4200).
-          ...(isRpcError(error) ? { rpc: { code: error.code, message: error.message } } : {}),
-        }),
-      );
+      handle(message, sender)
+        .then((value) => sendResponse({ ok: true, value } satisfies Response<unknown>))
+        .catch((error: unknown) =>
+          sendResponse({
+            ok: false,
+            error: errorMessage(error),
+            // Preserve the EIP-1193 code so the dapp can tell a user rejection
+            // (4001) from an unsupported method (4200).
+            ...(isRpcError(error) ? { rpc: { code: error.code, message: error.message } } : {}),
+          }),
+        );
 
-    // Keeps the message channel open for the async reply.
-    return true;
-  });
+      // Keeps the message channel open for the async reply.
+      return true;
+    });
+  },
 });
 
 async function handle(

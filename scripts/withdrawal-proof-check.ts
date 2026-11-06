@@ -60,7 +60,7 @@ const baseUrl = `http://127.0.0.1:${addr.port}/`;
   runtime: { getURL: () => baseUrl },
 };
 
-const { runWithdrawalProof } = await import('../src/lib/prove-withdrawal.ts');
+const { runWithdrawalProof } = await import('../src/lib/prove-withdrawal-run.ts');
 const { toWireMerkleProof } = await import('../src/lib/prove-withdrawal.ts');
 
 let failed = false;

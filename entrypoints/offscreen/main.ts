@@ -13,7 +13,7 @@
 import { mountOffscreenHost } from '@anon-rpc/browser-extension-harness/offscreen';
 import { assertArtifactsPresent } from '@truly/lib/proving';
 import { requestSeedSignature, MetaMaskError } from '@truly/lib/metamask';
-import { runWithdrawalProof } from '@truly/lib/prove-withdrawal';
+import { runWithdrawalProof } from '@truly/lib/prove-withdrawal-run';
 
 // Only claims ports named 'anon-rpc.worker', so it coexists with the proof
 // handling below.

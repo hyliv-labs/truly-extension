@@ -15,11 +15,13 @@
  *
  * Everything is a decimal string on the wire: chrome.runtime messaging is JSON
  * serialisation, which silently drops bigints.
+ *
+ * THIS FILE MUST NOT IMPORT snarkjs, directly or transitively. It is pulled
+ * into the service worker, which is built as a single IIFE; snarkjs forces
+ * code-splitting and the build fails. The proof itself lives in
+ * prove-withdrawal-run.ts, which only the offscreen document imports.
  */
 
-import type { Hash, Secret } from '@0xbow/privacy-pools-core-sdk';
-import { getCommitment } from '@0xbow/privacy-pools-core-sdk';
-import { getSdk } from './proving';
 
 /** A merkle proof flattened to strings for the wire. */
 export interface WireMerkleProof {
@@ -65,68 +67,6 @@ export function toWireMerkleProof(proof: {
     index: proof.index,
     siblings: proof.siblings.map(String),
   };
-}
-
-function fromWireMerkleProof(wire: WireMerkleProof) {
-  return {
-    root: BigInt(wire.root),
-    leaf: BigInt(wire.leaf),
-    index: wire.index,
-    siblings: wire.siblings.map((s) => BigInt(s)),
-  };
-}
-
-/**
- * Runs IN THE OFFSCREEN DOCUMENT. Builds the proof and nothing else.
- *
- * Deliberately pure with respect to storage: it reads no vault and writes no
- * state, so the secrets it receives live only for the duration of the call.
- */
-export async function runWithdrawalProof(
-  input: ProveWithdrawalInput,
-): Promise<ProveWithdrawalOutput> {
-  const sdk = await getSdk();
-
-  // Built by the SDK, never hand-rolled: its commitment shape is
-  // { hash, nullifierHash, preimage: { value, label, precommitment } }, and a
-  // flat object feeds undefined into the circuit.
-  const commitment = getCommitment(
-    BigInt(input.value),
-    BigInt(input.label) as unknown as Hash,
-    BigInt(input.nullifier) as unknown as Secret,
-    BigInt(input.secret) as unknown as Secret,
-  );
-
-  const stateMerkleProof = fromWireMerkleProof(input.stateMerkleProof);
-  const aspMerkleProof = fromWireMerkleProof(input.aspMerkleProof);
-
-  const proof = await sdk.proveWithdrawal(commitment as never, {
-    context: BigInt(input.context),
-    withdrawalAmount: BigInt(input.withdrawalAmount),
-    stateMerkleProof,
-    aspMerkleProof,
-    stateRoot: stateMerkleProof.root as unknown as Hash,
-    stateTreeDepth: BigInt(stateMerkleProof.siblings.length),
-    aspRoot: aspMerkleProof.root as unknown as Hash,
-    aspTreeDepth: BigInt(aspMerkleProof.siblings.length),
-    newSecret: BigInt(input.newSecret) as unknown as Secret,
-    newNullifier: BigInt(input.newNullifier) as unknown as Secret,
-  } as never);
-
-  const { publicSignals, proof: rawProof } = proof as unknown as {
-    publicSignals: string[];
-    proof: { pi_a: string[]; pi_b: string[][]; pi_c: string[] };
-  };
-
-  // Checked here, before the result crosses back: the relayer's schema is
-  // strict and rejects a malformed bundle after the proving cost is paid.
-  if (!Array.isArray(publicSignals) || publicSignals.length !== 8) {
-    throw new Error(
-      `The circuit produced ${publicSignals?.length} public signals; the relayer requires exactly 8.`,
-    );
-  }
-
-  return { publicSignals, proof: rawProof };
 }
 
 export class ProvingUnavailable extends Error {

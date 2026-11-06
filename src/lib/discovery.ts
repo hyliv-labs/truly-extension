@@ -27,12 +27,10 @@ import { publicClient } from './chain';
 import {
   ARBITRUM_CHAIN_ID,
   LOG_CHUNK_SIZE,
+  POOL_DEPLOYMENT_BLOCK,
   PRIVACY_POOL_ADDRESS,
   PRIVACY_POOL_ENTRYPOINT,
 } from './config';
-
-/** The deployment block of the Arbitrum USDC pool. */
-export const POOL_DEPLOYMENT_BLOCK = 411197154n;
 
 /**
  * Placeholder satisfying DataService's non-empty rpcUrl check. Never reached:

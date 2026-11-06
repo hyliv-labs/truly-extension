@@ -10,10 +10,10 @@ export default defineConfig({
   },
   manifest: {
     name: 'Truly',
-    // No background.type = 'module': WXT bundles the worker into one file and
-    // strips it. That is safe here because the anon-rpc harness ships both its
-    // Chromium and Firefox modes in that bundle, precisely so a service worker
-    // never has to import() on demand.
+    // background.type is NOT set here — it is set on defineBackground in
+    // entrypoints/background.ts, which is what WXT reads. E3 made the worker a
+    // module: the Privacy Pools SDK has dynamic import()s, and the default
+    // single-IIFE worker bundle cannot code-split. See the comment there.
     description:
       'Fund every Lighter trade from Privacy Pools through a fresh owner address, then re-shield.',
     permissions: [

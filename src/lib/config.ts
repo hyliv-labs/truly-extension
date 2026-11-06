@@ -99,6 +99,12 @@ export const PRIVACY_POOL_RELAYER_URL = env('WXT_PRIVACY_POOL_RELAYER_URL');
 export const ASP_API_BASE = env('WXT_ASP_API_BASE') ?? 'https://api.0xbow.io';
 
 /**
+ * Block the Arbitrum USDC pool was deployed at. Discovery and the state-tree
+ * scan both start here.
+ */
+export const POOL_DEPLOYMENT_BLOCK = 411197154n;
+
+/**
  * The pool's scope. Configured only as a cross-check — src/lib/pool.ts reads
  * SCOPE() from the chain and that value is authoritative, because a wrong
  * scope derives notes for a pool the funds are not in and errors nowhere.
