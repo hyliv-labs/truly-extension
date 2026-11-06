@@ -131,5 +131,31 @@ if (quoteTimeRemainingMs(quoteWith(-1_000)) > 0) {
   pass('an expired quote reports negative time remaining');
 }
 
+// --- tx hash extraction ---------------------------------------------------
+const { extractTxHash } = await import('../src/lib/relayer.ts');
+const HASH = `0x${'ab'.repeat(32)}`;
+
+for (const shape of [
+  { txHash: HASH },
+  { hash: HASH },
+  { transactionHash: HASH },
+  { data: { txHash: HASH } },
+  { result: { txHash: HASH } },
+]) {
+  if (extractTxHash(shape) !== HASH) {
+    fail(`extractTxHash missed the hash in ${JSON.stringify(shape).slice(0, 40)}`);
+  }
+}
+pass('extractTxHash finds the hash across the plausible response shapes');
+
+// A hash must be VALIDATED, not trusted by name: recording a bogus one would
+// mean waiting for a receipt that never arrives.
+for (const bad of [{ txHash: 'pending' }, { txHash: '0x1234' }, { txHash: 42 }, {}, null, 'ok']) {
+  if (extractTxHash(bad) !== undefined) {
+    fail(`extractTxHash accepted ${JSON.stringify(bad)} as a transaction hash`);
+  }
+}
+pass('a malformed or absent hash yields undefined rather than a bogus value');
+
 console.log(failed ? '\nFAILED' : '\nwithdraw sizing and retry policy OK');
 process.exit(failed ? 1 : 0);

@@ -47,6 +47,7 @@ import { deriveChangeNote, nextWithdrawalIndex, confirmWithdrawalIndex } from '.
 import { authoritativeScope } from './pool';
 import { PRIVACY_POOL_ENTRYPOINT, POOL_MIN_DEPOSIT_UNITS, estimateRelayerFeeUnits } from './config';
 import { requireUnlockedMnemonic } from './vault';
+import { publicClient } from './chain';
 
 export class WithdrawError extends Error {
   readonly retryable: boolean;
@@ -242,6 +243,26 @@ async function quoteAndProve(
 const MAX_ATTEMPTS = 3;
 
 /**
+ * Wait for the relayer's transaction and report whether it actually succeeded.
+ *
+ * Read over anon-rpc, like every other chain read. A missing hash is treated
+ * as "unknown", not as success: the caller then declines to record the index,
+ * and the next scan resolves the truth from chain history.
+ */
+async function confirmOnChain(txHash: string | undefined): Promise<boolean> {
+  if (!txHash) {
+    throw new WithdrawError(
+      'The relayer returned no transaction hash, so the withdrawal could not be confirmed on chain. Rescan before retrying — it may have landed.',
+      false,
+    );
+  }
+  const receipt = await publicClient.waitForTransactionReceipt({
+    hash: txHash as `0x${string}`,
+  });
+  return receipt.status === 'success';
+}
+
+/**
  * Withdraw from the pool to `recipient`.
  *
  * Retries only the races: a new ASP root published mid-flight, or a transient
@@ -291,8 +312,29 @@ export async function withdrawFromPool(request: WithdrawRequest): Promise<Withdr
       // --- 6. submit. ---
       const result = await submitWithdrawal(proven.bundle, quote, scope);
 
-      // Only now is the index spent. Advancing earlier would burn one on
-      // every relayer hiccup.
+      // The relayer accepting is NOT the withdrawal landing. It returns once
+      // the transaction is broadcast, and that transaction can still revert --
+      // with IncorrectASPRoot, most plausibly, since the ASP can publish
+      // between proving and inclusion.
+      //
+      // Confirming the index on acceptance would raise the local floor above
+      // the chain's children count forever, and every later withdrawal on
+      // this label would throw StaleScanError.
+      const landed = await confirmOnChain(result.txHash);
+
+      if (!landed) {
+        throw new WithdrawError(
+          'The relayer accepted the withdrawal but the transaction reverted on chain. The note is unspent and can be retried.',
+          true,
+        );
+      }
+
+      // Only now is the index spent.
+      //
+      // If this is never reached because the receipt could not be read, the
+      // index is simply not recorded -- which is safe, because the chain is
+      // the authority: the next scan sees the new child and derives the right
+      // index anyway. The local floor is only a staleness guard.
       await confirmWithdrawalIndex(request.note.label, proven.index);
 
       return {

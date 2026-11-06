@@ -205,8 +205,35 @@ export async function submitWithdrawal(
   } catch {
     raw = text;
   }
-  const hash = (raw as { txHash?: string; hash?: string })?.txHash ?? (raw as { hash?: string })?.hash;
-  return { txHash: hash as Hex | undefined, raw };
+  return { txHash: extractTxHash(raw), raw };
+}
+
+/**
+ * Pull the transaction hash out of the relayer's response.
+ *
+ * The exact field name is not documented, so several shapes are accepted and
+ * validated as a 32-byte hex hash rather than trusted by name. Returning
+ * undefined is safe: the caller refuses to record the withdrawal index, and
+ * the chain remains the authority for what actually landed.
+ */
+export function extractTxHash(raw: unknown): Hex | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+
+  const candidates = [
+    record.txHash,
+    record.hash,
+    record.transactionHash,
+    (record.data as Record<string, unknown> | undefined)?.txHash,
+    (record.result as Record<string, unknown> | undefined)?.txHash,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && /^0x[0-9a-fA-F]{64}$/.test(candidate)) {
+      return candidate as Hex;
+    }
+  }
+  return undefined;
 }
 
 /**
