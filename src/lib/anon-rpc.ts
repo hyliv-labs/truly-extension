@@ -122,12 +122,17 @@ export async function anonRpcCall(
   // deadline the read never settles and every caller waits forever.
   let response: Response;
   try {
-    response = await active.fetch(ARBITRUM_RPC_URL, {
+    // A pre-built Request, passed with NO init. The harness forwards such a
+    // Request unchanged; give it a url + init pair instead and it rebuilds
+    // one, and the content-type did not survive that rebuild — arb1 replied
+    // "415 invalid content type, only application/json is supported".
+    const request = new Request(ARBITRUM_RPC_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
       signal: AbortSignal.timeout(ANON_RPC_TIMEOUT_MS),
     });
+    response = await active.fetch(request);
   } catch (error) {
     const aborted =
       error instanceof DOMException &&
@@ -142,7 +147,18 @@ export async function anonRpcCall(
   }
 
   if (!response.ok) {
-    throw new AnonRpcUnavailable(`anon-rpc returned ${response.status}`);
+    // The body carries the reason. Without it a 415 or a 429 is just a
+    // number, and the number alone points at anon-rpc when the complaint is
+    // usually the RPC endpoint's.
+    let detail = '';
+    try {
+      detail = (await response.text()).slice(0, 300);
+    } catch {
+      detail = '(no body)';
+    }
+    throw new AnonRpcUnavailable(
+      `anon-rpc returned ${response.status} for ${method}${detail ? `: ${detail}` : ''}`,
+    );
   }
 
   const json = (await response.json()) as {
