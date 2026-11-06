@@ -48,16 +48,15 @@ export class PoolMismatch extends Error {
  * accidentally keep using a stale configured scope.
  */
 export async function readPoolIdentity(): Promise<PoolIdentity> {
-  if (!PRIVACY_POOL_ADDRESS) {
+  const address = PRIVACY_POOL_ADDRESS;
+  if (!address) {
     throw new PoolMismatch('No pool address configured.');
   }
 
+  // Bound to a local: TypeScript does not carry the narrowing above into the
+  // closure, and `address` must be concrete for readContract's overloads.
   const read = <T>(functionName: 'SCOPE' | 'ASSET' | 'ENTRYPOINT' | 'dead') =>
-    publicClient.readContract({
-      address: PRIVACY_POOL_ADDRESS,
-      abi: poolAbi,
-      functionName,
-    }) as Promise<T>;
+    publicClient.readContract({ address, abi: poolAbi, functionName }) as Promise<T>;
 
   let identity: PoolIdentity;
   try {
@@ -67,12 +66,12 @@ export async function readPoolIdentity(): Promise<PoolIdentity> {
       read<Address>('ENTRYPOINT'),
       read<boolean>('dead'),
     ]);
-    identity = { pool: PRIVACY_POOL_ADDRESS, scope, asset, entrypoint, dead: isDead };
+    identity = { pool: address, scope, asset, entrypoint, dead: isDead };
   } catch (error) {
     // A pool that cannot answer this surface is not a privacy-pools-core pool
     // — which is exactly what a v2 address, or a wrong chain, would look like.
     throw new PoolMismatch(
-      `${PRIVACY_POOL_ADDRESS} does not answer the Privacy Pools v1 interface: ${
+      `${address} does not answer the Privacy Pools v1 interface: ${
         error instanceof Error ? error.message.split('\n')[0] : String(error)
       }`,
     );
