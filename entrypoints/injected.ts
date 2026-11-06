@@ -32,6 +32,31 @@ export default defineUnlistedScript(() => {
   // its request before this script loaded.
   window.addEventListener('eip6963:requestProvider', announce);
   announce();
+
+  // EIP-6963 is the correct discovery path and Truly announces on it. But a
+  // dapp that offers a curated wallet list plus a generic "injected" option
+  // reads window.ethereum for that option, and a 6963-only wallet is then
+  // reachable solely through whatever "view all" affordance the dapp happens
+  // to render. Lighter's list is static -- the same six appear in a profile
+  // where none of them are installed -- so without this Truly depends on that
+  // affordance existing.
+  //
+  // NEVER clobbers an existing provider. If MetaMask or anything else is
+  // already there, it keeps the slot: silently replacing another wallet's
+  // provider would hijack every dapp on the page, which is exactly the
+  // behaviour 6963 was written to end.
+  try {
+    if (!('ethereum' in window)) {
+      Object.defineProperty(window, 'ethereum', {
+        value: provider,
+        configurable: true,
+        writable: false,
+      });
+      window.dispatchEvent(new Event('ethereum#initialized'));
+    }
+  } catch {
+    // A page may have locked the property. 6963 still works; nothing to do.
+  }
 });
 
 function createProvider() {
