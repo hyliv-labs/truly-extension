@@ -191,9 +191,11 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
     marginUnits: quote.marginUnits,
     quote,
     state: 'funding',
-    detail: request.depositOnly
-      ? 'Getting a Lighter deposit address for a new account.'
-      : 'Getting a Lighter deposit address for a fresh owner.',
+    detail: existing
+      ? 'Getting a Lighter deposit address for the connected account.'
+      : request.depositOnly
+        ? 'Getting a Lighter deposit address for a new account.'
+        : 'Getting a Lighter deposit address for a fresh owner.',
   };
   await updateActiveTrade({ session });
 

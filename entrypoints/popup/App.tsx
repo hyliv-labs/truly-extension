@@ -258,6 +258,7 @@ export function App() {
             <TradeForm
               busy={busy}
               connecting={connectOrigin !== null}
+              connectedAddress={status.activeTrade ? owner : null}
               onOpened={refresh}
               balance={shielded}
               balanceError={shieldedError}

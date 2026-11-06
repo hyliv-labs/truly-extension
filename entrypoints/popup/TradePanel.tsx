@@ -23,9 +23,12 @@ function toUnits(input: string): string | null {
   return (BigInt(whole!) * 1_000_000n + BigInt(frac.padEnd(6, '0'))).toString();
 }
 
+const shortAddress = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+
 export function TradeForm({
   busy,
   connecting = false,
+  connectedAddress = null,
   onOpened,
   balance,
   balanceError,
@@ -35,6 +38,12 @@ export function TradeForm({
 }: {
   busy: boolean;
   connecting?: boolean;
+  /**
+   * Set when Lighter is already connected to a trade that has no deposit yet.
+   * Funding attaches to that trade (openTradeSession), so the deposit goes to
+   * THIS address, not a new one, and the copy has to say so.
+   */
+  connectedAddress?: string | null;
   onOpened: () => Promise<void>;
   balance: ShieldedBalance | null;
   balanceError: string | null;
@@ -103,11 +112,13 @@ export function TradeForm({
         onRefresh={() => void onRefreshBalance()}
       />
       <div className="trade-head">
-        <strong>{connecting ? 'Connect to Lighter' : 'New account'}</strong>
+        <strong>{connectedAddress ? 'Fund your Lighter account' : connecting ? 'Connect to Lighter' : 'New account'}</strong>
         <span className="field-label">
-          {connecting
-            ? 'The Railgun balance is above. Truly funds a new address and connects it. You trade on Lighter.'
-            : 'A fresh address, funded from Railgun. You trade it on Lighter.'}
+          {connectedAddress
+            ? `Deposits to ${shortAddress(connectedAddress)}, the address Lighter is connected to. You trade it on Lighter.`
+            : connecting
+              ? 'The Railgun balance is above. Truly funds a new address and connects it. You trade on Lighter.'
+              : 'A fresh address, funded from Railgun. You trade it on Lighter.'}
         </span>
       </div>
 
@@ -127,14 +138,18 @@ export function TradeForm({
         <p className="error">Enter a USDC amount, up to 6 decimals.</p>
       ) : (
         <p className="field-label">
-          Unshielded from Railgun to the new account. The sender pays the unshield gas in ETH. Lighter credits at least 5 USDC.
+          Unshielded from Railgun to {connectedAddress ? 'this account' : 'the new account'}. The sender pays the unshield gas in ETH. Lighter credits at least 5 USDC.
         </p>
       )}
 
       <div className="ticket">
         <span className="ticket-kicker">Deposit</span>
         <span className="ticket-figure">{money(marginNum)}</span>
-        <span className="ticket-meta">Lands on a new Lighter account. The order is placed on Lighter, not here.</span>
+        <span className="ticket-meta">
+          {connectedAddress
+            ? `Lands on the Lighter account you connected (${shortAddress(connectedAddress)}). The order is placed on Lighter, not here.`
+            : 'Lands on a new Lighter account. The order is placed on Lighter, not here.'}
+        </span>
       </div>
 
       {quote && <OrderSummary quote={quote} />}
@@ -151,7 +166,13 @@ export function TradeForm({
 
       {quote ? (
         <button disabled={disabled} onClick={() => void confirm()}>
-          {working === 'open' ? 'Connecting…' : connecting ? 'Fund and connect' : 'Create account and deposit'}
+          {working === 'open'
+            ? 'Connecting…'
+            : connectedAddress
+              ? 'Deposit to connected account'
+              : connecting
+                ? 'Fund and connect'
+                : 'Create account and deposit'}
         </button>
       ) : (
         <button disabled={disabled || !marginUnits || !canReview} onClick={() => void review()}>
@@ -399,7 +420,7 @@ export function SessionPanel({
     <div className="trade">
       <div className="ticket">
         <span className="ticket-kicker">
-          {deposit ? `New account · ${usdc(s.marginUnits)} USDC` : `${s.direction.toUpperCase()} ${s.symbol}-PERP · ${s.leverage}× · ${usdc(s.marginUnits)} USDC`}
+          {deposit ? `Deposit · ${usdc(s.marginUnits)} USDC` : `${s.direction.toUpperCase()} ${s.symbol}-PERP · ${s.leverage}× · ${usdc(s.marginUnits)} USDC`}
         </span>
         {!failed && (
           <>
