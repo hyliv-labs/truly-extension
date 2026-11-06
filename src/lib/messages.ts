@@ -15,6 +15,8 @@ export type Request =
   | { kind: 'currentOwner' }
   | { kind: 'startTrade' }
   | { kind: 'endTrade' }
+  /** Retire a trade that is NOT finished, accepting that funds may remain. */
+  | { kind: 'abandonTrade' }
   // Content-script relay (E5)
   | { kind: 'provider'; origin: string; method: string; params: unknown[] }
   // Approval window (E5)
@@ -74,6 +76,7 @@ export interface ResultMap {
   currentOwner: { index: number; address: Address };
   startTrade: ActiveTrade;
   endTrade: null;
+  abandonTrade: null;
   provider: unknown;
   getApproval: ApprovalRecord | null;
   settleApproval: null;

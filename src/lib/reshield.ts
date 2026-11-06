@@ -54,6 +54,8 @@ const poolEntrypointAbi = [
 export interface ReshieldResult {
   readonly userOpHash: Hex;
   readonly deposited: bigint;
+  /** On-chain outcome, not merely bundler acceptance. */
+  readonly success: boolean;
 }
 
 /**
@@ -175,7 +177,12 @@ export async function reshield(input: {
     paymasterPostOpGasLimit: PAYMASTER_POST_OP_GAS_LIMIT,
   });
 
-  return { userOpHash, deposited: depositAmount };
+  // Acceptance by the bundler is not inclusion. Waiting here is what makes
+  // "the deposit happened" a fact rather than an assumption — the deposit
+  // index must not be burned on a user operation that later reverts.
+  const receipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash });
+
+  return { userOpHash, deposited: depositAmount, success: receipt.success };
 }
 
 /** Owner addresses are single-use, so a leftover balance means a stuck trade. */

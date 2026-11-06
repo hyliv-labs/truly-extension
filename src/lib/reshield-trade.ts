@@ -10,13 +10,21 @@ import type { Hash } from '@0xbow/privacy-pools-core-sdk';
 import { PRIVACY_POOL_SCOPE } from './config';
 import { confirmDepositIndex, deriveNote, nextDepositIndex } from './notes';
 import { reshield, ReshieldUnavailable } from './reshield';
-import { getActiveTrade } from './trade';
+import { getActiveTrade, updateActiveTrade } from './trade';
 import { ownerAt } from './vault';
 
 export interface ReshieldTradeResult {
   readonly userOpHash: string;
   readonly deposited: bigint;
   readonly depositIndex: number;
+}
+
+/** Recorded on the trade once the deposit is confirmed on chain. */
+export interface ReshieldRecord {
+  readonly userOpHash: string;
+  readonly depositIndex: number;
+  readonly deposited: string;
+  readonly confirmedAt: number;
 }
 
 /**
@@ -56,9 +64,26 @@ export async function reshieldActiveTrade(): Promise<ReshieldTradeResult> {
     precommitment: precommitment as unknown as bigint,
   });
 
-  // Only now is the index spent. A throw above leaves it reusable, which is
-  // correct: nothing with that precommitment reached the chain.
+  if (!result.success) {
+    // Included but reverted: nothing was deposited, so the index stays
+    // reusable and the trade stays open for a retry.
+    throw new ReshieldUnavailable(
+      `The re-shield operation reverted on chain (${result.userOpHash}).`,
+    );
+  }
+
+  // Only now is the index spent, and only now is the trade recorded as
+  // re-shielded. Both follow on-chain confirmation rather than bundler
+  // acceptance, because a reverted operation deposited nothing.
   await confirmDepositIndex(depositIndex);
+  await updateActiveTrade({
+    reshield: {
+      userOpHash: result.userOpHash,
+      depositIndex,
+      deposited: result.deposited.toString(),
+      confirmedAt: Date.now(),
+    },
+  });
 
   return { ...result, depositIndex };
 }

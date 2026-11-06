@@ -28,7 +28,7 @@ import {
   deriveMnemonicFromWalletSignature,
 } from '@truly/lib/wallet-seed';
 import type { Address, Hex } from 'viem';
-import { getTradeStatus } from '@truly/lib/orchestrator';
+import { canRetire, getTradeStatus } from '@truly/lib/orchestrator';
 import { scanForStrandedFunds } from '@truly/lib/recovery-scan';
 import {
   clearRecoveryState,
@@ -128,7 +128,24 @@ async function handle(
       return trade;
     }
 
-    case 'endTrade':
+    case 'endTrade': {
+      // Retiring burns the owner index. Doing that mid-deposit or
+      // mid-withdrawal leaves funds at an address the UI no longer shows —
+      // recoverable only via the scan, and only if the user thinks to run it.
+      const { ok, reason } = await canRetire();
+      if (!ok) {
+        throw new Error(
+          `${reason ?? 'This trade is not finished.'} Use Abandon if you intend to retire it anyway.`,
+        );
+      }
+      await endTrade();
+      await chrome.alarms.clear(DEPOSIT_ALARM);
+      return null;
+    }
+
+    case 'abandonTrade':
+      // Deliberate escape hatch: the user has been warned and chosen to
+      // retire an unfinished trade. The seed still reaches the funds.
       await endTrade();
       // Stop watching immediately rather than letting the next tick discover
       // there is no trade: that tick would be a network call tying this owner

@@ -22,6 +22,17 @@ export interface ActiveTrade {
   readonly intentAddress?: Address;
   /** E4: assigned by Lighter once the first deposit is credited. */
   readonly accountIndex?: number;
+  /**
+   * E7/E8: set once the re-shield is CONFIRMED on chain. The trade is only
+   * retirable on the strength of this record — inferring it from balances
+   * cannot tell "re-shielded" from "withdrawal still in flight".
+   */
+  readonly reshield?: {
+    readonly userOpHash: string;
+    readonly depositIndex: number;
+    readonly deposited: string;
+    readonly confirmedAt: number;
+  };
   /** E8: last phase recorded, so the popup has something before the first poll. */
   readonly phase?: string;
   /** E4: last status seen, so the popup can show a wait without re-polling. */

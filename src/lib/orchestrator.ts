@@ -69,9 +69,20 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
     };
   }
 
-  // Lighter is empty. Either the funds are at the owner address waiting to be
-  // re-shielded, or they have already gone back to the pool.
   const ownerBalance = await ownerUsdcBalance(trade.ownerAddress);
+
+  // Only a confirmed receipt proves the funds went back to the pool. Inferring
+  // it from "Lighter is empty and the owner is empty" cannot distinguish a
+  // completed re-shield from a withdrawal still in flight — Lighter zeroes the
+  // moment the withdrawal is requested, before the USDC lands.
+  if (trade.reshield) {
+    return {
+      phase: 'reshielded',
+      detail: 'Everything is back in the pool. This trade can be retired.',
+      advice,
+      ownerBalance,
+    };
+  }
 
   if (ownerBalance > 0n) {
     return {
@@ -83,8 +94,9 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   }
 
   return {
-    phase: 'reshielded',
-    detail: 'Everything is back in the pool. This trade can be retired.',
+    phase: 'exiting',
+    detail:
+      'Lighter is empty but nothing has reached the owner address yet. A fast withdrawal takes a few minutes.',
     advice,
     ownerBalance,
   };
@@ -115,14 +127,40 @@ function describe(advice: ExitAdvice): string {
  * recovery scan would still reach them, but only because it exists.
  */
 export async function canRetire(): Promise<{ ok: boolean; reason?: string }> {
-  const status = await getTradeStatus();
+  return decideRetirable(await getTradeStatus());
+}
+
+/**
+ * The retirement rule itself, separated from reading the world so it can be
+ * tested without Lighter or a chain.
+ */
+export function decideRetirable(
+  status: TradeStatus | null,
+): { ok: boolean; reason?: string } {
   if (!status) return { ok: false, reason: 'No active trade.' };
 
   if (status.phase !== 'reshielded') {
     return { ok: false, reason: status.detail };
   }
+
+  // A successful re-shield leaves the unspent part of the 1 USDC gas permit
+  // behind, so the owner is never exactly empty. Requiring zero would make
+  // every trade permanently unretirable.
+  if ((status.ownerBalance ?? 0n) > DUST_UNITS) {
+    return {
+      ok: false,
+      reason: `The owner address still holds ${Number(status.ownerBalance) / 1e6} USDC, which is more than leftover gas.`,
+    };
+  }
+
   return { ok: true };
 }
+
+/**
+ * Leftover gas allowance, in USDC units. Above this, something is actually
+ * stranded; below it, it is the permit reserve that was never spent.
+ */
+const DUST_UNITS = 1_000_000n;
 
 /** Record progress for the popup without re-deriving it on every poll. */
 export async function recordPhase(phase: TradePhase): Promise<ActiveTrade> {
