@@ -496,6 +496,15 @@ input[type='range'] {
 }
 
 /* Shown when the provider opened this window after a refused connect. */
+.connect-hint p {
+  margin: 0;
+}
+
+.connect-hint button {
+  margin-top: 10px;
+  width: 100%;
+}
+
 .connect-hint {
   margin: 0 0 12px;
   padding: 10px 12px;

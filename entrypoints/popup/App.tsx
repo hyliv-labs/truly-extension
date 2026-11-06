@@ -89,12 +89,26 @@ export function App() {
       </header>
 
       {connectOrigin && !status?.activeTrade && (
-        <p className="connect-hint">
-          <strong>{connectOrigin}</strong> asked to connect.
-          {status?.unlocked
-            ? ' Start a trade below, then connect again — the address is new every trade.'
-            : ' Unlock Truly, start a trade, then connect again.'}
-        </p>
+        <div className="connect-hint">
+          <p>
+            <strong>{connectOrigin}</strong> asked to connect.
+            {status?.unlocked
+              ? ' It needs an owner address, and there is a new one every trade.'
+              : ' Unlock Truly first, then start a trade for it.'}
+          </p>
+          {/* The action, not a pointer to it. 'Start a trade below' sent people
+              to the Market trade form, which is the OTHER path -- that one
+              places the order itself and never connects the site. A dapp
+              asking to connect wants this one. */}
+          {status?.unlocked && (
+            <button
+              disabled={busy}
+              onClick={() => run(() => send({ kind: 'startTrade' }).then(() => {}))}
+            >
+              Start a trade for {connectOrigin}
+            </button>
+          )}
+        </div>
       )}
 
       {status === null ? (
