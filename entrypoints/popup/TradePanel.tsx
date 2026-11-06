@@ -11,6 +11,7 @@ import type { TradeQuote } from '@truly/lib/trade-plan';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
+import { UniswapSwap } from './UniswapSwap';
 
 const usdc = (units: string | bigint) => (Number(units) / 1e6).toFixed(2);
 const money = (n: number | null | undefined, digits = 2) =>
@@ -28,6 +29,8 @@ const shortAddress = (address: string) => `${address.slice(0, 6)}…${address.sl
 export function TradeForm({
   busy,
   connecting = false,
+  site = null,
+  activeVenue = null,
   connectedAddress = null,
   onOpened,
   balance,
@@ -38,6 +41,10 @@ export function TradeForm({
 }: {
   busy: boolean;
   connecting?: boolean;
+  /** Origin of a site that asked to connect, when the popup was opened for that. */
+  site?: string | null;
+  /** Set once an address is opened for one venue. The other venue stays closed. */
+  activeVenue?: 'lighter' | 'uniswap' | null;
   /**
    * Set when Lighter is already connected to a trade that has no deposit yet.
    * Funding attaches to that trade (openTradeSession), so the deposit goes to
@@ -52,6 +59,13 @@ export function TradeForm({
   sync?: RailgunSyncStatus | null;
 }) {
   const [margin, setMargin] = useState('10');
+  const [venue, setVenue] = useState<'uniswap' | 'lighter'>(
+    activeVenue ?? (site?.includes('lighter') ? 'lighter' : 'uniswap'),
+  );
+
+  useEffect(() => {
+    if (activeVenue) setVenue(activeVenue);
+  }, [activeVenue]);
   const [quote, setQuote] = useState<TradeQuote | null>(null);
   const [working, setWorking] = useState<'quote' | 'open' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +118,16 @@ export function TradeForm({
 
   return (
     <div className="trade">
+      {!activeVenue && (
+        <div className="venues" role="tablist" aria-label="Venue">
+          <button type="button" aria-pressed={venue === 'uniswap'} onClick={() => setVenue('uniswap')}>
+            Uniswap
+          </button>
+          <button type="button" aria-pressed={venue === 'lighter'} onClick={() => setVenue('lighter')}>
+            Lighter
+          </button>
+        </div>
+      )}
       <BalanceStrip
         balance={balance}
         error={balanceError}
@@ -111,6 +135,10 @@ export function TradeForm({
         sync={sync}
         onRefresh={() => void onRefreshBalance()}
       />
+      {venue === 'uniswap' ? (
+        <UniswapSwap busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
+      ) : (
+      <>
       <div className="trade-head">
         <strong>{connectedAddress ? 'Fund your Lighter account' : connecting ? 'Connect to Lighter' : 'New account'}</strong>
         <span className="field-label">
@@ -186,6 +214,8 @@ export function TradeForm({
       )}
 
       {error && <p className="error">{error}</p>}
+      </>
+      )}
     </div>
   );
 }

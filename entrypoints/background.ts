@@ -26,7 +26,7 @@ import {
   unlock,
   requireUnlockedMnemonic,
 } from '@truly/lib/vault';
-import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
+import { endTrade, getActiveTrade, startTrade, updateActiveTrade } from '@truly/lib/trade';
 import {
   broadcastProviderEvent,
   grantConnectConsent,
@@ -57,6 +57,7 @@ import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
+import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
 import { fetchMarkets } from '@truly/lib/lighter-markets';
 import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
 import {
@@ -351,6 +352,17 @@ async function handle(
       // recorded or it falls back to opening a second approval window.
       await grantConnectConsent(message.origin);
       const trade = (await getActiveTrade()) ?? (await startTrade());
+      const host = new URL(message.origin).hostname;
+      const uniswap = host === 'uniswap.org' || host.endsWith('.uniswap.org');
+      const lighter = host === 'lighter.xyz' || host.endsWith('.lighter.xyz');
+      if (uniswap && (trade.venue === 'lighter' || trade.session)) {
+        throw new Error('This address is for Lighter. Finish or abandon it before connecting Uniswap.');
+      }
+      if (lighter && trade.venue === 'uniswap') {
+        throw new Error('This address is for Uniswap. Shield it back or abandon it before connecting Lighter.');
+      }
+      if (uniswap) await updateActiveTrade({ venue: 'uniswap', intentAddress: trade.ownerAddress });
+      if (lighter && !trade.venue) await updateActiveTrade({ venue: 'lighter' });
       await touchAutoLock();
       return { ownerAddress: trade.ownerAddress };
     }
@@ -495,6 +507,18 @@ async function handle(
       await armSessionTick();
       return getSessionView();
 
+    case 'fundUniswap': {
+      await touchAutoLock();
+      return fundUniswapAccount(BigInt(message.amountUnits));
+    }
+
+    case 'shieldUniswap': {
+      await touchAutoLock();
+      const shielded = await shieldUniswapAccount();
+      if (shielded.status === 'done') await announceTradeEnded();
+      return shielded;
+    }
+
     case 'lighterSignerSelfTest': {
       // A throwaway key and a fictitious account: nothing here is ever sent.
       const started = Date.now();
@@ -523,7 +547,7 @@ async function handle(
  */
 async function refreshLighterTabs(): Promise<void> {
   try {
-    const tabs = await chrome.tabs.query({ url: 'https://*.lighter.xyz/*' });
+    const tabs = await chrome.tabs.query({ url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*'] });
     for (const tab of tabs) {
       if (tab.id === undefined) continue;
       await chrome.tabs.reload(tab.id);

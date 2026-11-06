@@ -44,6 +44,13 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   const trade = await getActiveTrade();
   if (!trade) return null;
 
+  if (trade.venue === 'uniswap') {
+    return {
+      phase: trade.uniswap?.status === 'done' ? 'reshielded' : 'trading',
+      detail: trade.uniswap?.detail ?? 'Uniswap address.',
+    };
+  }
+
   if (!trade.intentAddress) {
     return { phase: 'funding', detail: 'Getting a deposit address from Lighter.' };
   }

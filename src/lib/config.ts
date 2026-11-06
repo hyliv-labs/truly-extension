@@ -77,8 +77,14 @@ export const BOOTSTRAP_RPC_URL =
  * nym's bundle is ~18 MB, so first boot is slower than a warm one; after that
  * the tunnel is reused for the life of the worker.
  */
-export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ??
-  '0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0') as Address;
+/**
+ * Nym's IWorkerSpecifier. It runs a mixnet client and takes no gateway.
+ * A `gateways` config is what tor-js wants; handing that same object to Nym
+ * makes the tunnel sit silent until the read times out.
+ */
+export const NYM_SPECIFIER: Address = '0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0';
+
+export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ?? NYM_SPECIFIER) as Address;
 
 /**
  * The block a Truly Railgun wallet starts DECRYPTING from.

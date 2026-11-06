@@ -188,6 +188,8 @@ export async function runRailgunShield(input: {
   shieldPrivateKey: string;
   amountUnits: string;
   fromAddress: string;
+  /** Defaults to USDC. A private Uniswap swap shields the WETH it received. */
+  tokenAddress?: string;
 }): Promise<PopulatedRailgunTx> {
   await ensureEngine();
   const id = await ensureWallet(input.mnemonic);
@@ -195,7 +197,7 @@ export async function runRailgunShield(input: {
   if (!railgunAddress) throw new Error('Railgun wallet has no 0zk address.');
   const recipients: RailgunERC20AmountRecipient[] = [
     {
-      tokenAddress: RAILGUN_USDC,
+      tokenAddress: input.tokenAddress ?? RAILGUN_USDC,
       amount: BigInt(input.amountUnits),
       recipientAddress: railgunAddress,
     },

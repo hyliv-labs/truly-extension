@@ -8,7 +8,7 @@
  */
 
 export default defineContentScript({
-  matches: ['https://*.lighter.xyz/*'],
+  matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*'],
   runAt: 'document_start',
 
   async main() {

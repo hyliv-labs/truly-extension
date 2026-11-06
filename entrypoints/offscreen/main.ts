@@ -64,6 +64,7 @@ interface OffscreenMessage {
   amountUnits?: string;
   fromAddress?: string;
   shieldPrivateKey?: string;
+  tokenAddress?: string;
 }
 
 function isResponse(value: unknown): value is { ok: boolean } {
@@ -141,6 +142,7 @@ async function railgunMessage(message: OffscreenMessage): Promise<unknown> {
     shieldPrivateKey: String(message.shieldPrivateKey),
     amountUnits: String(message.amountUnits),
     fromAddress: String(message.fromAddress),
+    ...(typeof message.tokenAddress === 'string' ? { tokenAddress: message.tokenAddress } : {}),
   });
 }
 

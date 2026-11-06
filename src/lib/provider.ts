@@ -42,7 +42,7 @@ export const CHAIN_ID_HEX = '0xa4b1';
 
 const APPROVAL_WINDOW = { width: 400, height: 560 } as const;
 
-const LIGHTER_TAB = 'https://*.lighter.xyz/*';
+const SITE_TABS = ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*'];
 
 /**
  * Worker-local waiters. The durable half is the in-flight record. If this
@@ -135,7 +135,7 @@ export async function broadcastProviderEvent(
 ): Promise<void> {
   let tabs: chrome.tabs.Tab[] = [];
   try {
-    tabs = await chrome.tabs.query({ url: LIGHTER_TAB });
+    tabs = await chrome.tabs.query({ url: SITE_TABS });
   } catch {
     return;
   }
@@ -241,6 +241,11 @@ async function connectWhenTradeStarts(input: {
 }): Promise<unknown> {
   if (input.tabId !== undefined) spareLighterTab(input.tabId);
   try {
+    // The click that follows has to ask the chain whether the next address
+    // was already used. That read goes through anon-rpc, and the first one
+    // builds a circuit. Start it now, while the window is on screen, so the
+    // click is not the thing that waits for the circuit.
+    void publicClient.getChainId().catch(() => undefined);
     await openTrulyWindow(input.origin);
     const trade = await waitForActiveTrade();
 

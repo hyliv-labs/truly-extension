@@ -14,6 +14,7 @@ import {
   ANON_RPC_SPECIFIER,
   ARBITRUM_RPC_URL,
   BOOTSTRAP_RPC_URL,
+  NYM_SPECIFIER,
   configProblems,
 } from './config';
 import { ensureOffscreenDocument } from './offscreen';
@@ -71,11 +72,14 @@ async function getWorker(): Promise<AnonRpcWorker> {
   // demanding one here would rule out the worker that has no single point of
   // failure. Pass config only when there is config to pass, and let a worker
   // that needs one say so: tor-js's message is explicit.
+  // Nym dials the mixnet itself. The default gateway list is for tor-js, and
+  // passing it here makes Nym wait on a relay it will never use: the read
+  // then sits until the deadline (eth_getBalance, 120s) and the deposit fails.
+  const nym = ANON_RPC_SPECIFIER.toLowerCase() === NYM_SPECIFIER.toLowerCase();
+  const gateways = nym ? [] : ANON_RPC_GATEWAYS;
   worker = new AnonRpcWorker({
-    address: ANON_RPC_SPECIFIER!,
-    // Opaque to the harness by design (SPEC 7.1); the schema belongs to the
-    // worker. tor-js wants { gateways: [...] }.
-    ...(ANON_RPC_GATEWAYS.length > 0 ? { config: { gateways: ANON_RPC_GATEWAYS } } : {}),
+    address: ANON_RPC_SPECIFIER,
+    ...(gateways.length > 0 ? { config: { gateways } } : {}),
     preExisting: { rpcProvider: bootstrapProvider },
     offscreenUrl: false,
   });
@@ -108,6 +112,22 @@ export async function anonRpcCall(
   method: string,
   params: unknown[] = [],
 ): Promise<unknown> {
+  try {
+    return await attempt(method, params);
+  } catch (error) {
+    // A stalled tunnel is dropped inside attempt. One fresh connection: the
+    // first dial is the one that sits silent, and the caller used to surface
+    // that and stop, so the deposit died on a balance read that the next
+    // attempt would have answered.
+    if (!(error instanceof AnonRpcUnavailable) || !/No answer over anon-rpc/.test(error.message)) {
+      throw error;
+    }
+    resetAnonRpc();
+    return await attempt(method, params);
+  }
+}
+
+function attempt(method: string, params: unknown[]): Promise<unknown> {
   // The AbortSignal on the Request below is NOT enough on its own: the harness
   // forwards the Request into the sandboxed worker and the signal does not
   // reach it. Measured: with the mixnet connection stalled, a balance read
@@ -126,11 +146,7 @@ export async function anonRpcCall(
       );
     }, ANON_RPC_TIMEOUT_MS);
   });
-  try {
-    return await Promise.race([anonRpcCallOnce(method, params), deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return Promise.race([anonRpcCallOnce(method, params), deadline]).finally(() => clearTimeout(timer));
 }
 
 async function anonRpcCallOnce(method: string, params: unknown[]): Promise<unknown> {
@@ -143,6 +159,11 @@ async function anonRpcCallOnce(method: string, params: unknown[]): Promise<unkno
       error instanceof Error ? error.message : String(error),
     );
   }
+
+  // Fetching before the tunnel is up queues the call inside a worker that may
+  // never accept it. ready rejects as soon as the worker says it failed, so
+  // that surfaces in seconds rather than at the deadline.
+  await active.ready;
 
   // A dead gateway does not refuse the dial, it just never answers. Without a
   // deadline the read never settles and every caller waits forever.

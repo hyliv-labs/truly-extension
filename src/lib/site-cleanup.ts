@@ -16,6 +16,8 @@ const LIGHTER_ORIGINS: [string, ...string[]] = [
   'https://app.lighter.xyz',
   // The API is on a different registrable domain and keeps its own storage.
   'https://mainnet.zklighter.elliot.ai',
+  'https://uniswap.org',
+  'https://app.uniswap.org',
 ];
 
 export interface CleanupResult {
@@ -47,26 +49,56 @@ export function releaseLighterTab(tabId: number): void {
  * happily write the old session back the moment it is cleared.
  */
 export async function clearLighterSiteData(): Promise<CleanupResult> {
-  const closedTabs = await closeLighterTabs();
-
-  await chrome.browsingData.remove(
-    { origins: [...LIGHTER_ORIGINS] },
-    {
-      cookies: true,
-      localStorage: true,
-      indexedDB: true,
-      cacheStorage: true,
-      serviceWorkers: true,
-      webSQL: true,
-    },
+  // Best effort, and bounded. Closing tabs and chrome.browsingData.remove can
+  // sit forever when one of these origins still has an open page — the tab we
+  // just spared so the dapp can finish connecting. Connect must not wait on that.
+  const closedTabs = await within(5_000, closeLighterTabs(), 0);
+  await within(
+    5_000,
+    chrome.browsingData
+      .remove(
+        { origins: [...LIGHTER_ORIGINS] },
+        {
+          cookies: true,
+          localStorage: true,
+          indexedDB: true,
+          cacheStorage: true,
+          serviceWorkers: true,
+          webSQL: true,
+        },
+      )
+      .catch((error: unknown) => {
+        console.warn('[truly] site cleanup failed', error);
+      }),
+    undefined,
   );
 
   return { origins: [...LIGHTER_ORIGINS], closedTabs };
 }
 
+function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn('[truly] site cleanup is still running; connect will not wait for it');
+      resolve(fallback);
+    }, ms);
+    void work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        console.warn('[truly] site cleanup failed', error);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 async function closeLighterTabs(): Promise<number> {
   const tabs = await chrome.tabs.query({
-    url: ['https://*.lighter.xyz/*', 'https://mainnet.zklighter.elliot.ai/*'],
+    url: ['https://*.lighter.xyz/*', 'https://mainnet.zklighter.elliot.ai/*', 'https://*.uniswap.org/*'],
   });
 
   const ids = tabs

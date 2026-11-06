@@ -81,7 +81,13 @@ export async function railgunUsdcBalances(): Promise<RailgunUsdcBalances> {
 export async function unshieldRailgunForTrade(netUnits: bigint): Promise<RailgunUnshieldResult> {
   const trade = await getActiveTrade();
   if (!trade) throw new Error('No trade is active.');
-  if (!trade.intentAddress) throw new Error('Lighter has not issued a deposit address yet.');
+  if (!trade.intentAddress) {
+    throw new Error(
+      trade.venue === 'uniswap'
+        ? 'The Uniswap address is not ready to receive funds yet.'
+        : 'Lighter has not issued a deposit address yet.',
+    );
+  }
   // A 'confirmed' record from before the receipt-status check may be a
   // revert. Verified first; a reverted one is cleared and a new unshield built.
   if (trade.withdrawal?.status === 'confirmed' && trade.withdrawal.txHash && (await verifyRailgunFunding()) !== 'reverted') {
@@ -284,6 +290,7 @@ async function shieldPayingEth(
   balance: bigint,
   mnemonic: string,
   shieldPrivateKey: Hex,
+  token: Address = USDC_ADDRESS,
 ): Promise<{ txHash: Hash; amountUnits: bigint } | null> {
   const account = privateKeyToAccount(privateKey);
   const block = await publicClient.getBlock();
@@ -291,20 +298,20 @@ async function shieldPayingEth(
   const eth = await publicClient.getBalance({ address: owner });
 
   const allowance = await publicClient.readContract({
-    address: USDC_ADDRESS,
+    address: token,
     abi: erc20Abi,
     functionName: 'allowance',
     args: [owner, RAILGUN_PROXY_ARBITRUM as Address],
   });
   const approveData = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [RAILGUN_PROXY_ARBITRUM as Address, balance] });
-  const approveGas = allowance >= balance ? 0n : ((await publicClient.estimateGas({ account: owner, to: USDC_ADDRESS, data: approveData })) * 12n) / 10n;
+  const approveGas = allowance >= balance ? 0n : ((await publicClient.estimateGas({ account: owner, to: token, data: approveData })) * 12n) / 10n;
   if (eth < (approveGas + SHIELD_GAS_GUESS) * maxFeePerGas) return null;
 
   if (approveGas > 0n) {
     const raw = await account.signTransaction({
       chainId: ARBITRUM_CHAIN_ID,
       nonce: await publicClient.getTransactionCount({ address: owner }),
-      to: USDC_ADDRESS,
+      to: token,
       data: approveData,
       value: 0n,
       gas: approveGas,
@@ -314,7 +321,7 @@ async function shieldPayingEth(
     });
     await broadcast(raw);
     const receipt = await publicClient.waitForTransactionReceipt({ hash: keccak256(raw) });
-    if (receipt.status !== 'success') throw new Error('The USDC approval for the shield reverted. Nothing was shielded.');
+    if (receipt.status !== 'success') throw new Error('The token approval for the shield reverted. Nothing was shielded.');
   }
 
   const populated = await ask<PopulatedRailgunTx>({
@@ -323,6 +330,7 @@ async function shieldPayingEth(
     shieldPrivateKey,
     amountUnits: balance.toString(),
     fromAddress: owner,
+    tokenAddress: token,
   });
   if (populated.to.toLowerCase() !== RAILGUN_PROXY_ARBITRUM.toLowerCase()) {
     throw new Error('Railgun returned a shield aimed at the wrong contract.');
@@ -337,12 +345,37 @@ async function shieldPayingEth(
   const receipt = await publicClient.waitForTransactionReceipt({ hash: signed.hash });
   if (receipt.status !== 'success') {
     await updateActiveTrade({ reshield: undefined });
-    throw new Error(`The Railgun shield reverted (tx ${signed.hash}). The USDC is still at the owner; it was not sent again.`);
+    throw new Error(`The Railgun shield reverted (tx ${signed.hash}). The tokens are still at the owner; they were not sent again.`);
   }
   await updateActiveTrade({
     reshield: { status: 'confirmed', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: Date.now() },
   });
   return { txHash: signed.hash, amountUnits: balance };
+}
+
+/**
+ * Shield an exact token amount, gas paid in ETH. Used after a private Uniswap
+ * swap, where the output is WETH and Circle's USDC paymaster does not apply.
+ * A shield already recorded on this trade is not sent again.
+ */
+export async function shieldOwnerToken(token: Address, amount: bigint): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  const trade = await getActiveTrade();
+  if (!trade) throw new Error('No active trade to shield.');
+  if (amount <= 0n) throw new Error('There is nothing to shield.');
+  if (trade.reshield?.status === 'pending' && trade.reshield.userOpHash) {
+    return settlePendingShield(trade);
+  }
+  if (trade.reshield?.status === 'confirmed' && trade.reshield.userOpHash) {
+    return { txHash: trade.reshield.userOpHash as Hash, amountUnits: BigInt(trade.reshield.deposited) };
+  }
+  const owner = await ownerAt(trade.ownerIndex);
+  const mnemonic = await requireUnlockedMnemonic();
+  const signature = await privateKeyToAccount(owner.privateKey).signMessage({ message: SHIELD_MESSAGE });
+  const shielded = await shieldPayingEth(owner.privateKey, owner.address, amount, mnemonic, keccak256(signature), token);
+  if (!shielded) {
+    throw new Error(`Not enough ETH at ${owner.address} to shield these tokens back into Railgun. The tokens are still at that address.`);
+  }
+  return shielded;
 }
 
 async function settlePendingUnshield(trade: ActiveTrade, netUnits: bigint): Promise<RailgunUnshieldResult> {
@@ -501,7 +534,7 @@ const ETH_TRANSFER_GAS = 21_000n;
  * `needWei` is the target balance. It tops up the shortfall plus 20%, so a
  * fee that moves a little between the check and the broadcast still clears.
  */
-async function ensureUnshieldGas(ownerIndex: number, owner: Address, needWei = UNSHIELD_GAS_WEI): Promise<void> {
+export async function ensureUnshieldGas(ownerIndex: number, owner: Address, needWei = UNSHIELD_GAS_WEI): Promise<void> {
   const balance = await publicClient.getBalance({ address: owner });
   if (balance >= needWei) return;
   const shortfall = needWei - balance + needWei / 5n;

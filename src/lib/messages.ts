@@ -11,6 +11,7 @@ import type { ShieldedBalance } from './shielded-balance';
 import type { Direction, TradeQuote } from './trade-plan';
 import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
+import type { UniswapAccountView } from './uniswap';
 
 /** bigint does not survive the message channel, so margin travels as a string. */
 export interface TradeRequestWire {
@@ -84,6 +85,10 @@ export type Request =
   | { kind: 'retryLighterExit' }
   /** Fast-withdraw a funded account and shield the USDC back into its pool. */
   | { kind: 'shieldFunds' }
+  /** Unshield USDC onto a fresh address. The user swaps it on app.uniswap.org. */
+  | { kind: 'fundUniswap'; amountUnits: string }
+  /** Shield whatever that address still holds back into Railgun. */
+  | { kind: 'shieldUniswap' }
   /** Starts the WASM signer in the worker and signs a throwaway order offline. */
   | { kind: 'lighterSignerSelfTest' }
   // Orchestrator (E8)
@@ -186,6 +191,8 @@ export interface ResultMap {
   closePosition: SessionView | null;
   retryLighterExit: SessionView | null;
   shieldFunds: SessionView | null;
+  fundUniswap: UniswapAccountView;
+  shieldUniswap: UniswapAccountView;
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
 }
 

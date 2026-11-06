@@ -13,6 +13,7 @@ import { skipUsedOwners } from './fresh-owner';
 import { configProblems } from './config';
 import { clearLighterSiteData } from './site-cleanup';
 import type { TradeSession } from './session-types';
+import type { UniswapAccountView } from './uniswap';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 const LOCAL_TRADE_HISTORY = 'truly:tradeHistory';
@@ -94,6 +95,10 @@ export interface ActiveTrade {
   };
   /** The in-extension market trade this owner exists for, when there is one. */
   readonly session?: TradeSession;
+  /** Which venue this address was opened for. Absent on older Lighter trades. */
+  readonly venue?: 'lighter' | 'uniswap';
+  /** Uniswap funding and the shield back. A retry continues this record. */
+  readonly uniswap?: UniswapAccountView;
 }
 
 /**
