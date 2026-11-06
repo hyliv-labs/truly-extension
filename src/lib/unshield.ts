@@ -31,6 +31,7 @@ import { withdrawFromPool, type WithdrawResult } from './withdraw';
 import { authoritativeScope } from './pool';
 import { requireUnlockedMnemonic } from './vault';
 import { getActiveTrade, updateActiveTrade } from './trade';
+import { publicClient } from './chain';
 import { MIN_DEPOSIT_USDC } from './lighter';
 import {
   DEFAULT_TRADE_SIZE_UNITS,
@@ -122,6 +123,73 @@ function fmt(units: bigint): string {
   return `${(Number(units) / 1_000_000).toFixed(2)} USDC`;
 }
 
+type PendingRecord = NonNullable<
+  Awaited<ReturnType<typeof getActiveTrade>> extends infer T
+    ? T extends { withdrawal?: infer W }
+      ? W
+      : never
+    : never
+>;
+
+/**
+ * Decide whether a pending funding withdrawal actually landed.
+ *
+ * Two independent ways to find out, because neither alone is enough:
+ *
+ *  - With a transaction hash, read its receipt. Definitive when available,
+ *    but the hash is absent if the worker died before the relayer answered.
+ *  - Otherwise ask the CHAIN whether the note gained a change note. The SDK
+ *    derives a label's withdrawal index from children.length, so a count above
+ *    what we recorded at the start means a withdrawal under that label landed.
+ *
+ * Returns 'landed' only on positive evidence. Anything ambiguous is reported
+ * as 'landed' too — refusing a safe retry costs a manual rescan, whereas
+ * permitting an unsafe one sends real funds twice.
+ */
+async function resolvePending(record: PendingRecord): Promise<'landed' | 'did-not-land'> {
+  if (!record) return 'did-not-land';
+
+  if (record.txHash) {
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: record.txHash as `0x${string}`,
+      });
+      if (receipt.status === 'success') {
+        await updateActiveTrade({
+          withdrawal: { ...record, status: 'confirmed', confirmedAt: Date.now() },
+        });
+        return 'landed';
+      }
+      // Mined and reverted: the note was never spent, so a retry is safe.
+      return 'did-not-land';
+    } catch {
+      // Could not read it. The transaction may still be in the mempool, so
+      // treating this as "safe to retry" could double-fund.
+      return 'landed';
+    }
+  }
+
+  // No hash: ask the chain whether the label gained a change note.
+  try {
+    const mnemonic = await requireUnlockedMnemonic();
+    const scope = await authoritativeScope();
+    const notes = await findSpendableNotes(mnemonic, scope);
+    const label = BigInt(record.label);
+    const current = notes.find((n) => n.label === label);
+
+    if (current && current.childrenCount > record.childrenCountAtStart) {
+      await updateActiveTrade({
+        withdrawal: { ...record, status: 'confirmed', confirmedAt: Date.now() },
+      });
+      return 'landed';
+    }
+    // The label is unchanged, so nothing was spent under it.
+    return 'did-not-land';
+  } catch {
+    return 'landed';
+  }
+}
+
 export interface UnshieldResult extends WithdrawResult {
   readonly recipient: Address;
   readonly expectedNetUnits: bigint;
@@ -145,10 +213,22 @@ export async function unshieldForTrade(
   if (!trade) {
     throw new UnshieldError('No trade is active.');
   }
-  if (trade.withdrawal) {
+  // A pending record means a previous attempt may have broadcast. Resolve it
+  // against the chain before doing anything: the whole hazard is that a
+  // withdrawal landed while the record that would prove it was never written.
+  if (trade.withdrawal?.status === 'confirmed') {
     throw new UnshieldError(
       'This trade has already been funded from the pool. Withdrawing again would move real funds with nothing tracking them.',
     );
+  }
+  if (trade.withdrawal?.status === 'pending') {
+    const resolution = await resolvePending(trade.withdrawal);
+    if (resolution === 'landed') {
+      throw new UnshieldError(
+        'The previous funding withdrawal did land — the record has been repaired. Do not withdraw again; wait for Lighter to credit the deposit.',
+      );
+    }
+    // Did not land: the note is unspent, so retrying is safe.
   }
   if (!trade.intentAddress) {
     throw new UnshieldError(
@@ -162,6 +242,22 @@ export async function unshieldForTrade(
   const notes = await findSpendableNotes(mnemonic, scope);
   const plan = planUnshield(notes, desiredUnits);
 
+  // WRITTEN BEFORE THE QUOTE, not after the receipt. This is the orchestrator's
+  // own rule — persist that something irreversible is about to happen before
+  // doing it — and funding is where breaking it costs real money: without this
+  // record a teardown between broadcast and confirmation leaves the phase at
+  // 'unshielding', the button live, and a second click sends a second payment
+  // to the same intent address.
+  await updateActiveTrade({
+    withdrawal: {
+      status: 'pending',
+      label: plan.note.label.toString(),
+      amount: plan.amountUnits.toString(),
+      childrenCountAtStart: plan.note.childrenCount,
+      startedAt: Date.now(),
+    },
+  });
+
   const result = await withdrawFromPool({
     note: {
       label: plan.note.label,
@@ -173,6 +269,20 @@ export async function unshieldForTrade(
     },
     amountUnits: plan.amountUnits,
     recipient: trade.intentAddress,
+    // Persisted the instant the relayer accepts, so the hash survives a
+    // teardown that happens while waiting for the receipt.
+    onBroadcast: async (txHash) => {
+      await updateActiveTrade({
+        withdrawal: {
+          status: 'pending',
+          txHash,
+          label: plan.note.label.toString(),
+          amount: plan.amountUnits.toString(),
+          childrenCountAtStart: plan.note.childrenCount,
+          startedAt: Date.now(),
+        },
+      });
+    },
   });
 
   // Written only after the withdrawal is confirmed on chain — withdrawFromPool
@@ -180,10 +290,13 @@ export async function unshieldForTrade(
   // and what getTradeStatus derives 'unshielding' from.
   await updateActiveTrade({
     withdrawal: {
-      txHash: result.txHash ?? '',
+      status: 'confirmed',
+      txHash: result.txHash,
       label: plan.note.label.toString(),
       amount: plan.amountUnits.toString(),
+      childrenCountAtStart: plan.note.childrenCount,
       withdrawalIndex: result.withdrawalIndex,
+      startedAt: Date.now(),
       confirmedAt: Date.now(),
     },
   });

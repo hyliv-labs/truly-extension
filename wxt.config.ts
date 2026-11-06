@@ -39,6 +39,16 @@ export default defineConfig({
       // Where the anon-client proxies Arbitrum reads, and the 4337 bundler.
       'https://arb1.arbitrum.io/*',
       'https://public.pimlico.io/*',
+      // The Privacy Pools relayer and the ASP. Without these the worker's
+      // fetches are subject to CORS, and the JSON POSTs to /relayer/quote and
+      // /relayer/request need a preflight those servers may not answer. Every
+      // check of these ran in Node, which has no CORS, so the gap was
+      // invisible until the extension actually ran.
+      //
+      // Overriding WXT_PRIVACY_POOL_RELAYER_URL or WXT_ASP_API_BASE needs a
+      // matching entry here.
+      'https://fastrelay.xyz/*',
+      'https://api.0xbow.io/*',
     ],
     // Puts the anon-rpc worker at an opaque origin with its own CSP. The '*'
     // is a real wildcard, which is what keeps this entry stable even though

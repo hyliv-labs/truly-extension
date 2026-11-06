@@ -78,6 +78,14 @@ export interface WithdrawRequest {
   readonly note: SpendableNote;
   readonly amountUnits: bigint;
   readonly recipient: Address;
+  /**
+   * Called the moment the relayer accepts, BEFORE the receipt is awaited.
+   *
+   * The gap between broadcast and confirmation is where a worker teardown or
+   * a failed receipt read would otherwise lose the transaction entirely. The
+   * caller uses this to persist the hash while it still can.
+   */
+  readonly onBroadcast?: (txHash: string | undefined) => Promise<void>;
 }
 
 export interface WithdrawResult {
@@ -315,6 +323,10 @@ export async function withdrawFromPool(request: WithdrawRequest): Promise<Withdr
 
       // --- 6. submit. ---
       const result = await submitWithdrawal(proven.bundle, quote, scope);
+
+      // Persist the hash before waiting on anything. From here the withdrawal
+      // is real whether or not this process survives to see it confirmed.
+      await request.onBroadcast?.(result.txHash);
 
       // The relayer accepting is NOT the withdrawal landing. It returns once
       // the transaction is broadcast, and that transaction can still revert --

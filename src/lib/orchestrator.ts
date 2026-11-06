@@ -59,6 +59,18 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
     };
   }
 
+  // A pending record means a withdrawal may already be in flight. It must NOT
+  // read as "ready to fund", or the UI invites a second payment to the same
+  // address.
+  if (trade.withdrawal.status === 'pending') {
+    return {
+      phase: 'unshielding',
+      detail: trade.withdrawal.txHash
+        ? 'Funding withdrawal submitted; waiting for it to confirm on chain.'
+        : 'A funding withdrawal was started and its outcome is unknown. Reopen to let it be checked against the chain before retrying.',
+    };
+  }
+
   if (trade.accountIndex === undefined) {
     return {
       phase: 'waiting-for-deposit',

@@ -41,11 +41,24 @@ export interface ActiveTrade {
    * shows nothing until Lighter sweeps it.
    */
   readonly withdrawal?: {
-    readonly txHash: string;
+    /**
+     * 'pending' is written BEFORE the relayer is asked for a quote, so a
+     * crash, a worker teardown or a failed receipt read can never leave a
+     * broadcast withdrawal with no record. Without it the phase falls back to
+     * 'unshielding', the button goes live again, and a second click sends a
+     * second payment to the same intent address — untracked, and linking two
+     * pool withdrawals to one Lighter identity.
+     */
+    readonly status: 'pending' | 'confirmed';
+    /** Added the moment the relayer returns, before the receipt is awaited. */
+    readonly txHash?: string;
     readonly label: string;
     readonly amount: string;
-    readonly withdrawalIndex: number;
-    readonly confirmedAt: number;
+    /** children.length when this started, so a resume can tell if it landed. */
+    readonly childrenCountAtStart: number;
+    readonly withdrawalIndex?: number;
+    readonly startedAt: number;
+    readonly confirmedAt?: number;
   };
   /** E8: last phase recorded, so the popup has something before the first poll. */
   readonly phase?: string;

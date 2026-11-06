@@ -139,5 +139,108 @@ for (const bad of [0n, -1n]) {
   }
 }
 
+// --- the double-funding guard --------------------------------------------
+// The hazard: a withdrawal is broadcast, then the worker is torn down or the
+// receipt read fails. If no record exists, the phase falls back to
+// 'unshielding', the button goes live, and a second click sends a SECOND
+// payment to the same intent address -- untracked, and linking two pool
+// withdrawals to one Lighter identity.
+const { getTradeStatus } = await import('../src/lib/orchestrator.ts');
+
+const baseTrade = {
+  ownerIndex: 0,
+  ownerAddress: '0x000000000000000000000000000000000000dEaD',
+  startedAt: Date.now(),
+  intentAddress: '0x000000000000000000000000000000000000bEEF',
+};
+
+const setTrade = async (withdrawal: unknown) => {
+  await chrome.storage.local.set({
+    'truly:activeTrade': { ...baseTrade, ...(withdrawal ? { withdrawal } : {}) },
+  });
+};
+
+await setTrade(null);
+const unfunded = await getTradeStatus();
+if (unfunded?.phase !== 'unshielding') {
+  fail(`an unfunded trade reported phase '${unfunded?.phase}', expected 'unshielding'`);
+} else {
+  pass('an unfunded trade is ready to fund');
+}
+
+// A pending record with a hash: in flight, must not invite a second payment.
+await setTrade({
+  status: 'pending',
+  txHash: `0x${'cd'.repeat(32)}`,
+  label: '42',
+  amount: '25000000',
+  childrenCountAtStart: 0,
+  startedAt: Date.now(),
+});
+const pending = await getTradeStatus();
+if (!pending?.detail.toLowerCase().includes('confirm')) {
+  fail(
+    `a pending withdrawal reads as "${pending?.detail}" — it must not read as ready to fund`,
+  );
+} else {
+  pass('a broadcast-but-unconfirmed withdrawal reads as in-flight, not as ready to fund');
+}
+
+// A pending record with NO hash: outcome unknown, still must not invite one.
+await setTrade({
+  status: 'pending',
+  label: '42',
+  amount: '25000000',
+  childrenCountAtStart: 0,
+  startedAt: Date.now(),
+});
+const unknown = await getTradeStatus();
+if (unknown?.detail.toLowerCase().includes('ready to fund')) {
+  fail('a withdrawal of unknown outcome reads as ready to fund — this is the double-send');
+} else {
+  pass('a withdrawal of unknown outcome does not read as ready to fund');
+}
+
+// The decisive refusal: a CONFIRMED record must stop a second funding before
+// any network call happens.
+const { unshieldForTrade } = await import('../src/lib/unshield.ts');
+await setTrade({
+  status: 'confirmed',
+  txHash: `0x${'ef'.repeat(32)}`,
+  label: '42',
+  amount: '25000000',
+  childrenCountAtStart: 0,
+  startedAt: Date.now(),
+  confirmedAt: Date.now(),
+});
+try {
+  await unshieldForTrade();
+  fail('a confirmed trade was funded a SECOND time');
+} catch (error) {
+  if (error instanceof UnshieldError && /already been funded/i.test(error.message)) {
+    pass('a confirmed trade refuses a second funding, before any network call');
+  } else {
+    fail(`second funding threw the wrong error: ${(error as Error).message.slice(0, 80)}`);
+  }
+}
+
+// And with no intent address, funding must refuse rather than pick a
+// recipient: the recipient is committed to inside the proof's context.
+await chrome.storage.local.set({
+  'truly:activeTrade': { ...baseTrade, intentAddress: undefined },
+});
+try {
+  await unshieldForTrade();
+  fail('funding proceeded without a Lighter deposit address');
+} catch (error) {
+  if (error instanceof UnshieldError) {
+    pass('funding without a deposit address is refused');
+  } else {
+    fail(`missing-intent threw ${(error as Error).name}`);
+  }
+}
+
+await chrome.storage.local.remove('truly:activeTrade');
+
 console.log(failed ? '\nFAILED' : '\nunshield planning OK');
 process.exit(failed ? 1 : 0);

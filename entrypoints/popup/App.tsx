@@ -122,11 +122,20 @@ export function App() {
                   has issued an address, because the recipient is committed to
                   inside the withdrawal proof and cannot be changed after. */}
               {status.activeTrade.intentAddress &&
-                (status.activeTrade.withdrawal ? (
+                (status.activeTrade.withdrawal?.status === 'confirmed' ? (
                   <p className="field-label">
                     Funded from the pool —{' '}
                     {(Number(status.activeTrade.withdrawal.amount) / 1e6).toFixed(2)} USDC
                     withdrawn.
+                  </p>
+                ) : status.activeTrade.withdrawal?.status === 'pending' ? (
+                  // In flight. Offering the button here is what would send a
+                  // second payment to the same intent address.
+                  <p className="field-label">
+                    Funding withdrawal in progress
+                    {status.activeTrade.withdrawal.txHash
+                      ? ' — waiting for it to confirm.'
+                      : ' — its outcome is being checked against the chain.'}
                   </p>
                 ) : (
                   <>
