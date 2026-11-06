@@ -97,22 +97,25 @@ export function App() {
         </section>
       ) : status.unlocked ? (
         <section className="panel">
-          <label className="field-label">Owner address #{status.ownerIndex}</label>
-          <code className="address">{owner ?? '…'}</code>
+          <p className="who">
+            <span className="field-label">Owner address #{status.ownerIndex}</span>
+            <code>{owner ?? '…'}</code>
+          </p>
 
           {backup && (
             <div className="backup">
               <strong>Write this down now.</strong>
               <code>{backup}</code>
               <p>It is the only way to recover funds from a trade in flight.</p>
+              <button className="secondary" disabled={busy} onClick={() => setBackup(null)}>
+                I&apos;ve written it down
+              </button>
             </div>
           )}
 
-          <p className="field-label">
-            {status.activeTrade
-              ? 'Trade active — Lighter can connect to this address.'
-              : 'No active trade. Lighter cannot connect.'}
-          </p>
+          {status.activeTrade && !status.activeTrade.session && (
+            <p className="field-label">Trade active — Lighter can connect to this address.</p>
+          )}
 
           {/* A market-trade session reports its own progress; the exit phases
               (withdraw from Lighter, re-shield) apply again once it is closed. */}
@@ -223,7 +226,7 @@ export function App() {
                 </p>
               )}
 
-              {status.activeTrade.accountIndex !== undefined && (
+              {status.activeTrade.accountIndex !== undefined && !status.activeTrade.session && (
                 <p className="field-label">
                   Lighter account #{status.activeTrade.accountIndex}
                 </p>
@@ -241,7 +244,7 @@ export function App() {
                 End trade
               </button>
               <button
-                className="link"
+                className="link danger"
                 disabled={busy}
                 onClick={() => {
                   const abandon = window.confirm(

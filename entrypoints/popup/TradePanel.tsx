@@ -66,6 +66,7 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
   const marginNum = marginUnits ? Number(marginUnits) / 1e6 : 0;
   const notional = marginNum * leverage;
   const ref = market ? (market.markPrice > 0 ? market.markPrice : market.lastPrice) : 0;
+  const marginInvalid = margin.trim().length > 0 && marginUnits === null;
 
   const wire = () => {
     if (!market || !marginUnits) throw new Error('Choose a market and a margin.');
@@ -103,14 +104,14 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
     <div className="trade">
       <div className="trade-head">
         <strong>Market trade</strong>
-        <span className="field-label">Market orders only · funded just-in-time</span>
+        <span className="field-label">One market order, funded from Privacy Pools when you confirm</span>
       </div>
 
-      {markets === null ? (
-        <p className="field-label">{error ?? 'Loading Lighter markets…'}</p>
-      ) : (
-        <>
-          <input placeholder="Search markets" value={filter} disabled={disabled} onChange={(e) => setFilter(e.target.value)} />
+      <div className="market-group">
+        <input placeholder="Search markets" aria-label="Search markets" value={filter} disabled={disabled || markets === null} onChange={(e) => setFilter(e.target.value)} />
+        {markets === null ? (
+          <div className="skeleton" role="status">{error ? <span className="error">{error}</span> : 'Loading markets'}</div>
+        ) : (
           <select
             aria-label="Market"
             value={marketId ?? ''}
@@ -124,57 +125,79 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
               </option>
             ))}
           </select>
-          {market && (
-            <p className="field-label">
-              {market.symbol} mark {price(ref)} · 24h {Number.isFinite(market.dailyChangePct) ? `${market.dailyChangePct.toFixed(2)}%` : '—'} · max {market.maxLeverage}x · min {market.minQuoteAmount} USDC notional
-            </p>
-          )}
-        </>
+        )}
+      </div>
+      {market && (
+        <p className="field-label">
+          24h {Number.isFinite(market.dailyChangePct) ? `${market.dailyChangePct.toFixed(2)}%` : '—'} · max {market.maxLeverage}× · min {market.minQuoteAmount} USDC notional
+        </p>
       )}
 
-      <div className="sides">
-        <button className={direction === 'long' ? 'long active' : 'long'} disabled={disabled} onClick={() => setDirection('long')}>
+      <div className="sides" role="group" aria-label="Direction">
+        <button className={direction === 'long' ? 'long active' : 'long'} disabled={disabled} aria-pressed={direction === 'long'} onClick={() => setDirection('long')}>
           LONG
         </button>
-        <button className={direction === 'short' ? 'short active' : 'short'} disabled={disabled} onClick={() => setDirection('short')}>
+        <button className={direction === 'short' ? 'short active' : 'short'} disabled={disabled} aria-pressed={direction === 'short'} onClick={() => setDirection('short')}>
           SHORT
         </button>
       </div>
 
-      <label className="field-label" htmlFor="margin">
-        Margin (USDC withdrawn from Privacy Pools)
-      </label>
-      <input id="margin" inputMode="decimal" value={margin} disabled={disabled} onChange={(e) => setMargin(e.target.value)} />
+      <label className="field-label" htmlFor="margin">Margin</label>
+      <div className={`affix${marginInvalid ? ' invalid' : ''}`}>
+        <input
+          id="margin"
+          inputMode="decimal"
+          aria-invalid={marginInvalid}
+          value={margin}
+          disabled={disabled}
+          onChange={(e) => setMargin(e.target.value)}
+        />
+        <span>USDC</span>
+      </div>
+      {marginInvalid ? (
+        <p className="error">Enter a USDC amount, up to 6 decimals.</p>
+      ) : (
+        <p className="field-label">Withdrawn from Privacy Pools. Lighter credits at least 5 USDC.</p>
+      )}
 
-      <label className="field-label" htmlFor="leverage">
-        Leverage: {leverage}x {market ? `(max ${market.maxLeverage}x)` : ''}
-      </label>
+      <div className="lev-label">
+        <label className="field-label" htmlFor="leverage">Leverage</label>
+        <span>{leverage}×</span>
+      </div>
       <input
         id="leverage"
         type="range"
         min={1}
         max={market?.maxLeverage ?? 1}
         step={1}
-        value={leverage}
+        value={Math.min(leverage, market?.maxLeverage ?? leverage)}
         disabled={disabled || !market}
         onChange={(e) => setLeverage(Number(e.target.value))}
       />
-      <p className="field-label">
-        Notional = {marginNum.toFixed(2)} × {leverage} = <strong>{money(notional)}</strong>
-        {ref > 0 && ` ≈ ${(notional / ref).toPrecision(4)} ${market?.symbol ?? ''}`}
-      </p>
+
+      <div className="ticket">
+        <span className="ticket-kicker">Notional</span>
+        <span className="ticket-figure">{money(notional)}</span>
+        <span className="ticket-meta">
+          Notional = {marginNum.toFixed(2)} × {leverage} = {money(notional)}
+          {ref > 0 && ` · ≈ ${(notional / ref).toPrecision(4)} ${market?.symbol ?? ''}`}
+        </span>
+      </div>
+
+      {quote && <OrderSummary quote={quote} />}
 
       {quote ? (
-        <OrderSummary quote={quote} />
+        <button className={direction} disabled={disabled} onClick={() => void confirm()}>
+          {working === 'open' ? 'Starting…' : `Confirm ${direction.toUpperCase()} ${quote.symbol}`}
+        </button>
       ) : (
         <button disabled={disabled || !market?.tradable || !marginUnits} onClick={() => void review()}>
           {working === 'quote' ? 'Checking spendable balance…' : 'Review order'}
         </button>
       )}
-
       {quote && (
-        <button className={direction} disabled={disabled} onClick={() => void confirm()}>
-          {working === 'open' ? 'Starting…' : `Confirm ${direction.toUpperCase()} ${quote.symbol}`}
+        <button className="link" disabled={disabled} onClick={() => setQuote(null)}>
+          Edit order
         </button>
       )}
 
@@ -184,35 +207,21 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
 }
 
 function OrderSummary({ quote }: { quote: TradeQuote }) {
-  const rows: [string, string][] = [
-    ['Market', `${quote.symbol}-PERP`],
-    ['Direction', quote.direction.toUpperCase()],
-    ['Order type', 'Market (immediate-or-cancel)'],
-    ['Margin', `${usdc(quote.marginUnits)} USDC`],
-    ['Leverage', `${quote.leverage}x`],
-    ['Notional', `${money(quote.notionalUsd)} (sized from margin less a 2% buffer)`],
-    ['Est. position size', `${quote.estimatedSize} ${quote.symbol} @ ~${price(quote.referencePrice)}`],
-    ['Pool withdrawal', `${usdc(quote.grossWithdrawalUnits)} USDC gross → ~${usdc(quote.expectedNetUnits)} to Lighter`],
-    ['Relayer fee (est.)', `${usdc(quote.relayerFeeEstimateUnits)} USDC`],
-    ['Lighter taker fee', `${quote.takerFeePct}% ≈ ${money(quote.takerFeeEstimateUsd)}`],
-    ['Exit costs (later)', `≤ ${usdc(quote.reshieldGasReserveUnits)} USDC gas + ${quote.poolVettingFeeBps / 100}% pool fee on re-shield`],
-    ['Spendable now', `${usdc(quote.spendableUnits)} USDC${Number(quote.pendingAspUnits) > 0 ? ` (+${usdc(quote.pendingAspUnits)} pending ASP)` : ''}`],
-    ['Funding source', quote.fundingSource],
-  ];
+  const pending = Number(quote.pendingAspUnits) > 0 ? ` · ${usdc(quote.pendingAspUnits)} awaiting ASP` : '';
   return (
     <div className="summary">
-      {rows.map(([k, v]) => (
-        <div key={k} className="row">
-          <span>{k}</span>
-          <span>{v}</span>
-        </div>
-      ))}
+      <p className="summary-lead">
+        {quote.direction.toUpperCase()} {quote.symbol}-PERP · {quote.leverage}× · market
+      </p>
+      <div className="row"><span>Size</span><span>{quote.estimatedSize} {quote.symbol} at ~{price(quote.referencePrice)}</span></div>
+      <div className="row"><span>Margin</span><span>{usdc(quote.marginUnits)} USDC from {quote.fundingSource}</span></div>
+      <div className="row"><span>Withdrawal</span><span>{usdc(quote.grossWithdrawalUnits)} gross, ~{usdc(quote.expectedNetUnits)} to Lighter</span></div>
+      <div className="row"><span>Fees</span><span>~{usdc(quote.relayerFeeEstimateUnits)} relayer · {quote.takerFeePct}% Lighter · ≤{usdc(quote.reshieldGasReserveUnits)} to exit</span></div>
+      <div className="row"><span>Spendable</span><span>{usdc(quote.spendableUnits)} USDC{pending}</span></div>
       {quote.warnings.map((w) => (
-        <p key={w} className="hint">
-          {w}
-        </p>
+        <p key={w} className="hint">{w}</p>
       ))}
-      <p className="hint">A fresh owner address and a fresh Lighter account are used for this trade only.</p>
+      <p className="hint">Sized from margin less a 2% buffer. A fresh owner and a fresh Lighter account, used once.</p>
     </div>
   );
 }
@@ -264,66 +273,78 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
     }
   };
 
-  if (!view) return <p className="field-label">Loading trade session…</p>;
+  if (!view) return <div className="skeleton tall" role="status">Loading trade</div>;
   const s = view.session;
-  const current = STEPS.findIndex((st) => st.states.includes(s.state));
+  const current = Math.max(0, STEPS.findIndex((st) => st.states.includes(s.state)));
   const failed = ['funding-failed', 'deposit-problem', 'order-failed', 'close-failed'].includes(s.state);
   const ex = s.order?.execution;
   const pos = view.position;
   const disabled = busy || working !== null;
+  const settled = ex && ex.state !== 'unfilled';
+  const hero = pos
+    ? money(pos.unrealizedPnl, 2)
+    : ex?.averagePrice
+      ? price(ex.averagePrice)
+      : `${usdc(s.marginUnits)} USDC`;
+  const heroCaption = pos ? 'Unrealised PnL' : ex?.averagePrice ? 'Average fill' : 'Margin';
+  // The fill rows are the result, so the status box does not repeat them.
+  const showNarrative = !settled || failed || Boolean(s.blocked) || Boolean(s.error && s.error.code !== 'transient');
 
   return (
     <div className="trade">
-      <div className="trade-head">
-        <strong>
-          {s.direction.toUpperCase()} {s.symbol}-PERP · {s.leverage}x · {usdc(s.marginUnits)} USDC
-        </strong>
-        <span className="field-label">Session {s.id.slice(0, 8)}</span>
-      </div>
-
-      <ol className="steps">
-        {STEPS.map((st, i) => (
-          <li key={st.label} className={i < current ? 'done' : i === current ? (failed ? 'failed' : 'now') : ''}>
-            {st.label}
-          </li>
-        ))}
-      </ol>
-
-      <div className={failed ? 'phase failed' : 'phase'}>
-        <strong>{s.state.replace(/-/g, ' ')}</strong>
-        <p>{s.detail}</p>
-        {s.blocked === 'locked' && <p className="error">Unlock Truly to continue — this step signs with the trade's keys.</p>}
-        {s.error && s.error.code !== 'transient' && (
-          <p className="error">
-            {s.error.code}: {s.error.message}
-          </p>
+      <div className="ticket">
+        <span className="ticket-kicker">
+          {s.direction.toUpperCase()} {s.symbol}-PERP · {s.leverage}× · {usdc(s.marginUnits)} USDC
+        </span>
+        {!failed && (
+          <>
+            <span className={`ticket-figure${pos ? (pos.unrealizedPnl >= 0 ? ' pos-long' : ' pos-short') : ''}`}>{hero}</span>
+            <span className="ticket-meta">{heroCaption}</span>
+          </>
         )}
-        {s.error?.code === 'transient' && <p className="hint">Last check failed, retrying: {s.error.message}</p>}
       </div>
 
-      {ex && ex.state !== 'unfilled' && (
+      <div className="meter" aria-hidden>
+        <span className={failed ? 'failed' : ''} style={{ width: `${((current + 1) / STEPS.length) * 100}%` }} />
+      </div>
+      <p className="field-label">
+        {current + 1} of {STEPS.length} · {STEPS[current]?.label}
+      </p>
+
+      {showNarrative && (
+        <div className={failed ? 'phase failed' : 'phase'}>
+          <strong>{s.state.replace(/-/g, ' ')}</strong>
+          <p>{s.detail}</p>
+          {s.blocked === 'locked' && <p className="error">Unlock Truly to continue. This step signs with the trade&apos;s keys.</p>}
+          {s.error && s.error.code !== 'transient' && (
+            <p className={s.detail.includes(s.error.message) ? 'field-label' : 'error'}>
+              {s.detail.includes(s.error.message) ? s.error.code : `${s.error.code}: ${s.error.message}`}
+            </p>
+          )}
+          {s.error?.code === 'transient' && <p className="hint">Last check failed, retrying: {s.error.message}</p>}
+        </div>
+      )}
+
+      {settled && (
         <div className="summary">
-          <div className="row"><span>Execution</span><span>{ex.state === 'filled' ? 'FILLED' : 'PARTIALLY FILLED'} (Lighter: {ex.lighterStatus})</span></div>
-          <div className="row"><span>Order ID</span><span>{ex.orderIndex}</span></div>
-          <div className="row"><span>Market</span><span>{s.symbol}-PERP · {s.direction.toUpperCase()}</span></div>
-          <div className="row"><span>Avg. execution price</span><span>{price(ex.averagePrice)}</span></div>
+          <div className="row"><span>Execution</span><span>{ex.state === 'filled' ? 'FILLED' : 'PARTIALLY FILLED'}</span></div>
+          <div className="row"><span>Order</span><span>{ex.orderIndex}</span></div>
           <div className="row"><span>Filled</span><span>{ex.filledBase} of {s.order!.baseAmount} {s.symbol}</span></div>
-          <div className="row"><span>Size (USD)</span><span>{money(ex.filledQuote)}</span></div>
+          <div className="row"><span>Size</span><span>{money(ex.filledQuote)}</span></div>
           <div className="row"><span>Margin used</span><span>{money(s.order!.marginUsd)} of {money(s.creditedUsd)} credited</span></div>
           <div className="row"><span>Fees paid</span><span>{money(ex.feesUsd, 4)} over {ex.fillCount} fill{ex.fillCount === 1 ? '' : 's'}</span></div>
         </div>
       )}
 
       {pos && (
-        <div className="summary position">
+        <div className="summary">
           <div className="row"><span>Position</span><span className={pos.sign > 0 ? 'pos-long' : 'pos-short'}>{pos.sign > 0 ? 'LONG' : 'SHORT'} {pos.size} {pos.symbol || s.symbol}</span></div>
           <div className="row"><span>Entry</span><span>{price(pos.avgEntryPrice)}</span></div>
-          <div className="row"><span>Size (USD)</span><span>{money(pos.positionValue)}</span></div>
+          <div className="row"><span>Size</span><span>{money(pos.positionValue)}</span></div>
           <div className="row"><span>Margin</span><span>{money(pos.allocatedMargin > 0 ? pos.allocatedMargin : (view.account?.collateral ?? null))}</span></div>
-          <div className="row"><span>Leverage</span><span>{pos.initialMarginFraction > 0 ? `${(100 / pos.initialMarginFraction).toFixed(1)}x` : `${s.leverage}x`}</span></div>
-          <div className="row"><span>Unrealised PnL</span><span className={pos.unrealizedPnl >= 0 ? 'pos-long' : 'pos-short'}>{money(pos.unrealizedPnl, 4)}</span></div>
+          <div className="row"><span>Leverage</span><span>{pos.initialMarginFraction > 0 ? `${(100 / pos.initialMarginFraction).toFixed(1)}×` : `${s.leverage}×`}</span></div>
           <div className="row"><span>Liquidation</span><span>{pos.liquidationPrice > 0 ? price(pos.liquidationPrice) : '—'}</span></div>
-          <div className="row"><span>Status</span><span>{s.state === 'closing' ? 'closing…' : 'open'}</span></div>
+          <div className="row"><span>Status</span><span>{s.state === 'closing' ? 'Closing' : 'Open'}</span></div>
         </div>
       )}
       {view.liveError && <p className="hint">Could not read the live position: {view.liveError}</p>}
