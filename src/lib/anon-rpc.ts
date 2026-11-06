@@ -108,6 +108,32 @@ export async function anonRpcCall(
   method: string,
   params: unknown[] = [],
 ): Promise<unknown> {
+  // The AbortSignal on the Request below is NOT enough on its own: the harness
+  // forwards the Request into the sandboxed worker and the signal does not
+  // reach it. Measured: with the mixnet connection stalled, a balance read
+  // never settled, the session step waited on it for 15+ minutes, and every
+  // later call ("End trade" included) queued behind it. This deadline lives
+  // here, so it always fires; the stalled worker is dropped so the next read
+  // reconnects instead of waiting on the same dead connection.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      resetAnonRpc();
+      reject(
+        new AnonRpcUnavailable(
+          `No answer over anon-rpc for ${method} within ${Math.round(ANON_RPC_TIMEOUT_MS / 1000)}s. The connection was reset; the next read reconnects.`,
+        ),
+      );
+    }, ANON_RPC_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([anonRpcCallOnce(method, params), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function anonRpcCallOnce(method: string, params: unknown[]): Promise<unknown> {
   let active: AnonRpcWorker;
   try {
     active = await getWorker();
