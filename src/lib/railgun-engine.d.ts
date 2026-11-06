@@ -9,6 +9,8 @@ declare module '@railgun-community/engine' {
     prover: {
       setSnarkJSGroth16: (groth16: unknown) => void;
     };
+    /** isScanning is true from the start of a tree scan until its decrypt ends. */
+    getUTXOMerkletree(txidVersion: string, chain: unknown): { isScanning: boolean };
   }
 }
 

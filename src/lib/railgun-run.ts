@@ -12,7 +12,6 @@
 import Level from 'level-js';
 import {
   ArtifactStore,
-  awaitWalletScan,
   balanceForERC20Token,
   createRailgunWallet,
   gasEstimateForShield,
@@ -24,6 +23,7 @@ import {
   populateProvedUnshield,
   populateShield,
   getEngine,
+  pauseAllPollingProviders,
   refreshBalances,
   setOnBalanceUpdateCallback,
   setOnUTXOMerkletreeScanCallback,
@@ -98,11 +98,8 @@ async function readBalances(mnemonic: string): Promise<RailgunBalanceSnapshot> {
   setRailgunSyncStatus({ phase: 'starting', progress: 0, error: undefined });
   const { feeBps } = await ensureEngine();
   const id = await ensureWallet(mnemonic);
-  const chain = NETWORK_CONFIG[NETWORK].chain;
   setRailgunSyncStatus({ phase: 'syncing' });
-  await refreshBalances(chain, [id]);
-  setRailgunSyncStatus({ phase: 'scanning-wallet', progress: 0 });
-  await awaitWalletScan(id, chain);
+  await syncWallet(id);
 
   const wallet = walletForID(id);
   const spendable = await balanceForERC20Token(TXID, wallet, NETWORK, RAILGUN_USDC, true);
@@ -132,6 +129,10 @@ export async function runRailgunUnshield(input: {
 }): Promise<PopulatedRailgunTx> {
   await ensureEngine();
   const id = await ensureWallet(input.mnemonic);
+  // The live listener is paused (see boot), so the notes are only as fresh as
+  // the last sync. Without this, a second unshield in the same session could
+  // pick the note the first one already spent, and the transaction reverts.
+  await syncWallet(id);
   const key = await encryptionKey(input.mnemonic);
   const recipients: RailgunERC20AmountRecipient[] = [
     {
@@ -254,6 +255,28 @@ export async function runRailgunShieldCall(input: {
   return { to, data };
 }
 
+/**
+ * Bring the merkle tree and this wallet's notes up to date. Resolves once
+ * the wallet's notes are decrypted, so a balance read straight after is real.
+ *
+ * NOT the SDK's awaitWalletScan. refreshBalances runs the decrypt itself and
+ * defers the wallet's completion event (deferCompletionEvent), so
+ * WalletDecryptBalancesComplete never fires on this path. awaitWalletScan
+ * then waits for some later decrypt, and measured, the popup never got a
+ * balance after a sync that had finished.
+ */
+async function syncWallet(id: string): Promise<void> {
+  const chain = NETWORK_CONFIG[NETWORK].chain;
+  await refreshBalances(chain, [id]);
+  // refreshBalances returns at once ("Already scanning") when an earlier
+  // call's scan still holds the tree, e.g. the popup asked again. That scan
+  // decrypts before it releases the tree, so waiting for the release is enough.
+  const tree = getEngine().getUTXOMerkletree(TXID, chain);
+  while (tree.isScanning) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 function snarkGroth16(): unknown {
   const snark = (globalThis as { snarkjs?: { groth16?: { fullProve?: unknown } } }).snarkjs;
   if (!snark?.groth16 || typeof snark.groth16.fullProve !== 'function') {
@@ -335,6 +358,13 @@ async function boot(): Promise<{ feeBps: bigint }> {
     NETWORK,
     30_000,
   );
+  // loadProvider also attaches a live listener for new Railgun events. On
+  // Arbitrum that costs one getLogs per block: each ethers poll replays every
+  // block since the last one and the listener queries each. Measured: a
+  // ~113-call batch every 30s, which arb1 rate-limits, so the retries crowd
+  // out the calls that matter (55k getLogs in 7 minutes). Truly syncs on
+  // demand instead (syncWallet), so the listener has nothing to add.
+  pauseAllPollingProviders();
   return { feeBps: parseBps(loaded.feesSerialized.unshieldFeeV2) };
 }
 
