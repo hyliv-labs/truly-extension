@@ -57,7 +57,7 @@ function Approval() {
   return (
     <main className="popup">
       <header>
-        <h1>{record.method === 'personal_sign' ? 'Signature request' : 'Connect'}</h1>
+        <h1>{approvalTitle(record.method)}</h1>
         <p className="tagline">{record.origin}</p>
       </header>
 
@@ -83,6 +83,13 @@ function Approval() {
       </section>
     </main>
   );
+}
+
+function approvalTitle(method: string): string {
+  if (method === 'personal_sign') return 'Signature request';
+  if (method.startsWith('eth_signTypedData')) return 'Typed data';
+  if (method === 'eth_sendTransaction') return 'Transaction';
+  return 'Connect';
 }
 
 const root = document.getElementById('root');

@@ -2,56 +2,73 @@
  * E5 background half: the only place a provider request is ever answered.
  *
  * Two invariants, both load-bearing for privacy:
- *   1. Nothing is answered unless a trade is active — otherwise a page could
- *      fingerprint the user by asking for accounts at any time.
+ *   1. Nothing about the owner is answered unless a trade is active — otherwise
+ *      a page could fingerprint the user by asking for accounts at any time.
  *   2. Only the active trade's owner address is ever exposed. Never the index,
  *      never a past owner, never a list.
+ *
+ * Approval state lives in chrome.storage.session, not only in the promise
+ * below. Chrome may kill this worker while the prompt is open. The content
+ * script retries the same request id, and this module continues from the
+ * stored record: it does not open a second prompt, and it does not sign a
+ * second transaction.
  */
 
+import { keccak256, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import type { Hex } from 'viem';
 import { getActiveTrade } from './trade';
 import { ownerAt } from './vault';
-import { dropApproval, putApproval } from './approvals';
+import {
+  decideApproval,
+  dropApproval,
+  getInFlight,
+  listInFlight,
+  pruneInFlight,
+  putApproval,
+  putInFlight,
+  type InFlightRequest,
+} from './approvals';
+import { publicClient } from './chain';
+import {
+  parsePersonalSign,
+  parseTransactionRequest,
+  parseTypedDataRequest,
+  ProviderRequestError,
+} from './provider-requests';
 
 /** Arbitrum One. */
 export const CHAIN_ID_HEX = '0xa4b1';
 
 const APPROVAL_WINDOW = { width: 400, height: 560 } as const;
 
+const LIGHTER_TAB = 'https://*.lighter.xyz/*';
+
 /**
- * Worker-local. If MV3 tears the worker down while an approval window is open,
- * these settle as errors and the dapp sees a rejection rather than a hang.
- * TODO(E8): persist enough to re-offer the prompt after a teardown.
+ * Worker-local waiters. The durable half is the in-flight record. If this
+ * map is empty on wake, the record still says whether the user answered.
  */
 const pending = new Map<
   string,
-  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  { resolve: () => void; reject: (error: Error) => void }
 >();
+
+/** Stops two wakes from opening two windows for the same prompt. */
+const windowOpens = new Map<string, Promise<void>>();
 
 export async function handleProviderRequest(
   origin: string,
   method: string,
   params: unknown[] = [],
+  requestId = '',
 ): Promise<unknown> {
+  const id = requestId || crypto.randomUUID();
+  await pruneInFlight();
+
+  const existing = await getInFlight(id);
+  if (existing) return continueInFlight(existing);
+
   const trade = await getActiveTrade();
-  if (!trade) {
-    // A dapp renders ANY provider rejection as its own words — Lighter says
-    // "connection cancelled" — so the reason never reaches the user. An error
-    // alone is therefore a dead end: nothing on screen says a trade must be
-    // started first, or where to do it.
-    //
-    // Only for an explicit connect. eth_accounts is a silent "already
-    // connected?" probe that dapps fire on page load, and opening a window
-    // for that would mean Truly popping up on every visit.
-    if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
-      await openTrulyWindow();
-    }
-    throw rpcError(
-      4100,
-      'Truly has no active trade. Open Truly and press "Start trade", then connect again.',
-    );
-  }
+  if (!trade) return refuseWithoutTrade(method);
 
   switch (method) {
     case 'eth_chainId':
@@ -66,48 +83,406 @@ export async function handleProviderRequest(
     }
 
     case 'eth_accounts':
-      // No prompt: this is the "already connected?" probe. The trade gate above
-      // is what keeps it from leaking anything.
+      // No prompt: this is the "already connected?" probe. The trade gate
+      // above is what keeps it from leaking anything.
       return [trade.ownerAddress];
 
-    case 'eth_requestAccounts': {
-      await requireApproval({
+    case 'wallet_getPermissions':
+      return [{ parentCapability: 'eth_accounts' }];
+
+    case 'eth_requestAccounts':
+    case 'wallet_requestPermissions':
+    case 'personal_sign':
+    case 'eth_signTypedData_v3':
+    case 'eth_signTypedData_v4':
+    case 'eth_signTypedData':
+    case 'eth_sendTransaction':
+      return approveAndPerform({
+        requestId: id,
         origin,
         method,
+        params,
         ownerAddress: trade.ownerAddress,
+        ownerIndex: trade.ownerIndex,
       });
-      return [trade.ownerAddress];
-    }
-
-    case 'personal_sign': {
-      const [rawMessage, address] = params as [Hex, string];
-
-      if (address?.toLowerCase() !== trade.ownerAddress.toLowerCase()) {
-        throw rpcError(4100, 'Truly will only sign for the active owner.');
-      }
-
-      await requireApproval({
-        origin,
-        method,
-        ownerAddress: trade.ownerAddress,
-        message: decodeMessage(rawMessage),
-      });
-
-      // Derive at the trade's pinned index, never the current one: if the
-      // index moved while the prompt was open, signing with it would produce a
-      // signature from an address the dapp never saw.
-      const owner = await ownerAt(trade.ownerIndex);
-      if (owner.address.toLowerCase() !== trade.ownerAddress.toLowerCase()) {
-        throw rpcError(4100, 'Truly owner mismatch; refusing to sign.');
-      }
-
-      return privateKeyToAccount(owner.privateKey).signMessage({
-        message: { raw: rawMessage },
-      });
-    }
 
     default:
       throw rpcError(4200, `Truly does not support ${method}.`);
+  }
+}
+
+/**
+ * Tell every open Lighter tab that the exposed account changed.
+ *
+ * Only Lighter tabs receive it. The content script is not injected anywhere
+ * else, and a broadcast to every tab would hand the owner address to sites
+ * that never asked.
+ */
+export async function broadcastProviderEvent(
+  event: 'accountsChanged' | 'disconnect',
+  args: unknown[],
+): Promise<void> {
+  let tabs: chrome.tabs.Tab[] = [];
+  try {
+    tabs = await chrome.tabs.query({ url: LIGHTER_TAB });
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    tabs.map(async (tab) => {
+      if (tab.id === undefined) return;
+      try {
+        await chrome.tabs.sendMessage(tab.id, { kind: 'providerEvent', event, args });
+      } catch {
+        // The tab has no content script. Nothing to update.
+      }
+    }),
+  );
+}
+
+/**
+ * Re-open prompts whose worker died before the user answered. Called on
+ * every worker start. A window that is still open is left alone.
+ */
+export async function resumePendingApprovals(): Promise<void> {
+  await pruneInFlight();
+  for (const entry of await listInFlight()) {
+    if (entry.status !== 'awaiting') continue;
+    await ensureWindow(entry);
+  }
+}
+
+/**
+ * No trade means no owner, so account probes answer empty rather than
+ * throwing. A throw here is rendered by the dapp as "connection cancelled",
+ * which on a page-load probe looks like Truly is broken.
+ *
+ * An explicit connect still opens Truly, because silence there leaves the
+ * user with no idea why the button failed.
+ */
+async function refuseWithoutTrade(method: string): Promise<unknown> {
+  if (method === 'eth_chainId') return CHAIN_ID_HEX;
+  if (method === 'eth_accounts' || method === 'wallet_getPermissions') return [];
+
+  if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
+    await openTrulyWindow();
+  }
+  throw rpcError(
+    4100,
+    'Truly has no active trade. Open Truly and press "Start trade", then connect again.',
+  );
+}
+
+async function approveAndPerform(input: {
+  requestId: string;
+  origin: string;
+  method: string;
+  params: unknown[];
+  ownerAddress: string;
+  ownerIndex: number;
+}): Promise<unknown> {
+  if (input.method === 'eth_sendTransaction') {
+    await assertOwnerHasEth(input.ownerAddress);
+  }
+
+  const message = approvalMessage(input.method, input.params, input.ownerAddress);
+  const record: InFlightRequest = {
+    requestId: input.requestId,
+    approvalId: crypto.randomUUID(),
+    origin: input.origin,
+    method: input.method,
+    params: input.params,
+    ownerAddress: input.ownerAddress,
+    ownerIndex: input.ownerIndex,
+    status: 'awaiting',
+    message,
+    createdAt: Date.now(),
+  };
+
+  await putInFlight(record);
+  await putApproval({
+    id: record.approvalId,
+    origin: record.origin,
+    method: record.method,
+    ownerAddress: record.ownerAddress,
+    message,
+    createdAt: record.createdAt,
+  });
+
+  await waitForDecision(record);
+  const decided = await getInFlight(record.requestId);
+  if (!decided || decided.status === 'rejected') {
+    throw rpcError(
+      decided?.error?.code ?? 4001,
+      decided?.error?.message ?? 'User rejected the request.',
+    );
+  }
+  return perform(decided);
+}
+
+async function continueInFlight(record: InFlightRequest): Promise<unknown> {
+  if (record.status === 'completed') return record.result;
+  if (record.status === 'rejected') {
+    throw rpcError(record.error?.code ?? 4001, record.error?.message ?? 'User rejected the request.');
+  }
+
+  if (record.status === 'awaiting') {
+    await waitForDecision(record);
+    const decided = await getInFlight(record.requestId);
+    if (!decided || decided.status === 'rejected') {
+      throw rpcError(
+        decided?.error?.code ?? 4001,
+        decided?.error?.message ?? 'User rejected the request.',
+      );
+    }
+    return perform(decided);
+  }
+
+  return perform(record);
+}
+
+/**
+ * The only place a signature or a transaction is produced.
+ *
+ * The owner is derived at the index stored on the request, never whatever
+ * index is current now. Retiring the trade while the prompt was open must
+ * not redirect the signature onto the next address.
+ */
+async function perform(record: InFlightRequest): Promise<unknown> {
+  const latest = (await getInFlight(record.requestId)) ?? record;
+  if (latest.status === 'completed') return latest.result;
+
+  const trade = await getActiveTrade();
+  if (!trade || trade.ownerIndex !== latest.ownerIndex) {
+    throw rpcError(4100, 'The trade ended before this request was signed.');
+  }
+
+  const owner = await ownerAt(latest.ownerIndex);
+  if (owner.address.toLowerCase() !== latest.ownerAddress.toLowerCase()) {
+    throw rpcError(4100, 'Truly owner mismatch; refusing to sign.');
+  }
+
+  const result = await execute(latest, owner.privateKey);
+  const after = (await getInFlight(record.requestId)) ?? latest;
+  await putInFlight({ ...after, status: 'completed', result });
+  await dropApproval(latest.approvalId);
+  return result;
+}
+
+async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknown> {
+  const account = privateKeyToAccount(privateKey);
+
+  switch (record.method) {
+    case 'eth_requestAccounts':
+      return [record.ownerAddress];
+
+    case 'wallet_requestPermissions':
+      return [{ parentCapability: 'eth_accounts' }];
+
+    case 'personal_sign': {
+      const { raw } = parsePersonalSign(record.params, record.ownerAddress);
+      return account.signMessage({ message: { raw } });
+    }
+
+    case 'eth_signTypedData':
+    case 'eth_signTypedData_v3':
+    case 'eth_signTypedData_v4': {
+      const typed = parseTypedDataRequest(record.method, record.params, record.ownerAddress);
+      return account.signTypedData({
+        domain: typed.domain,
+        types: typed.types,
+        primaryType: typed.primaryType,
+        message: typed.message,
+      });
+    }
+
+    case 'eth_sendTransaction':
+      return sendOwnerTransaction(record, privateKey);
+
+    default:
+      throw rpcError(4200, `Truly does not support ${record.method}.`);
+  }
+}
+
+/**
+ * Sign, remember the exact bytes, then broadcast.
+ *
+ * The hash of those bytes is the transaction hash. If the worker dies after
+ * the broadcast, the retry sends the same bytes and returns the same hash.
+ * A genuine rejection deletes the bytes so the next attempt can use a new nonce.
+ */
+async function sendOwnerTransaction(record: InFlightRequest, privateKey: Hex): Promise<Hex> {
+  const latest = (await getInFlight(record.requestId)) ?? record;
+  if (latest.rawTx) return broadcastRaw(latest.rawTx as Hex);
+
+  const account = privateKeyToAccount(privateKey);
+  const tx = parseTransactionRequest(record.params, record.ownerAddress);
+  const prepared = await publicClient.prepareTransactionRequest({
+    account,
+    to: tx.to,
+    data: tx.data,
+    value: tx.value,
+  });
+  // prepareTransactionRequest returns the chain object alongside the fields
+  // signTransaction wants. The runtime value is a transaction; the extra
+  // fields are what the type refuses.
+  const serialized = await account.signTransaction(
+    prepared as Parameters<typeof account.signTransaction>[0],
+  );
+  await putInFlight({ ...latest, rawTx: serialized });
+
+  try {
+    return await broadcastRaw(serialized);
+  } catch (error) {
+    const stored = await getInFlight(record.requestId);
+    if (stored) {
+      const { rawTx: _omit, ...rest } = stored;
+      await putInFlight(rest);
+    }
+    throw error;
+  }
+}
+
+async function broadcastRaw(serialized: Hex): Promise<Hex> {
+  const hash = keccak256(serialized);
+  try {
+    await publicClient.sendRawTransaction({ serializedTransaction: serialized });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // The node already has this exact transaction. Returning its hash is the
+    // retry, not a second payment.
+    if (!/already known|nonce too low|already imported|known transaction/i.test(message)) {
+      throw error;
+    }
+  }
+  return hash;
+}
+
+/**
+ * An owner is funded with USDC and never with ETH. Sending it ETH from
+ * anywhere the user controls would link this trade to that source, which is
+ * the linkage the extension exists to avoid. Refuse before the prompt so the
+ * user is not asked to approve a transaction that cannot be paid for.
+ */
+async function assertOwnerHasEth(ownerAddress: string): Promise<void> {
+  const balance = await publicClient.getBalance({ address: ownerAddress as Hex });
+  if (balance === 0n) {
+    throw new ProviderRequestError(
+      -32000,
+      'This owner address holds no ETH, so it cannot send a transaction. Truly will not fund it with ETH, because that payment would link the address. USDC goes back to the pool through Re-shield, which pays gas in USDC.',
+    );
+  }
+}
+
+function approvalMessage(method: string, params: unknown[], ownerAddress: string): string | undefined {
+  if (method === 'personal_sign') {
+    return decodeMessage(parsePersonalSign(params, ownerAddress).raw);
+  }
+  if (
+    method === 'eth_signTypedData' ||
+    method === 'eth_signTypedData_v3' ||
+    method === 'eth_signTypedData_v4'
+  ) {
+    return parseTypedDataRequest(method, params, ownerAddress).summary;
+  }
+  if (method === 'eth_sendTransaction') {
+    return parseTransactionRequest(params, ownerAddress).summary;
+  }
+  return undefined;
+}
+
+async function waitForDecision(record: InFlightRequest): Promise<void> {
+  await ensureWindow(record);
+
+  const current = await getInFlight(record.requestId);
+  if (!current) throw rpcError(4001, 'This request expired.');
+  if (current.status === 'approved' || current.status === 'completed') return;
+  if (current.status === 'rejected') {
+    throw rpcError(current.error?.code ?? 4001, current.error?.message ?? 'User rejected the request.');
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    pending.set(record.approvalId, { resolve, reject });
+
+    // The decision may have landed between the read above and this set.
+    void getInFlight(record.requestId).then((fresh) => {
+      const entry = pending.get(record.approvalId);
+      if (!entry || !fresh || fresh.status === 'awaiting') return;
+      pending.delete(record.approvalId);
+      if (fresh.status === 'rejected') {
+        entry.reject(
+          rpcError(fresh.error?.code ?? 4001, fresh.error?.message ?? 'User rejected the request.'),
+        );
+      } else {
+        entry.resolve();
+      }
+    });
+  });
+}
+
+async function ensureWindow(record: InFlightRequest): Promise<void> {
+  const inflight = new Promise<void>((resolve, reject) => {
+    const existing = windowOpens.get(record.approvalId);
+    if (existing) {
+      void existing.then(resolve, reject);
+      return;
+    }
+
+    const job = openApprovalWindow(record);
+    windowOpens.set(record.approvalId, job);
+    void job.then(
+      () => {
+        windowOpens.delete(record.approvalId);
+        resolve();
+      },
+      (error: unknown) => {
+        windowOpens.delete(record.approvalId);
+        reject(error);
+      },
+    );
+  });
+
+  await inflight;
+}
+
+async function openApprovalWindow(record: InFlightRequest): Promise<void> {
+  const latest = (await getInFlight(record.requestId)) ?? record;
+  if (latest.windowId !== undefined && (await windowExists(latest.windowId))) {
+    watchClose(latest.windowId, latest.approvalId);
+    return;
+  }
+
+  const created = await chrome.windows.create({
+    url: chrome.runtime.getURL(`/approval.html?id=${record.approvalId}`),
+    type: 'popup',
+    ...APPROVAL_WINDOW,
+  });
+
+  if (created?.id === undefined) {
+    await settle(record.approvalId, false, 'Truly could not open the approval window.');
+    return;
+  }
+
+  await putInFlight({ ...latest, windowId: created.id });
+  watchClose(created.id, record.approvalId);
+}
+
+function watchClose(windowId: number, approvalId: string): void {
+  const onClosed = (closedId: number) => {
+    if (closedId !== windowId) return;
+    chrome.windows.onRemoved.removeListener(onClosed);
+    void settle(approvalId, false, 'User rejected the request.');
+  };
+  chrome.windows.onRemoved.addListener(onClosed);
+}
+
+async function windowExists(windowId: number): Promise<boolean> {
+  try {
+    await chrome.windows.get(windowId);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -129,57 +504,18 @@ async function openTrulyWindow(): Promise<void> {
   }
 }
 
-/** Opens the approval window and blocks until the user answers. */
-async function requireApproval(input: {
-  origin: string;
-  method: string;
-  ownerAddress: string;
-  message?: string;
-}): Promise<void> {
-  const id = crypto.randomUUID();
-
-  await putApproval({ id, createdAt: Date.now(), ...input });
-
-  const approvalWindow = await chrome.windows.create({
-    url: chrome.runtime.getURL(`/approval.html?id=${id}`),
-    type: 'popup',
-    ...APPROVAL_WINDOW,
-  });
-
-  const windowId = approvalWindow?.id;
-
-  return new Promise<void>((resolve, reject) => {
-    pending.set(id, { resolve: () => resolve(), reject });
-
-    // Without a window id we cannot tell when the prompt is dismissed, and the
-    // dapp would wait forever. Fail closed instead.
-    if (windowId === undefined) {
-      void settle(id, false, 'Truly could not open the approval window.');
-      return;
-    }
-
-    // Closing the window is a rejection, not a hang.
-    const onClosed = (closedId: number) => {
-      if (closedId !== windowId) return;
-      chrome.windows.onRemoved.removeListener(onClosed);
-      void settle(id, false, 'User rejected the request.');
-    };
-    chrome.windows.onRemoved.addListener(onClosed);
-  });
-}
-
 export async function settle(
   id: string,
   approved: boolean,
   reason = 'User rejected the request.',
 ): Promise<void> {
+  const decided = await decideApproval(id, approved, reason);
   const entry = pending.get(id);
   if (!entry) return;
   pending.delete(id);
-  await dropApproval(id);
 
-  if (approved) entry.resolve(undefined);
-  else entry.reject(rpcError(4001, reason));
+  if (!decided || decided.status === 'rejected') entry.reject(rpcError(4001, reason));
+  else entry.resolve();
 }
 
 /** personal_sign carries a hex-encoded UTF-8 string. */

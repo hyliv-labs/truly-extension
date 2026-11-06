@@ -22,6 +22,14 @@ export default defineContentScript({
 
       void forward(data);
     });
+
+    chrome.runtime.onMessage.addListener((message: { kind?: string; event?: string; args?: unknown[] }) => {
+      if (message?.kind !== 'providerEvent' || typeof message.event !== 'string') return;
+      window.postMessage(
+        { target: 'truly:event', event: message.event, args: message.args ?? [] },
+        window.location.origin,
+      );
+    });
   },
 });
 
@@ -30,26 +38,42 @@ async function forward(data: {
   method: string;
   params?: unknown[];
 }): Promise<void> {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      kind: 'provider',
-      // The origin is taken here, not from the page: a page cannot forge
-      // its own content script's location.
-      origin: window.location.origin,
-      method: data.method,
-      params: data.params ?? [],
-    });
+  // The same id on every attempt. If the worker dies mid-approval, the retry
+  // continues that prompt instead of opening a second one or signing twice.
+  const payload = {
+    kind: 'provider' as const,
+    // The origin is taken here, not from the page: a page cannot forge
+    // its own content script's location.
+    origin: window.location.origin,
+    method: data.method,
+    params: data.params ?? [],
+    requestId: data.id,
+  };
 
-    reply(data.id, response);
-  } catch (error) {
-    // Worker asleep or extension reloaded. 4900 = disconnected.
-    reply(data.id, {
-      ok: false,
-      rpc: {
-        code: 4900,
-        message: error instanceof Error ? error.message : String(error),
-      },
-    });
+  let delay = 400;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      const response = await chrome.runtime.sendMessage(payload);
+      reply(data.id, response);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Reloading the extension invalidates this content script. Retrying
+      // cannot help, and a dead port during an approval can.
+      const portClosed =
+        message.includes('message port closed') ||
+        message.includes('Receiving end does not exist') ||
+        message.includes('Could not establish connection');
+      if (!portClosed || attempt === 39) {
+        reply(data.id, {
+          ok: false,
+          rpc: { code: 4900, message },
+        });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(Math.round(delay * 1.5), 3_000);
+    }
   }
 }
 

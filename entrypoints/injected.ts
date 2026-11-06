@@ -36,10 +36,23 @@ function createProvider() {
     string,
     { resolve: (v: unknown) => void; reject: (e: unknown) => void }
   >();
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const data = event.data;
+
+    // accountsChanged / disconnect, forwarded by the content script when a
+    // trade starts or ends. The page never has chrome.runtime, so this is
+    // the only way the event reaches a listener it registered with `on`.
+    if (data?.target === 'truly:event' && typeof data.event === 'string') {
+      const handlers = listeners.get(data.event);
+      if (!handlers) return;
+      const args = Array.isArray(data.args) ? data.args : [];
+      for (const handler of handlers) handler(...args);
+      return;
+    }
+
     if (data?.target !== 'truly:provider') return;
 
     const entry = pending.get(data.id);
@@ -57,8 +70,6 @@ function createProvider() {
       entry.resolve(data.result);
     }
   });
-
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
   return {
     isTruly: true,
@@ -84,8 +95,5 @@ function createProvider() {
       listeners.get(event)?.delete(listener);
       return this;
     },
-
-    // TODO(E8): emit accountsChanged when the orchestrator rotates the owner
-    // between trades, and disconnect when a trade is retired.
   };
 }

@@ -27,11 +27,17 @@ import {
   requireUnlockedMnemonic,
 } from '@truly/lib/vault';
 import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
-import { handleProviderRequest, settle } from '@truly/lib/provider';
+import {
+  broadcastProviderEvent,
+  handleProviderRequest,
+  resumePendingApprovals,
+  settle,
+} from '@truly/lib/provider';
 import { getApproval } from '@truly/lib/approvals';
 import { getReadCount } from '@truly/lib/anon-rpc';
 import { checkDeposit, prepareDeposit } from '@truly/lib/deposit';
 import { unshieldForTrade } from '@truly/lib/unshield';
+import { reshieldActiveTrade } from '@truly/lib/reshield-trade';
 import { findSpendableNotes, totalSpendable } from '@truly/lib/discovery';
 import { authoritativeScope } from '@truly/lib/pool';
 import {
@@ -88,6 +94,12 @@ export default defineBackground({
     // referenced binding the bundler drops it, and the worker goes back to
     // dying on URL.createObjectURL before any of this runs.
     console.info('[truly] worker up; sw globals installed:', swGlobalsInstalled);
+
+    // A prompt may have been open when this worker last died. Re-open it
+    // from the stored record rather than losing the dapp's request.
+    void resumePendingApprovals().catch((error: unknown) => {
+      console.warn('[truly] could not restore approval prompts', error);
+    });
 
     // Chrome may drop alarms across a browser restart. A deposit in flight has
     // real money sitting at an intent address, so re-arm rather than relying on
@@ -160,6 +172,7 @@ async function handle(
     case 'startTrade': {
       const trade = await startTrade();
       await touchAutoLock();
+      await broadcastProviderEvent('accountsChanged', [[trade.ownerAddress]]);
       return trade;
     }
 
@@ -175,6 +188,7 @@ async function handle(
       }
       await endTrade();
       await chrome.alarms.clear(DEPOSIT_ALARM);
+      await announceTradeEnded();
       return null;
     }
 
@@ -186,16 +200,20 @@ async function handle(
       // there is no trade: that tick would be a network call tying this owner
       // to a moment after the trade closed.
       await chrome.alarms.clear(DEPOSIT_ALARM);
+      await announceTradeEnded();
       return null;
 
     case 'provider': {
       // Trust the sender's own URL over anything the page claims: a page cannot
       // forge the origin of the content script that relays for it.
       const origin = sender.origin ?? message.origin;
-      // Temporary: needed to learn which methods Lighter actually calls.
-      // TODO(E5): remove once the connect + authorize flow is confirmed.
-      console.info('[truly] rpc', origin, message.method, message.params);
-      const result = await handleProviderRequest(origin, message.method, message.params);
+      console.info('[truly] rpc', origin, message.method);
+      const result = await handleProviderRequest(
+        origin,
+        message.method,
+        message.params,
+        message.requestId,
+      );
       await touchAutoLock();
       return result;
     }
@@ -281,6 +299,19 @@ async function handle(
         remainderUnits: result.remainderUnits.toString(),
         feeBPS: result.feeBPS.toString(),
         recipient: result.recipient,
+      };
+    }
+
+    case 'reshield': {
+      // Same shape as unshield: the popup may close, and the trade record is
+      // what survives. A second click checks the receipt instead of depositing
+      // again — see reshieldActiveTrade.
+      const result = await reshieldActiveTrade();
+      await touchAutoLock();
+      return {
+        userOpHash: result.userOpHash,
+        deposited: result.deposited.toString(),
+        depositIndex: result.depositIndex,
       };
     }
 
@@ -388,6 +419,14 @@ async function pollDeposit(): Promise<void> {
     }
     console.warn('[truly] deposit poll failed, will retry', error);
   }
+}
+
+/** Lighter should drop the owner the moment the trade is no longer active. */
+async function announceTradeEnded(): Promise<void> {
+  await broadcastProviderEvent('accountsChanged', [[]]);
+  await broadcastProviderEvent('disconnect', [
+    { code: 4900, message: 'Truly trade ended.' },
+  ]);
 }
 
 function errorMessage(error: unknown): string {

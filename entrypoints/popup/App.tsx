@@ -1,6 +1,6 @@
 /**
- * E9 shell, wired to E1 only: create or unlock a vault and show the owner
- * address. Balance, New trade and progress land with E3/E8.
+ * Popup. The trade is driven from here: fund from the pool, then re-shield
+ * whatever comes back. Lighter itself is where the position is opened and closed.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -23,6 +23,7 @@ export function App() {
   const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
   const [phase, setPhase] = useState<{ phase: string; detail: string } | null>(null);
   const [unshield, setUnshield] = useState<string | null>(null);
+  const [reshieldNote, setReshieldNote] = useState<string | null>(null);
   const [pool, setPool] = useState<{
     totalUnits: string;
     noteCount: number;
@@ -183,6 +184,32 @@ export function App() {
 
               {unshield && <p className="field-label">{unshield}</p>}
 
+              {phase?.phase === 'withdrawn' && (
+                <>
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const result = await send({ kind: 'reshield' }, 300_000);
+                        setReshieldNote(
+                          `Re-shielded ${(Number(result.deposited) / 1e6).toFixed(2)} USDC into Privacy Pools.`,
+                        );
+                      })
+                    }
+                  >
+                    {status.activeTrade.reshield?.userOpHash
+                      ? 'Check re-shield'
+                      : 'Re-shield into Privacy Pools'}
+                  </button>
+                  <p className="field-label">
+                    Sends this owner&apos;s USDC back to the pool. Gas is paid in USDC, so the
+                    address never needs ETH. Leave this open until it confirms.
+                  </p>
+                </>
+              )}
+
+              {reshieldNote && <p className="field-label">{reshieldNote}</p>}
+
               {status.activeTrade.deposit && (
                 <p className="field-label">
                   {status.activeTrade.deposit.description} (
@@ -198,16 +225,29 @@ export function App() {
             </>
           )}
 
-          {/* TODO(E8): the orchestrator starts a trade only once the account
-              is funded. Until then these are manual, for exercising E5. */}
           {status.activeTrade ? (
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() => run(() => send({ kind: 'endTrade' }).then(() => {}))}
-            >
-              End trade
-            </button>
+            <>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => run(() => send({ kind: 'endTrade' }).then(() => {}))}
+              >
+                End trade
+              </button>
+              <button
+                className="link"
+                disabled={busy}
+                onClick={() => {
+                  const abandon = window.confirm(
+                    'Abandon this trade? Its owner address is burned and will not be reused. Funds still on Lighter or at that address stay there until you scan for them.',
+                  );
+                  if (!abandon) return;
+                  void run(() => send({ kind: 'abandonTrade' }).then(() => {}));
+                }}
+              >
+                Abandon trade
+              </button>
+            </>
           ) : (
             <button
               disabled={busy}

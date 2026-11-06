@@ -23,11 +23,16 @@ export interface ActiveTrade {
   /** E4: assigned by Lighter once the first deposit is credited. */
   readonly accountIndex?: number;
   /**
-   * E7/E8: set once the re-shield is CONFIRMED on chain. The trade is only
-   * retirable on the strength of this record — inferring it from balances
-   * cannot tell "re-shielded" from "withdrawal still in flight".
+   * E7/E8: the re-shield back into Privacy Pools.
+   *
+   * `pending` is written BEFORE the bundler is asked, and again with the
+   * user-operation hash the moment it accepts one. A crash in between must
+   * not look like "never sent" — that is how a second click would deposit
+   * twice. `confirmed` is the only state that makes the trade retirable.
+   * Inferring it from balances cannot tell "re-shielded" from "still in flight".
    */
   readonly reshield?: {
+    readonly status: 'pending' | 'confirmed';
     readonly userOpHash: string;
     readonly depositIndex: number;
     readonly deposited: string;
@@ -119,6 +124,31 @@ export async function startTrade(): Promise<ActiveTrade> {
 
   await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: trade });
   return trade;
+}
+
+/**
+ * Drop a re-shield that never reached the bundler, so the button can try
+ * again. A pending record that already has a user-operation hash is left
+ * alone: that operation may still land, and deleting it invites a second one.
+ */
+export async function clearPendingReshield(): Promise<void> {
+  const trade = await getActiveTrade();
+  if (!trade?.reshield || trade.reshield.status !== 'pending') return;
+  if (trade.reshield.userOpHash) return;
+  await discardReshield();
+}
+
+/**
+ * Forget a pending re-shield even if the bundler already accepted it.
+ * Only for a receipt that says the operation reverted — nothing was deposited,
+ * so the deposit index is still free and a retry is the correct next step.
+ */
+export async function discardReshield(): Promise<void> {
+  const trade = await getActiveTrade();
+  if (!trade?.reshield || trade.reshield.status === 'confirmed') return;
+
+  const { reshield: _omit, ...rest } = trade;
+  await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: rest });
 }
 
 /**

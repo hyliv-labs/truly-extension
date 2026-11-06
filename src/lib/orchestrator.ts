@@ -99,7 +99,20 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   // it from "Lighter is empty and the owner is empty" cannot distinguish a
   // completed re-shield from a withdrawal still in flight — Lighter zeroes the
   // moment the withdrawal is requested, before the USDC lands.
-  if (trade.reshield) {
+  // Pending is not "back in the pool". Treating it as reshielded would let
+  // End trade burn the owner while the user operation is still in flight.
+  if (trade.reshield?.status === 'pending') {
+    return {
+      phase: 'withdrawn',
+      detail: trade.reshield.userOpHash
+        ? 'Re-shield submitted. Waiting for it to land in the pool. Checking again will not send a second deposit.'
+        : 'Re-shield is being built. Leave Truly open until it confirms.',
+      advice,
+      ownerBalance,
+    };
+  }
+
+  if (trade.reshield?.status === 'confirmed') {
     return {
       phase: 'reshielded',
       detail: 'Everything is back in the pool. This trade can be retired.',

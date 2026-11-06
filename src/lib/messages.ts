@@ -18,7 +18,14 @@ export type Request =
   /** Retire a trade that is NOT finished, accepting that funds may remain. */
   | { kind: 'abandonTrade' }
   // Content-script relay (E5)
-  | { kind: 'provider'; origin: string; method: string; params: unknown[] }
+  | {
+      kind: 'provider';
+      origin: string;
+      method: string;
+      params: unknown[];
+      /** Stable across a worker restart so a retry continues the same prompt. */
+      requestId: string;
+    }
   // Approval window (E5)
   | { kind: 'getApproval'; id: string }
   | { kind: 'settleApproval'; id: string; approved: boolean }
@@ -33,6 +40,8 @@ export type Request =
   // address. Long-running (proof generation plus relaying), so the popup must
   // not assume a prompt answer.
   | { kind: 'unshield' }
+  /** E7: send the owner's USDC back to the pool. Long-running, like unshield. */
+  | { kind: 'reshield' }
   | { kind: 'poolBalance' }
   | { kind: 'checkDeposit' }
   // Orchestrator (E8)
@@ -103,6 +112,11 @@ export interface ResultMap {
     remainderUnits: string;
     feeBPS: string;
     recipient: string;
+  };
+  reshield: {
+    userOpHash: string;
+    deposited: string;
+    depositIndex: number;
   };
   poolBalance: {
     totalUnits: string;

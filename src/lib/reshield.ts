@@ -71,6 +71,12 @@ export async function reshield(input: {
   precommitment: bigint;
   /** Overridable so a tight balance can lower the gas allowance. */
   permitAmount?: bigint;
+  /**
+   * Fires the moment the bundler accepts the operation, before the receipt.
+   * The caller persists the hash there. The wait below can outlive the
+   * service worker, and without this record a retry would deposit again.
+   */
+  onSubmitted?: (update: { userOpHash: Hex; deposited: bigint }) => Promise<void>;
 }): Promise<ReshieldResult> {
   if (!PRIVACY_POOL_ENTRYPOINT) {
     throw new ReshieldUnavailable(
@@ -177,12 +183,57 @@ export async function reshield(input: {
     paymasterPostOpGasLimit: PAYMASTER_POST_OP_GAS_LIMIT,
   });
 
+  // Before the wait. The receipt can take longer than the service worker
+  // lives, and the hash is the only thing that makes a retry safe.
+  await input.onSubmitted?.({ userOpHash, deposited: depositAmount });
+
   // Acceptance by the bundler is not inclusion. Waiting here is what makes
   // "the deposit happened" a fact rather than an assumption — the deposit
   // index must not be burned on a user operation that later reverts.
   const receipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash });
 
   return { userOpHash, deposited: depositAmount, success: receipt.success };
+}
+
+/**
+ * What happened to a user operation we already submitted.
+ *
+ * `pending` means the bundler has no receipt yet — the caller must not send
+ * another. A transport failure throws, so a blip is not mistaken for a revert.
+ */
+export async function readUserOperationReceipt(
+  userOpHash: Hex,
+): Promise<'pending' | 'success' | 'reverted'> {
+  const response = await fetch(BUNDLER_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'eth_getUserOperationReceipt',
+      params: [userOpHash],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new ReshieldUnavailable(
+      `The bundler did not answer the re-shield receipt (${response.status}).`,
+    );
+  }
+
+  const json = (await response.json()) as {
+    error?: { message?: string };
+    result?: { success?: boolean } | null;
+  };
+
+  if (json.error) {
+    throw new ReshieldUnavailable(
+      json.error.message ?? 'The bundler rejected the re-shield receipt query.',
+    );
+  }
+
+  if (json.result == null) return 'pending';
+  return json.result.success === false ? 'reverted' : 'success';
 }
 
 /** Owner addresses are single-use, so a leftover balance means a stuck trade. */
