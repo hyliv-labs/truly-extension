@@ -70,6 +70,33 @@ export const BOOTSTRAP_RPC_URL =
 export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ??
   '0x700dA3193D35fA54Cd3fBf29B66f2a2A0385659e') as Address;
 
+/**
+ * KPS gateways the tor-js worker relays through, as "<ip>:<port>:<certhash>".
+ *
+ * REQUIRED — tor-js has no default and refuses to start without one:
+ *   "tor-js worker: no gateway configured. ... There is no default gateway."
+ *
+ * Browsers cannot open the raw TCP that Tor needs, so a gateway acts as a
+ * blind KPS relay into the Tor network. Blind is the operative word: it
+ * carries the traffic but cannot read it, which is why trusting the operator
+ * is not the same as trusting an RPC provider with your address.
+ *
+ * The default below is the DEMONSTRATION gateway published in anon-rpc's
+ * adopters.json5, which states: "limited capacity, and it may disappear at
+ * any time — run your own for anything real." Treat its availability as a
+ * demo-day risk, not a guarantee. Privacy Pools' own app takes the same
+ * approach and lets the user pick the gateway.
+ *
+ * Comma-separated for several.
+ */
+export const ANON_RPC_GATEWAYS: string[] = (
+  env('WXT_ANON_RPC_GATEWAYS') ??
+  '152.236.3.22:12298:uEiCH0VdbhryzJcMtCfB0vLA4sOvHdQ4hq5w7CopcwU59bQ'
+)
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
 /** Destination the anon-client proxies reads to. */
 export const ARBITRUM_RPC_URL =
   env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';

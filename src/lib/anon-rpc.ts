@@ -9,6 +9,7 @@
 import { AnonRpcWorker } from '@anon-rpc/browser-extension-harness';
 import type { RpcProvider } from '@anon-rpc/browser-harness';
 import {
+  ANON_RPC_GATEWAYS,
   ANON_RPC_SPECIFIER,
   ARBITRUM_RPC_URL,
   BOOTSTRAP_RPC_URL,
@@ -64,8 +65,19 @@ async function getWorker(): Promise<AnonRpcWorker> {
   // Our document, not the harness's: offscreenUrl: false below.
   await ensureOffscreenDocument();
 
+  if (ANON_RPC_GATEWAYS.length === 0) {
+    throw new AnonRpcUnavailable(
+      'No anon-rpc gateway configured. tor-js has no default: browsers cannot open the raw TCP Tor needs, so it relays through a KPS gateway. Set WXT_ANON_RPC_GATEWAYS.',
+    );
+  }
+
   worker = new AnonRpcWorker({
     address: ANON_RPC_SPECIFIER!,
+    // Opaque to the harness by design — the schema is the worker's, and
+    // tor-js wants { gateways: [...] }. Without it the worker boots and then
+    // refuses every fetch, which reads like a network failure rather than
+    // missing configuration.
+    config: { gateways: ANON_RPC_GATEWAYS },
     preExisting: { rpcProvider: bootstrapProvider },
     offscreenUrl: false,
   });
