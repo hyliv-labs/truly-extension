@@ -111,9 +111,31 @@ export const ANON_RPC_GATEWAYS: string[] = (
  */
 export const ANON_RPC_TIMEOUT_MS = Number(env('WXT_ANON_RPC_TIMEOUT_MS') ?? 120_000);
 
-/** Destination the anon-client proxies reads to. */
+/**
+ * Destination the anon-client proxies reads to.
+ *
+ * NOT arb1.arbitrum.io, and the reason is load-bearing: the anon-rpc hop does
+ * not preserve the request's `content-type`, and arb1 rejects a POST without
+ * it — "invalid content type, only application/json is supported". Verified
+ * independently with curl: omit the header and arb1 returns that same error,
+ * so this is the transport dropping it rather than anything we send.
+ *
+ * The endpoint therefore has to satisfy TWO constraints at once, and almost
+ * none do:
+ *
+ *   1. accept a POST with no content-type  (arb1 and 1rpc reject it)
+ *   2. serve wide eth_getLogs for discovery (publicnode, drpc, nodies,
+ *      meowrpc all refuse logs on their public tier)
+ *
+ * Measured across nine public Arbitrum endpoints, tenderly's public gateway
+ * was the only one that did both: it answers without a content-type and
+ * serves 10,000,000-block log windows, which is a full note scan in 12 calls.
+ *
+ * Change this and check BOTH properties — `pnpm check:logrange` covers the
+ * second, and the first is one curl without a content-type header.
+ */
 export const ARBITRUM_RPC_URL =
-  env('WXT_ARBITRUM_RPC_URL') ?? 'https://arb1.arbitrum.io/rpc';
+  env('WXT_ARBITRUM_RPC_URL') ?? 'https://arbitrum.gateway.tenderly.co';
 
 /**
  * Widest eth_getLogs range to request, in blocks.
