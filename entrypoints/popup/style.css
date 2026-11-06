@@ -203,3 +203,23 @@ textarea {
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* Current step of the trade, with the wait spelled out. */
+.phase {
+  padding: 10px;
+  border: 1px solid #272b31;
+  border-radius: 6px;
+  background: #13161a;
+  font-size: 12px;
+}
+
+.phase strong {
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.phase p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}

@@ -20,12 +20,18 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [anon, setAnon] = useState<AnonRpcStatus | null>(null);
+  const [phase, setPhase] = useState<{ phase: string; detail: string } | null>(null);
+  const [stranded, setStranded] = useState<
+    { index: number; address: string; balance: string }[] | null
+  >(null);
   const [selfTest, setSelfTest] = useState<SelfTestResult | null>(null);
 
   const refresh = useCallback(async () => {
     const next = await send({ kind: 'status' });
     setStatus(next);
     setAnon(await send({ kind: 'anonRpcStatus' }));
+    // Derived from Lighter and the chain, so it survives a restart mid-trade.
+    setPhase(next.activeTrade ? await send({ kind: 'tradeStatus' }) : null);
     if (next.unlocked) {
       setOwner((await send({ kind: 'currentOwner' })).address);
     } else {
@@ -81,6 +87,13 @@ export function App() {
               : 'No active trade. Lighter cannot connect.'}
           </p>
 
+          {phase && (
+            <div className="phase">
+              <strong>{phase.phase.replace(/-/g, ' ')}</strong>
+              <p>{phase.detail}</p>
+            </div>
+          )}
+
           {status.activeTrade && (
             <>
               {status.activeTrade.intentAddress ? (
@@ -131,6 +144,30 @@ export function App() {
             >
               Start trade
             </button>
+          )}
+
+          {/* Owner addresses are single-use and nothing watches them once
+              retired, so leftover funds need somewhere to be found. */}
+          <button
+            className="link"
+            disabled={busy}
+            onClick={() => run(async () => setStranded(await send({ kind: 'scanStranded' })))}
+          >
+            Scan for funds left at old addresses
+          </button>
+
+          {stranded && (
+            <div className="phase">
+              {stranded.length === 0 ? (
+                <p>Nothing left behind.</p>
+              ) : (
+                stranded.map((s) => (
+                  <p key={s.index}>
+                    #{s.index} holds {Number(s.balance) / 1e6} USDC
+                  </p>
+                ))
+              )}
+            </div>
           )}
 
           <button className="secondary" disabled={busy} onClick={() => run(async () => {
