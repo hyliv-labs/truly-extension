@@ -149,6 +149,66 @@ as opaque (SPEC §7.1) and hands it to the worker, whose schema is
 Pools' own app takes the same approach and lets the user choose. Override with
 `WXT_ANON_RPC_GATEWAYS` (comma-separated).
 
+### 6. The transport drops `content-type`
+
+With a worker finally running, reads were rejected by the RPC endpoint:
+
+```
+415: invalid content type, only application/json is supported
+```
+
+Verified independently of the extension — `curl` the same endpoint with no
+`content-type` header and it returns that exact error. **The anon-rpc hop does
+not preserve the header.** Nothing we send is wrong, and no change on our side
+fixes it.
+
+That makes the endpoint choice load-bearing, because it must satisfy two
+constraints at once:
+
+| Endpoint | POST without content-type | `eth_getLogs` |
+| --- | --- | --- |
+| arb1.arbitrum.io | rejects (415) | 10,000,000-block window |
+| publicnode | accepts | refuses — "Archive requests require a personal token" |
+| drpc / nodies / meowrpc | accepts | refuses |
+| 1rpc | rejects | refuses |
+| **tenderly gateway** | **accepts** | **10,000,000-block window** |
+
+Across nine public Arbitrum endpoints, tenderly's public gateway was the only
+one that did both. Change `ARBITRUM_RPC_URL` and check **both** properties:
+`pnpm check:logrange` covers the second, one curl covers the first. Get it
+wrong and either every read fails or all of discovery does, and neither
+failure names the endpoint.
+
+Worth reporting upstream: the dropped header silently rules out the chain's
+own public RPC.
+
+## Verified working, in a browser
+
+With the defaults as shipped — no env overrides:
+
+```
+anonRpcSelfTest -> blockNumber 521701918, usdcBalance 0      22s
+poolBalance     -> noteCount 0                               16s
+anonRpcStatus   -> reads: 40, problems: []
+```
+
+`poolBalance` is the meaningful one: it reads the pool's identity
+(`SCOPE`/`ASSET`/`ENTRYPOINT`/`dead`) and then runs the **full 12-call note
+discovery scan**, all over the mixnet, in 16 seconds. `noteCount: 0` is
+correct for a vault that has never deposited.
+
+### Which worker, and why
+
+`nym` is the default, on measurement rather than preference. Both it and
+tor-js are kind `network` in anon-rpc's adopters.json5, so both genuinely
+anonymise and the privacy claim holds either way.
+
+- **nym** needs no gateway — it runs a mixnet client inside the sandbox.
+  Tunnel ready in ~20s, and every read above went through it.
+- **tor-js** relays through a KPS gateway, and the only published one is
+  explicitly a demonstration gateway. It never completed a dial here: five
+  minutes of silence with no network request at all.
+
 ## What this changed about testing
 
 `pnpm check` was green through every one of these. It always will be: none of

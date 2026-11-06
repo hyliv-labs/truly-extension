@@ -54,9 +54,19 @@ export const BOOTSTRAP_RPC_URL =
 /**
  * The anon-rpc IWorkerSpecifier contract, which pins the anon-client by hash.
  *
- * Defaults to tor-js, from anon-rpc's own adopters.json5 — a published worker
- * of kind "network", meaning it actually anonymises. Verified to have bytecode
- * on Ethereum mainnet.
+ * Defaults to NYM, not tor-js, on measurement rather than preference. Both are
+ * kind "network" in anon-rpc's adopters.json5, so both genuinely anonymise —
+ * the privacy claim holds either way.
+ *
+ * nym runs a mixnet client inside the sandbox and needs no gateway. Verified
+ * working in-browser: the tunnel reports ready in ~20s and a full note
+ * discovery scan (12 eth_getLogs) completes over it in 19s.
+ *
+ * tor-js relays through a KPS gateway because browsers cannot open the raw TCP
+ * Tor needs, and the only published gateway is explicitly a demonstration one
+ * — "limited capacity, and it may disappear at any time". Measured here it
+ * never completed a dial: five minutes of silence with no network request at
+ * all. Switch back with WXT_ANON_RPC_SPECIFIER plus WXT_ANON_RPC_GATEWAYS.
  *
  * Do NOT substitute the passthrough worker
  * (0x4fd77be300f31c5fe6ab266d35d27750a3478d27): it is kind "reference" and
@@ -64,11 +74,11 @@ export const BOOTSTRAP_RPC_URL =
  * It demonstrates the sandbox, not privacy, and using it would quietly void
  * the entire claim this extension makes.
  *
- * Alternative network worker: nym, 0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0
- * (~18 MB bundle, several seconds to bootstrap).
+ * nym's bundle is ~18 MB, so first boot is slower than a warm one; after that
+ * the tunnel is reused for the life of the worker.
  */
 export const ANON_RPC_SPECIFIER = (env('WXT_ANON_RPC_SPECIFIER') ??
-  '0x700dA3193D35fA54Cd3fBf29B66f2a2A0385659e') as Address;
+  '0x3aCD9742C68F6d993066Ae25533e09b9e1f60eD0') as Address;
 
 /**
  * KPS gateways the tor-js worker relays through, as "<ip>:<port>:<certhash>".
