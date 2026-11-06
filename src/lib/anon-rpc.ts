@@ -66,19 +66,16 @@ async function getWorker(): Promise<AnonRpcWorker> {
   // Our document, not the harness's: offscreenUrl: false below.
   await ensureOffscreenDocument();
 
-  if (ANON_RPC_GATEWAYS.length === 0) {
-    throw new AnonRpcUnavailable(
-      'No anon-rpc gateway configured. tor-js has no default: browsers cannot open the raw TCP Tor needs, so it relays through a KPS gateway. Set WXT_ANON_RPC_GATEWAYS.',
-    );
-  }
-
+  // Gateways are NOT required in general — they are a tor-js requirement.
+  // nym runs a mixnet client in the sandbox and needs no gateway at all, so
+  // demanding one here would rule out the worker that has no single point of
+  // failure. Pass config only when there is config to pass, and let a worker
+  // that needs one say so: tor-js's message is explicit.
   worker = new AnonRpcWorker({
     address: ANON_RPC_SPECIFIER!,
-    // Opaque to the harness by design — the schema is the worker's, and
-    // tor-js wants { gateways: [...] }. Without it the worker boots and then
-    // refuses every fetch, which reads like a network failure rather than
-    // missing configuration.
-    config: { gateways: ANON_RPC_GATEWAYS },
+    // Opaque to the harness by design (SPEC 7.1); the schema belongs to the
+    // worker. tor-js wants { gateways: [...] }.
+    ...(ANON_RPC_GATEWAYS.length > 0 ? { config: { gateways: ANON_RPC_GATEWAYS } } : {}),
     preExisting: { rpcProvider: bootstrapProvider },
     offscreenUrl: false,
   });
