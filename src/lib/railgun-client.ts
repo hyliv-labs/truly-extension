@@ -82,7 +82,9 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
   const trade = await getActiveTrade();
   if (!trade) throw new Error('No trade is active.');
   if (!trade.intentAddress) throw new Error('Lighter has not issued a deposit address yet.');
-  if (trade.withdrawal?.status === 'confirmed' && trade.withdrawal.txHash) {
+  // A 'confirmed' record from before the receipt-status check may be a
+  // revert. Verified first; a reverted one is cleared and a new unshield built.
+  if (trade.withdrawal?.status === 'confirmed' && trade.withdrawal.txHash && (await verifyRailgunFunding()) !== 'reverted') {
     return {
       txHash: trade.withdrawal.txHash as Hash,
       amountUnits: BigInt(trade.withdrawal.amount),
@@ -122,9 +124,17 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
     },
   });
   await broadcast(signed.raw);
-  await publicClient.waitForTransactionReceipt({ hash: signed.hash });
+  // waitForTransactionReceipt resolves for a REVERTED transaction too.
+  // Measured: two reverted unshields ("Invalid Snark Proof") were recorded as
+  // confirmed and the panel went on to wait for a deposit that never left.
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: signed.hash });
+  if (receipt.status !== 'success') {
+    await updateActiveTrade({ withdrawal: undefined });
+    throw new Error(`The Railgun unshield reverted on chain (tx ${signed.hash}). Nothing left the pool. Retry builds a new proof.`);
+  }
   await updateActiveTrade({
     withdrawal: {
+      receiptOk: true,
       status: 'confirmed',
       txHash: signed.hash,
       raw: signed.raw,
@@ -139,6 +149,26 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
 }
 
 /** Confirm or resend the stored Railgun funding transaction. Never builds another proof. */
+/**
+ * Re-read the receipt of a Railgun funding marked confirmed WITHOUT a checked
+ * status (written by the code that did not look at it). 'reverted' clears
+ * the record: nothing left the pool, and the funding can be retried.
+ */
+export async function verifyRailgunFunding(): Promise<'ok' | 'reverted' | 'unknown' | 'none'> {
+  const trade = await getActiveTrade();
+  const withdrawal = trade?.withdrawal;
+  if (withdrawal?.status !== 'confirmed' || withdrawal.label !== 'railgun' || withdrawal.receiptOk) return 'none';
+  if (!withdrawal.txHash) return 'unknown';
+  const receipt = await publicClient.getTransactionReceipt({ hash: withdrawal.txHash as Hash }).catch(() => null);
+  if (!receipt) return 'unknown';
+  if (receipt.status === 'success') {
+    await updateActiveTrade({ withdrawal: { ...withdrawal, receiptOk: true } });
+    return 'ok';
+  }
+  await updateActiveTrade({ withdrawal: undefined });
+  return 'reverted';
+}
+
 export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 'reverted' | 'none'> {
   const trade = await getActiveTrade();
   if (trade?.withdrawal?.status !== 'pending' || trade.withdrawal.label !== 'railgun') return 'none';
@@ -147,7 +177,7 @@ export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 're
   const receipt = await publicClient.getTransactionReceipt({ hash }).catch(() => null);
   if (receipt?.status === 'success') {
     await updateActiveTrade({
-      withdrawal: { ...trade.withdrawal, status: 'confirmed', confirmedAt: Date.now() },
+      withdrawal: { ...trade.withdrawal, status: 'confirmed', confirmedAt: Date.now(), receiptOk: true },
     });
     return 'landed';
   }

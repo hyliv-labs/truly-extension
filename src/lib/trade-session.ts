@@ -28,7 +28,7 @@ import { ownerAt } from './vault';
 import { getActiveTrade, startTrade, updateActiveTrade, updateSession, type ActiveTrade } from './trade';
 import { prepareDeposit, checkDeposit } from './deposit';
 import { resolvePendingWithdrawal, unshieldForTrade } from './unshield';
-import { settleRailgunFunding, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
+import { settleRailgunFunding, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade, verifyRailgunFunding } from './railgun-client';
 import { loadShieldedBalance, notesForQuote, poolsReady, railgunReady } from './shielded-balance';
 import { POOL_MIN_DEPOSIT_UNITS } from './config';
 import { fastWithdrawAmount } from './exit';
@@ -397,6 +397,18 @@ async function stepFunding(trade: ActiveTrade, session: TradeSession): Promise<v
 }
 
 async function stepDeposit(trade: ActiveTrade, session: TradeSession): Promise<void> {
+  if (session.quote.fundingSource === 'Railgun') {
+    const funding = await verifyRailgunFunding();
+    if (funding === 'reverted') {
+      await transition(
+        session.id,
+        'funding-failed',
+        'The Railgun unshield reverted on chain, so nothing was sent to Lighter. Nothing left the shielded pool. Retry builds a new proof.',
+        { code: 'arbitrum-revert', message: 'unshield reverted' },
+      );
+      return;
+    }
+  }
   const progress = await checkDeposit();
   if (progress.failed || progress.claimable) {
     await transition(

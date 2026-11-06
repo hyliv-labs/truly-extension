@@ -74,6 +74,12 @@ export interface ActiveTrade {
     readonly confirmedAt?: number;
     /** Signed Railgun transaction, resent as these exact bytes. */
     readonly raw?: string;
+    /**
+     * Set once the receipt was read as SUCCESS. A record without it may have
+     * been marked confirmed by the old code, which did not look at the
+     * receipt status: a reverted unshield was reported as funding.
+     */
+    readonly receiptOk?: boolean;
   };
   /** E8: last phase recorded, so the popup has something before the first poll. */
   readonly phase?: string;
