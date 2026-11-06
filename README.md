@@ -6,8 +6,9 @@ fresh owner address, and returns what's left to the pool when the trade closes.
 **One trade, one address, never reused.** Lighter sees a brand-new account
 every time, with no on-chain link to the last one.
 
-> **Status: not production ready.** The money path is written and covered by
-> offline tests, but no trade has been run on mainnet. See
+> **Status: not production ready, and not yet end to end.** Entry from Privacy
+> Pools (the relayed withdrawal and its proof) is not built, so no complete
+> trade can run even on testnet. See
 > [What is not proven](#what-is-not-proven).
 
 ## Why
@@ -37,32 +38,41 @@ Privacy Pools ──relayer──▶ fresh owner address ──▶ Lighter accou
 
 ## CROPS
 
-**C — Confidentiality.** Chain reads go through
-[anon-rpc](https://github.com/ethereum/anon-rpc), running a hash-pinned client
-in a sandboxed worker, so the RPC provider does not learn which addresses are
-being watched together. The default worker is `tor-js`, which really
-anonymises; the published `passthrough` worker is deliberately *not* used,
-because it fulfils calls with an ordinary fetch. Keys never leave the
-background worker, and the seed is sealed with scrypt + AES-GCM.
+The Ethereum Foundation's Mandate defines the Protocol cluster's job through
+**CROPS: Censorship Resistance, Open Source and Free (as in Freedom), Privacy,
+Security** ([EF Protocol priorities,
+2026-09-07](https://blog.ethereum.org/2026/09/07/protocol-priorities)). These
+are protocol properties rather than an app checklist, so what follows is how
+Truly relates to each — not a claim to satisfy them.
 
-**O — Observability.** The popup shows a live count of reads that actually
-returned through anon-rpc, the current trade phase, and the reason whenever a
-money-moving step is blocked. Nothing fails silently: if reads cannot be
-anonymised, trades refuse to start and say so.
+**CR — Censorship Resistance.** Entry is a relayed withdrawal and exit is an
+ERC-4337 user operation, so both depend on a relayer and a bundler that can
+refuse service. Truly does not fix that: a rejected re-shield leaves funds at
+the owner address, recoverable from the seed. Privacy Pools withdrawals are
+also screening-dependent by design, which is a deliberate compliance
+trade-off, not censorship resistance.
+
+**O — Open Source and Free.** MIT, no API keys, no backend, no account. Every
+dependency is public. Build artifacts are fetched from public repositories and
+hash-verified rather than vendored opaquely.
 
 **P — Privacy.** One trade, one owner address, one Lighter account, never
 reused — enforced by a burned index and covered by a regression test. Deposit
 notes derive from the vault rather than the depositing address, so a re-shield
-sent from a fresh address is still spendable by the same vault. Lighter's
-cookies, localStorage and IndexedDB are cleared before *and* after every
-trade.
+sent from a fresh address is still spendable by the same vault. Chain reads go
+through [anon-rpc](https://github.com/ethereum/anon-rpc), running a
+hash-pinned client in a sandboxed worker; the default is `tor-js`, which
+really anonymises, and the published `passthrough` worker is deliberately not
+used because it fulfils calls with an ordinary fetch. Lighter's cookies,
+localStorage and IndexedDB are cleared before *and* after every trade.
 
 **S — Security.** Owner keys derive at `m/44'/60'/7702'/0/i`, deliberately
 clear of the Privacy Pools SDK's master-key paths — a collision found and
 fixed during the build, with a test that fails if it returns. Circuit
 artifacts are verified against the SDK's own hash table at build time. The
-re-shield permit is capped at 1 USDC, so a compromised paymaster cannot drain
-the balance.
+seed is sealed with scrypt + AES-GCM and never leaves the background worker.
+The re-shield permit is capped at 1 USDC, so a compromised paymaster cannot
+take more than that.
 
 ### Stated limits
 
@@ -74,6 +84,10 @@ Being specific about these matters more than the claims above.
   website. Routing those needs Tor or similar, which is out of scope for v1.
 - **Screening-dependent.** Privacy Pools withdrawals depend on 0xbow's
   screening. A rejected re-shield leaves funds at the owner address.
+- **The bundler is contacted directly.** The ERC-4337 bundler call in
+  `reshield.ts` uses a plain HTTP transport, not anon-rpc, so that provider
+  sees the request's origin IP. Chain *reads* are anonymised; this one write
+  path is not.
 - **Timing is a signal.** A withdrawal and the deposit it funds are close
   together in time. v1 does not add delay or batching.
 - **Trade size is a signal.** Amounts are not split or rounded.
@@ -128,6 +142,10 @@ Design notes worth reading before changing anything:
 
 Stated plainly, because the tests above prove less than they might appear to.
 
+- **E3, the entry path, is not built.** No relayer client, no withdrawal
+  proof, no note discovery. Without it there is no way to fund a trade from
+  the pool, so no end-to-end cycle exists to run.
+- **Nothing calls the re-shield.** `reshieldActiveTrade` has no trigger yet.
 - **No mainnet trade has been run.** Not one end-to-end cycle.
 - **The provider has never been exercised against Lighter's site.** It is
   written to EIP-6963 and EIP-1193 but unverified against the real dapp.
