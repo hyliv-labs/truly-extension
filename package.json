@@ -19,7 +19,9 @@
     "fetch:circuits": "tsx scripts/fetch-circuits.ts",
     "check:circuits": "tsx scripts/circuits-check.ts",
     "check:withdrawal": "tsx scripts/withdrawal-proof-check.ts",
-    "check:account": "tsx scripts/account-service-check.ts"
+    "check:account": "tsx scripts/account-service-check.ts",
+    "check:logrange": "tsx scripts/log-range-check.ts",
+    "check:asproot": "tsx scripts/asp-root-rule-check.ts"
   },
   "dependencies": {
     "@0xbow/privacy-pools-core-sdk": "^1.5.0",

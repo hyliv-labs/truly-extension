@@ -60,33 +60,44 @@ pair order is reversed relative to Solidity. Either wrong simply returns false.
 Note the Arbitrum verifiers are the **same addresses** as Ethereum mainnet's —
 deterministic deployment.
 
-## 3. AccountService — works, but the scan is not viable as-is
+## 3. AccountService — RESOLVED, a full scan is 12 calls
 
-**BLOCKER.** `scripts/account-service-check.ts` constructs `DataService` and
-`AccountService` against the real pool and begins scanning from block
-`411197154`. It does not finish:
+The scan was first measured at **11,044 `eth_getLogs` calls**, which would not
+work over anon-rpc. That turned out to be an artefact of the SDK's default
+chunk size, not a property of the chain.
+
+`scripts/log-range-check.ts` asks the provider what it will actually serve:
 
 ```
-head block 521636396; 110439242 blocks since deployment
-=> 11044 eth_getLogs calls at the SDK's default 10k chunk size
+full range refused: query spans 110470437 blocks, but only 10000000 are allowed
+pass 10000 / 100000 / 1000000 / 10000000 blocks
+fail 50000000 blocks
+Widest accepted window: 10000000 blocks => 12 calls for a full scan.
 ```
 
-Eleven thousand sequential round trips. Impractical over a public RPC, and far
-worse over anon-rpc, where every read is relayed through Tor. **This is the
-real constraint on note discovery, not the matching logic.**
+Arbitrum's public RPC serves **10,000,000-block ranges — 1000x the SDK's 10k
+default.** `DataService` takes a per-chain `logFetchConfig`, so that default is
+simply configurable:
 
-The official frontend does not hit an RPC for this at all: its config sets
-`sdkRpcUrl: /api/hypersync-rpc?chainId=42161`, proxying through Hypersync,
-which serves wide log ranges in one request. That is the same problem, already
-solved, and it is why their `.env` has a `HYPERSYNC_KEY`.
+```ts
+new DataService([chainConfig], new Map([[42161, { blockChunkSize: 10_000_000 }]]))
+```
 
-Options, none yet chosen:
-- Raise `blockChunkSize` far above 10k if a provider allows it
-- Use a Hypersync-style endpoint for discovery only, accepting that it sees
-  the query (it does not see which notes are ours, but it does see interest in
-  this pool)
-- Use the ASP's `mt-leaves`, which already returns all 603 state leaves and
-  462 ASP leaves in one request
+With that, `scripts/account-service-check.ts` completes the full history scan:
+
+```
+Fetching deposits in 12 chunks, chunk size is: 10000000
+Found 240 deposits
+retrieveHistory completed against the live pool in 1.7s
+an unfunded seed finds no notes, as it must
+```
+
+**12 calls, 1.7 seconds.** The 240 deposits independently match the ASP API's
+`totalDeposits`, so the scan is seeing the whole pool. No Hypersync dependency
+and no third party that learns we are interested in this pool.
+
+The decisive negative still holds: an unfunded seed matches nothing. A false
+match there would mean the matcher could mis-assign a real user's notes.
 
 **Not yet verified:** discovery against a seed with real notes. That needs a
 funded mnemonic, which no test can synthesise.
@@ -118,12 +129,55 @@ totalDeposits 240 | accepted 239        <-- screening does reject
 ```
 
 **The ASP root was 4.1 days old when measured.** Screening is published in
-batches, not continuously. Two consequences:
+batches, not continuously. Rejection is also real: 1 of 240 deposits is not
+accepted.
 
-- A re-shielded deposit may not be spendable for **days**, not minutes. The
-  plan's "the next trade unlocks only after re-shield confirms" is therefore
-  not achievable inside an event.
-- Rejection is real: 1 of 240 deposits is not accepted.
+That looked like it broke the design — if every re-shield waited for the next
+ASP batch, trades would be days apart. It does not, for one reason:
+
+### Change notes inherit the original label
+
+The ASP tree holds **labels**, not commitments. A label is assigned once, at
+deposit. A partial withdrawal spends a note and writes a *new* commitment under
+**the same label** — so the change note is approved the instant it exists,
+because its label was approved days ago.
+
+`scripts/withdrawal-proof-check.ts` proves this rather than asserting it:
+
+```
+pass the change note carries the ORIGINAL label (matches publicSignals[0])
+pass generated a SECOND withdrawal, spending the change note
+pass the deployed verifier ACCEPTS spending the change note under the UNCHANGED ASP root
+```
+
+The second proof is built against a **byte-identical ASP tree** — no leaf
+added, no new screening — and the deployed Arbitrum verifier accepts it.
+
+**So ASP batching delays only genuinely new deposits.** One screened deposit
+funds a chain of trades, each leaving an immediately spendable remainder. The
+re-shield of funds returning from Lighter is a new deposit and does wait for a
+batch, but it is not what gates the next trade.
+
+### The root a withdrawal must prove against
+
+`scripts/asp-root-rule-check.ts`:
+
+```
+entrypoint.latestRoot() = 4997529442870423522903312331231415163737618682184249...
+rootByIndex readable for 8 entries
+the ASP API's published mtRoot IS the entrypoint's latestRoot()
+```
+
+The entrypoint keeps a root **history**, so a slightly stale proof is still
+accepted. The ASP's published `mtRoot` is exactly the entrypoint's
+`latestRoot()`, which confirms `mt-leaves` describes the tree the pool
+enforces. **Rule adopted: refetch `mt-leaves` immediately before proving**, so
+a proof is never built against a root that has rotated out of the history.
+
+### What actually limits trade frequency
+
+Not screening — the remainder. Trades stall when the change note drops below
+the next trade size plus the 0.1% relayer fee and the 1 USDC gas reserve.
 
 ## 5. USDC amounts
 
@@ -159,12 +213,31 @@ caller cannot keep using a stale configured scope. A pool that cannot answer
 this surface is rejected — which is what a v2 address or a wrong chain looks
 like.
 
-## Remaining blockers for E3
+## Status
 
-1. **Note discovery is not viable over anon-rpc** (11,044 calls). Must be
-   solved before entry can work.
-2. **ASP batching is days, not minutes.** The one-trade-at-a-time design needs
-   either multiple funded notes up front or a relaxed gate.
-3. **No funded seed has been tested.** Discovery and spendability are unproven
-   against real notes.
-4. The relayer `quote` and `request` calls have never been exercised.
+Both blockers found in the first pass are resolved, and neither needed a new
+dependency:
+
+| Blocker | Resolution |
+| --- | --- |
+| 11,044 `eth_getLogs` calls | `blockChunkSize: 10_000_000` → **12 calls, 1.7s** |
+| ASP batching is days | Change notes **inherit the approved label**; proven against the deployed verifier |
+
+**E3 is unblocked.** What a deposit's lifecycle now looks like, and what the
+UI must show:
+
+- `pending-screening` — deposited on chain, label not yet in the ASP set. Not
+  spendable. This is the only state that waits for a batch.
+- `spendable` — label present. Its change notes are spendable immediately.
+- `rejected` — the only exit is `ragequit`, which pays the **original
+  depositor**, i.e. the retired owner address. That address's key stays
+  derivable from the vault, so the funds are recoverable; the UI has to say so,
+  because the address is otherwise never reused.
+
+## Remaining before mainnet use
+
+1. **No funded seed has been tested.** Discovery and spendability are proven
+   against synthetic trees and the deployed verifier, but not against a real
+   note. This needs real mainnet USDC (5 USDC minimum, plus the 0.5% vetting
+   fee) and an irreversible deposit — so it waits on an explicit go-ahead.
+2. The relayer `quote` and `request` calls have never been exercised.

@@ -207,6 +207,88 @@ try {
   } else {
     pass('the deployed Arbitrum verifier ACCEPTS the proof');
   }
+
+  // ---------------------------------------------------------------------
+  // THE ASP BATCHING QUESTION.
+  //
+  // The ASP publishes approvals in batches -- its root was 4.1 days old when
+  // measured. If every re-shield had to wait for the next batch, the "one
+  // trade at a time" design could not work inside an event.
+  //
+  // It does not have to, IF a partial withdrawal's change note inherits the
+  // ORIGINAL label. The ASP tree holds labels, not commitments, so a change
+  // note under an already-approved label is approved the moment it exists.
+  // That is the claim; this proves it rather than reading it off the circuit.
+  // ---------------------------------------------------------------------
+
+  const remainder = value - withdrawalAmount;
+  const changeNote = getCommitment(
+    remainder,
+    label,
+    newNullifier as Secret,
+    newSecret as Secret,
+  );
+
+  // publicSignals[0] is the new commitment the circuit committed to. If it
+  // equals a commitment built with the ORIGINAL label, the label carried over.
+  if (BigInt(signals?.[0] ?? '0') !== (changeNote.hash as unknown as bigint)) {
+    fail('the change note does not carry the original label — re-screening WOULD be required');
+  } else {
+    pass('the change note carries the ORIGINAL label (matches publicSignals[0])');
+  }
+
+  // Now actually spend it, against the SAME UNCHANGED ASP tree. No new ASP
+  // leaf is added: if this proves and verifies, no new screening was needed.
+  const stateLeaves2 = [...stateLeaves, changeNote.hash as unknown as bigint];
+  const stateProof2 = generateMerkleProof(stateLeaves2, changeNote.hash as unknown as bigint);
+  const aspProof2 = generateMerkleProof(aspLeaves, label); // unchanged tree
+
+  const secondAmount = 1_000_000n;
+  const { nullifier: n3, secret: s3 } = generateWithdrawalSecrets(keys, label as unknown as Hash, 1n);
+
+  const proof2 = await sdk.proveWithdrawal(changeNote, {
+    context: 67890n,
+    withdrawalAmount: secondAmount,
+    stateMerkleProof: stateProof2,
+    aspMerkleProof: aspProof2,
+    stateRoot: stateProof2.root as unknown as Hash,
+    stateTreeDepth: BigInt(stateProof2.siblings.length),
+    aspRoot: aspProof2.root as unknown as Hash,
+    aspTreeDepth: BigInt(aspProof2.siblings.length),
+    newSecret: s3 as Secret,
+    newNullifier: n3 as Secret,
+  });
+  pass('generated a SECOND withdrawal, spending the change note');
+
+  const sig2 = (proof2 as { publicSignals: string[] }).publicSignals;
+  const p2 = (proof2 as unknown as {
+    proof: { pi_a: string[]; pi_b: string[][]; pi_c: string[] };
+  }).proof;
+
+  const onChain2 = await client.readContract({
+    address: '0x022891F938Ae7fDC8Ab9Ead0FBf50aBA8C897D6d',
+    abi: verifierAbi,
+    functionName: 'verifyProof',
+    args: [
+      [big(p2.pi_a[0]), big(p2.pi_a[1])],
+      [
+        [big(p2.pi_b[0]?.[1]), big(p2.pi_b[0]?.[0])],
+        [big(p2.pi_b[1]?.[1]), big(p2.pi_b[1]?.[0])],
+      ],
+      [big(p2.pi_c[0]), big(p2.pi_c[1])],
+      sig2.map(BigInt) as unknown as readonly bigint[],
+    ],
+  } as never);
+
+  if (onChain2 !== true) {
+    fail('the deployed verifier rejected the change-note spend');
+  } else {
+    pass('the deployed verifier ACCEPTS spending the change note under the UNCHANGED ASP root');
+    console.log(
+      '  => a partial withdrawal leaves an immediately spendable note. ASP batching\n' +
+        '     delays only NEW deposits, so trades need not wait days between them.',
+    );
+  }
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
   const details = (error as { details?: unknown }).details;
