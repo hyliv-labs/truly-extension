@@ -22,37 +22,17 @@ const LIGHTER_ORIGINS: [string, ...string[]] = [
 
 export interface CleanupResult {
   readonly origins: string[];
-  readonly closedTabs: number;
 }
 
 /**
- * Tabs left open on purpose. A Lighter tab with eth_requestAccounts still
- * in flight is one of these: closing it is what makes the dapp say the
- * connection was cancelled the moment a trade starts.
- */
-const sparedTabIds = new Map<number, number>();
-
-export function spareLighterTab(tabId: number): void {
-  sparedTabIds.set(tabId, (sparedTabIds.get(tabId) ?? 0) + 1);
-}
-
-export function releaseLighterTab(tabId: number): void {
-  const next = (sparedTabIds.get(tabId) ?? 0) - 1;
-  if (next <= 0) sparedTabIds.delete(tabId);
-  else sparedTabIds.set(tabId, next);
-}
-
-/**
- * Remove every trace of the current Lighter session.
- *
- * Open tabs are closed first: a live page holds its state in memory and will
- * happily write the old session back the moment it is cleared.
+ * Remove stored site data for the venues. The tabs stay open: the user closes
+ * them. A connect in progress used to die when its tab was closed out from
+ * under the page.
  */
 export async function clearLighterSiteData(): Promise<CleanupResult> {
-  // Best effort, and bounded. Closing tabs and chrome.browsingData.remove can
-  // sit forever when one of these origins still has an open page — the tab we
-  // just spared so the dapp can finish connecting. Connect must not wait on that.
-  const closedTabs = await within(5_000, closeLighterTabs(), 0);
+  // Best effort, and bounded. chrome.browsingData.remove can sit forever
+  // while one of these origins still has an open page. Connect must not wait
+  // on that.
   await within(
     5_000,
     chrome.browsingData
@@ -73,7 +53,7 @@ export async function clearLighterSiteData(): Promise<CleanupResult> {
     undefined,
   );
 
-  return { origins: [...LIGHTER_ORIGINS], closedTabs };
+  return { origins: [...LIGHTER_ORIGINS] };
 }
 
 function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
@@ -94,17 +74,4 @@ function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
       },
     );
   });
-}
-
-async function closeLighterTabs(): Promise<number> {
-  const tabs = await chrome.tabs.query({
-    url: ['https://*.lighter.xyz/*', 'https://mainnet.zklighter.elliot.ai/*', 'https://*.uniswap.org/*'],
-  });
-
-  const ids = tabs
-    .map((tab) => tab.id)
-    .filter((id): id is number => typeof id === 'number' && !sparedTabIds.has(id));
-
-  if (ids.length > 0) await chrome.tabs.remove(ids);
-  return ids.length;
 }

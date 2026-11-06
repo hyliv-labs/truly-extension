@@ -107,27 +107,47 @@ async function countRead(): Promise<void> {
  * One JSON-RPC call through the anon-client. Throws AnonRpcUnavailable rather
  * than falling back to a direct fetch: a silent fallback would deanonymise the
  * user at exactly the moment they believe they are protected.
+ *
+ * Calls go one at a time. The mixnet client times out a call that was only
+ * waiting behind another one, and the deposit then dies on eth_getBalance
+ * with "operation timed out" even though the tunnel is fine.
  */
-export async function anonRpcCall(
-  method: string,
-  params: unknown[] = [],
-): Promise<unknown> {
-  try {
-    return await attempt(method, params);
-  } catch (error) {
-    // A stalled tunnel is dropped inside attempt. One fresh connection: the
-    // first dial is the one that sits silent, and the caller used to surface
-    // that and stop, so the deposit died on a balance read that the next
-    // attempt would have answered.
-    if (!(error instanceof AnonRpcUnavailable) || !/No answer over anon-rpc/.test(error.message)) {
-      throw error;
-    }
-    resetAnonRpc();
-    return await attempt(method, params);
-  }
+let tail: Promise<unknown> = Promise.resolve();
+
+export function anonRpcCall(method: string, params: unknown[] = []): Promise<unknown> {
+  const run = tail.then(() => callWithRetry(method, params), () => callWithRetry(method, params));
+  tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
-function attempt(method: string, params: unknown[]): Promise<unknown> {
+const TRANSPORT_ATTEMPTS = 3;
+
+async function callWithRetry(method: string, params: unknown[]): Promise<unknown> {
+  let last: unknown;
+  for (let attempt = 0; attempt < TRANSPORT_ATTEMPTS; attempt++) {
+    try {
+      return await attemptCall(method, params);
+    } catch (error) {
+      last = error;
+      // A timed-out or stalled tunnel stays cached. The next deposit reused
+      // it and failed immediately with the same "operation timed out".
+      if (!isTransportFailure(error) || attempt === TRANSPORT_ATTEMPTS - 1) throw error;
+      resetAnonRpc();
+    }
+  }
+  throw last;
+}
+
+function isTransportFailure(error: unknown): boolean {
+  if (error instanceof AnonRpcUnavailable) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|timeout/i.test(message);
+}
+
+function attemptCall(method: string, params: unknown[]): Promise<unknown> {
   // The AbortSignal on the Request below is NOT enough on its own: the harness
   // forwards the Request into the sandboxed worker and the signal does not
   // reach it. Measured: with the mixnet connection stalled, a balance read
@@ -163,7 +183,11 @@ async function anonRpcCallOnce(method: string, params: unknown[]): Promise<unkno
   // Fetching before the tunnel is up queues the call inside a worker that may
   // never accept it. ready rejects as soon as the worker says it failed, so
   // that surfaces in seconds rather than at the deadline.
-  await active.ready;
+  try {
+    await active.ready;
+  } catch (error) {
+    throw new AnonRpcUnavailable(error instanceof Error ? error.message : String(error));
+  }
 
   // A dead gateway does not refuse the dial, it just never answers. Without a
   // deadline the read never settles and every caller waits forever.
@@ -218,6 +242,9 @@ async function anonRpcCallOnce(method: string, params: unknown[]): Promise<unkno
   await countRead();
 
   if (json.error) {
+    if (/timed out|timeout/i.test(json.error.message)) {
+      throw new AnonRpcUnavailable(json.error.message);
+    }
     throw Object.assign(new Error(json.error.message), { code: json.error.code });
   }
   return json.result;

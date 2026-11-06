@@ -17,7 +17,6 @@
 import { keccak256, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getActiveTrade, type ActiveTrade } from './trade';
-import { releaseLighterTab, spareLighterTab } from './site-cleanup';
 import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
@@ -194,8 +193,7 @@ let connectWindowId: number | undefined;
 /**
  * Lighter calls this before any trade exists. Keep the promise pending,
  * show Truly, and finish the normal approval once the user starts a trade.
- * The tab is spared so startTrade's session wipe does not close the page
- * that is waiting on this response.
+ * The site tab stays open; the user closes it.
  */
 const CONNECT_CONSENT = 'truly:connectConsent';
 /** Consent is for the request in front of the user now, not a standing grant. */
@@ -239,38 +237,33 @@ async function connectWhenTradeStarts(input: {
   requestId: string;
   tabId?: number;
 }): Promise<unknown> {
-  if (input.tabId !== undefined) spareLighterTab(input.tabId);
-  try {
-    // The click that follows has to ask the chain whether the next address
-    // was already used. That read goes through anon-rpc, and the first one
-    // builds a circuit. Start it now, while the window is on screen, so the
-    // click is not the thing that waits for the circuit.
-    void publicClient.getChainId().catch(() => undefined);
-    await openTrulyWindow(input.origin);
-    const trade = await waitForActiveTrade();
+  // The click that follows has to ask the chain whether the next address
+  // was already used. That read goes through anon-rpc, and the first one
+  // builds a circuit. Start it now, while the window is on screen, so the
+  // click is not the thing that waits for the circuit.
+  void publicClient.getChainId().catch(() => undefined);
+  await openTrulyWindow(input.origin);
+  const trade = await waitForActiveTrade();
 
-    // The user pressed "Connect" in the Truly window for THIS site. That
-    // click is the consent, so asking again in a second approval window would
-    // be a prompt for a prompt. Only for connecting: it reveals the owner
-    // address and nothing else, the same result execute() returns after an
-    // approval. Signing requests always go through the approval window.
-    if (await consumeConnectConsent(input.origin)) {
-      return input.method === 'wallet_requestPermissions'
-        ? accountsPermission(trade.ownerAddress)
-        : [trade.ownerAddress];
-    }
-
-    return approveAndPerform({
-      requestId: input.requestId,
-      origin: input.origin,
-      method: input.method,
-      params: input.params,
-      ownerAddress: trade.ownerAddress,
-      ownerIndex: trade.ownerIndex,
-    });
-  } finally {
-    if (input.tabId !== undefined) releaseLighterTab(input.tabId);
+  // The user pressed "Connect" in the Truly window for THIS site. That
+  // click is the consent, so asking again in a second approval window would
+  // be a prompt for a prompt. Only for connecting: it reveals the owner
+  // address and nothing else, the same result execute() returns after an
+  // approval. Signing requests always go through the approval window.
+  if (await consumeConnectConsent(input.origin)) {
+    return input.method === 'wallet_requestPermissions'
+      ? accountsPermission(trade.ownerAddress)
+      : [trade.ownerAddress];
   }
+
+  return approveAndPerform({
+    requestId: input.requestId,
+    origin: input.origin,
+    method: input.method,
+    params: input.params,
+    ownerAddress: trade.ownerAddress,
+    ownerIndex: trade.ownerIndex,
+  });
 }
 
 function waitForActiveTrade(): Promise<ActiveTrade> {
