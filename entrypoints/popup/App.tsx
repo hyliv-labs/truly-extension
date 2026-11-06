@@ -182,7 +182,12 @@ export function App() {
         </section>
       ) : status.unlocked ? (
         <section className="panel">
-          {!status.activeTrade && (
+          {/* Also shown for a CONNECTED-but-unfunded trade (active, no
+              session). Connecting first starts a trade, and this used to be
+              gated on there being no trade at all -- so connecting hid the
+              only way to deposit. Funding attaches to that same trade, so the
+              deposit lands on the address Lighter is already connected to. */}
+          {(!status.activeTrade || !status.activeTrade.session) && (
             <TradeForm
               busy={busy}
               connecting={connectOrigin !== null}
@@ -249,20 +254,16 @@ export function App() {
 
           {status.activeTrade && (
             <>
-              {status.activeTrade.session ? null : status.activeTrade.intentAddress ? (
+              {/* No separate 'Get deposit address' button here any more: the
+                  Deposit form above fetches it as its first step, and two
+                  actions for one job read as two different jobs. */}
+              {!status.activeTrade.session && status.activeTrade.intentAddress && (
                 <>
                   <label className="field-label">
-                    Deposit address (the relayer sends here)
+                    Deposit address (the unshield sends here)
                   </label>
                   <code className="address">{status.activeTrade.intentAddress}</code>
                 </>
-              ) : (
-                <button
-                  disabled={busy}
-                  onClick={() => run(() => send({ kind: 'prepareDeposit' }).then(() => {}))}
-                >
-                  Get deposit address
-                </button>
               )}
 
               {/* E3: the step that funds the trade. Shown only once Lighter
