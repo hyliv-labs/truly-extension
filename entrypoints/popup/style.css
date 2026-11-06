@@ -620,3 +620,18 @@ input[type='range'] {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* Where to find Truly in Lighter's wallet picker. */
+.connect-steps {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #11231f;
+  color: #cfe9e1;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.connect-steps strong {
+  color: #6fe3c4;
+}

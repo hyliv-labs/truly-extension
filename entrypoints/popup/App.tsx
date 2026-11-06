@@ -178,7 +178,18 @@ export function App() {
           )}
 
           {status.activeTrade && !status.activeTrade.session && (
-            <p className="field-label">Trade active — Lighter can connect to this address.</p>
+            <>
+              <p className="field-label">Trade active — Lighter can connect to this address.</p>
+              {/* Lighter's login is Dynamic. Its six-wallet 'RECOMMENDED' list
+                  is fixed; a wallet outside Dynamic's own registry is added
+                  as its own connector (fetchInjectedWalletConnectors) but
+                  only shown under 'View all wallets'. Without this line the
+                  natural conclusion is that Truly is not supported at all. */}
+              <p className="connect-steps">
+                On Lighter: <strong>Connect Wallet</strong> → <strong>View all wallets</strong> →{' '}
+                <strong>Truly</strong>. It is not in the recommended list.
+              </p>
+            </>
           )}
 
           {/* A market-trade session reports its own progress; the exit phases
