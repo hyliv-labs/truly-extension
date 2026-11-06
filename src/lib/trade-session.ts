@@ -21,7 +21,9 @@
  * stay on the anon-rpc transport inside the reused funding and re-shield code.
  */
 
+import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { getAccountIndex } from './lighter';
 import { ownerAt } from './vault';
 import { getActiveTrade, startTrade, updateActiveTrade, updateSession, type ActiveTrade } from './trade';
 import { prepareDeposit, checkDeposit } from './deposit';
@@ -174,11 +176,25 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
   if (existing?.session) {
     throw new SessionError('trade-active', 'A trade is already active. Finish or abandon it first.');
   }
+  // A connected trade carries no funding record. One that does was funded
+  // before (an earlier test on the same address), and a new session would
+  // inherit it: the Railgun step returns early on a 'confirmed' record, so
+  // the new deposit is never unshielded and the old one is reported instead.
+  if (existing?.withdrawal) {
+    throw new SessionError(
+      'address-used',
+      'This address was funded before, so a new deposit here would be confused with the old one. Abandon this trade to move to a fresh address, then connect Lighter to that one.',
+    );
+  }
   // Market is read live. The shielded balance is the unlock snapshot;
   // runFunding scans again and refuses if the notes have moved.
   const quote = await quoteTrade(request);
 
   const trade = existing ?? (await startTrade());
+  // What is on Lighter BEFORE this deposit. A reused owner can already have
+  // an account with collateral; without a baseline that counts as credited.
+  const priorAccount = await getAccountIndex(trade.ownerAddress as Address);
+  const baselineCollateralUsd = priorAccount === null ? 0 : (await readTradingAccount(priorAccount)).collateral;
   const now = Date.now();
   const session: TradeSession = {
     id: crypto.randomUUID(),
@@ -190,6 +206,7 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
     leverage: quote.leverage,
     marginUnits: quote.marginUnits,
     quote,
+    baselineCollateralUsd,
     state: 'funding',
     detail: existing
       ? 'Getting a Lighter deposit address for the connected account.'
@@ -400,9 +417,9 @@ async function stepDeposit(trade: ActiveTrade, session: TradeSession): Promise<v
   }
 
   const account = await readTradingAccount(progress.accountIndex);
-  if (!(account.collateral > 0)) {
+  if (!depositCredited(session, account.collateral)) {
     await updateSession(session.id, () => ({
-      detail: `Lighter account #${account.accountIndex} exists; waiting for the collateral to show.`,
+      detail: `Lighter account #${account.accountIndex} holds ${account.collateral.toFixed(2)} USDC; waiting for this deposit to add to it.`,
     }));
     return;
   }
@@ -420,6 +437,22 @@ async function stepDeposit(trade: ActiveTrade, session: TradeSession): Promise<v
     'registering-key',
     `Lighter credited ${account.collateral.toFixed(2)} USDC to account #${account.accountIndex}. Authorising a trading key.`,
   );
+}
+
+/**
+ * Has THIS deposit landed? An account existing is not enough: a reused owner
+ * already had one (measured: owner #0 kept 1.00 USDC from an earlier test,
+ * and the session reported "credited 1.00 USDC" with nothing unshielded).
+ * The collateral has to rise above what was there when the session opened,
+ * by at least half the deposit so a stray dollar does not count.
+ */
+export function depositCredited(
+  session: Pick<TradeSession, 'baselineCollateralUsd' | 'marginUnits'>,
+  collateralUsd: number,
+): boolean {
+  if (session.baselineCollateralUsd === undefined) return collateralUsd > 0;
+  const expectedUsd = Number(session.marginUnits) / 1e6;
+  return collateralUsd - session.baselineCollateralUsd >= expectedUsd / 2;
 }
 
 async function stepRegisterKey(trade: ActiveTrade, session: TradeSession): Promise<void> {

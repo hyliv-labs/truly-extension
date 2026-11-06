@@ -11,7 +11,7 @@ import { installChromeStub } from './chrome-stub.ts';
 
 installChromeStub();
 
-const { driveTx, retryOrder, retryLighterExit, closePosition, classifyFundingError, SessionError, advanceSession } = await import(
+const { driveTx, retryOrder, retryLighterExit, closePosition, classifyFundingError, SessionError, advanceSession, depositCredited, openTradeSession } = await import(
   '../src/lib/trade-session.ts'
 );
 const { updateSession, getActiveTrade } = await import('../src/lib/trade.ts');
@@ -254,6 +254,42 @@ try {
   const s = (await getActiveTrade())?.session;
   if (s?.state !== 'withdraw-failed') fail(`a funded order-placing record was replayed to '${s?.state}'`);
   else pass('a funded record that places its own order is not replayed (no second order)');
+}
+
+// --- a deposit is credited only when the collateral rises above the baseline ---
+// Measured: owner #0 kept 1.00 USDC on Lighter from an earlier test, and the
+// session reported "credited 1.00 USDC" with nothing unshielded.
+{
+  const five = { marginUnits: '5000000' };
+  const cases: [string, boolean, boolean][] = [
+    ['leftover 1.00 on a reused account, nothing new', depositCredited({ ...five, baselineCollateralUsd: 1 }, 1), false],
+    ['a stray 1.00 on top of the leftover', depositCredited({ ...five, baselineCollateralUsd: 1 }, 2), false],
+    ['the 5.00 deposit lands on the reused account', depositCredited({ ...five, baselineCollateralUsd: 1 }, 6), true],
+    ['the 5.00 deposit lands on a fresh account', depositCredited({ ...five, baselineCollateralUsd: 0 }, 5), true],
+    ['nothing yet on a fresh account', depositCredited({ ...five, baselineCollateralUsd: 0 }, 0), false],
+  ];
+  const wrong = cases.filter(([, got, want]) => got !== want);
+  if (wrong.length) for (const [name, got] of wrong) fail(`deposit credited = ${got}: ${name}`);
+  else pass('a deposit counts as credited only when the collateral rises by it (leftover 1.00 does not)');
+}
+
+// --- a new session refuses an address that carries an old funding record ----
+{
+  await chrome.storage.local.set({
+    'truly:activeTrade': {
+      ownerIndex: 0,
+      ownerAddress: '0x000000000000000000000000000000000000dEaD',
+      startedAt: NOW,
+      withdrawal: { status: 'confirmed', txHash: '0x' + 'ef'.repeat(32), label: 'privacy-pools', amount: '7000000', childrenCountAtStart: 0, startedAt: NOW },
+    },
+  });
+  try {
+    await openTradeSession({ marginUnits: '5000000', fundingSource: 'railgun', depositOnly: true } as never);
+    fail('a session opened on an address with an old funding record');
+  } catch (error) {
+    if (error instanceof SessionError && error.code === 'address-used') pass('a new session refuses an address that was funded before');
+    else fail(`old funding record threw ${(error as Error).message}`);
+  }
 }
 
 // --- funding errors map to the named cases ------------------------------------

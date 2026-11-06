@@ -104,6 +104,12 @@ export interface TradeSession {
 
   /** Collateral Lighter actually credited, read from the account. */
   readonly creditedUsd?: number;
+  /**
+   * Collateral already on the owner's Lighter account when the session
+   * opened (0 when it had none). The deposit counts as credited only once
+   * the collateral rises above this. Absent on sessions opened before it.
+   */
+  readonly baselineCollateralUsd?: number;
 
   readonly apiKey?: {
     readonly index: number;
