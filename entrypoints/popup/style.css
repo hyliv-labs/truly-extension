@@ -670,15 +670,40 @@ input[type='range'] {
 /* --- Brand ---------------------------------------------------------------- */
 
 .mascot {
+  position: relative;
   display: inline-block;
   flex: none;
   line-height: 0;
+  perspective: 320px;
 }
 
-.mascot svg {
-  display: block;
+.mascot-face {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 42%;
+  transition: transform 90ms linear;
+}
+
+.mascot-body,
+.mascot-eyes {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mascot-eyes {
+  transition: transform 70ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-face,
+  .mascot-eyes {
+    transition: none;
+  }
 }
 
 .logo {
