@@ -55,6 +55,7 @@ import {
 import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
+import { getFastBridgeLimit } from '@truly/lib/lighter';
 import { fetchMarkets } from '@truly/lib/lighter-markets';
 import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
 import {
@@ -308,6 +309,13 @@ async function handle(
         periodInMinutes: DEPOSIT_POLL_MINUTES,
       });
       return { intentAddress };
+    }
+
+    case 'fundingSpeed': {
+      // Read live rather than assumed: capacity can appear, and when it does
+      // the funding wait collapses from ~15-20 minutes to seconds.
+      const limit = await getFastBridgeLimit().catch(() => '0');
+      return { fastBridgeLimit: limit, fast: Number(limit) > 0 };
     }
 
     case 'checkDeposit':

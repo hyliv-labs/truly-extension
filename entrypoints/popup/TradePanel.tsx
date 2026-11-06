@@ -33,6 +33,8 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
   const [quote, setQuote] = useState<TradeQuote | null>(null);
   const [working, setWorking] = useState<'quote' | 'open' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Null until known; the notice says so rather than assuming either way. */
+  const [funding, setFunding] = useState<{ fastBridgeLimit: string; fast: boolean } | null>(null);
 
   const loadMarkets = useCallback(async () => {
     setError(null);
@@ -42,6 +44,14 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
       setMarketId((current) => current ?? list.find((m) => m.tradable)?.marketId ?? null);
     } catch (e) {
       setError(`Markets unavailable: ${(e as Error).message}`);
+    }
+    // Best effort: a trade is still placeable if this read fails, so a
+    // failure leaves the notice in its 'checking' wording rather than
+    // blocking the form.
+    try {
+      setFunding(await send({ kind: 'fundingSpeed' }, 20_000));
+    } catch {
+      setFunding(null);
     }
   }, []);
 
@@ -186,6 +196,21 @@ export function TradeForm({ busy, onOpened }: { busy: boolean; onOpened: () => P
 
       {quote && <OrderSummary quote={quote} />}
 
+      {/* Stated BEFORE confirming, not discovered during the wait.
+          stepOrder re-reads the book and the credited balance, so the order
+          is sized correctly either way -- but it is sized at the price when
+          funding lands, which is not the price on screen now. Saying so is
+          the difference between a slow trade and a surprising one. */}
+      {quote && (
+        <p className={funding?.fast ? 'field-label' : 'warn'}>
+          {funding === null
+            ? 'Checking how fast Lighter will credit this…'
+            : funding.fast
+              ? 'Lighter’s fast bridge has capacity, so funding should credit in moments. Your order is priced when it lands.'
+              : 'Lighter’s fast bridge is at zero capacity, so funding takes about 15–20 minutes. Your order is placed at the market price when it lands — not the price shown here.'}
+        </p>
+      )}
+
       {quote ? (
         <button className={direction} disabled={disabled} onClick={() => void confirm()}>
           {working === 'open' ? 'Starting…' : `Confirm ${direction.toUpperCase()} ${quote.symbol}`}
@@ -224,6 +249,13 @@ function OrderSummary({ quote }: { quote: TradeQuote }) {
       <p className="hint">Sized from margin less a 2% buffer. A fresh owner and a fresh Lighter account, used once.</p>
     </div>
   );
+}
+
+/** Whole minutes since a timestamp, worded so 0 does not read as broken. */
+function waitedMinutes(since: number): string {
+  const mins = Math.max(0, Math.floor((Date.now() - since) / 60_000));
+  if (mins < 1) return 'under a minute';
+  return `${mins} minute${mins === 1 ? '' : 's'}`;
 }
 
 const STEPS: { label: string; states: SessionState[] }[] = [
@@ -315,6 +347,15 @@ export function SessionPanel({ busy, onChanged }: { busy: boolean; onChanged: ()
         <div className={failed ? 'phase failed' : 'phase'}>
           <strong>{s.state.replace(/-/g, ' ')}</strong>
           <p>{s.detail}</p>
+          {/* A 20-minute wait with no elapsed time reads as 'stuck'. Showing
+              it against the expected window turns the same wait into
+              something the user can judge. */}
+          {s.state === 'awaiting-deposit' && (
+            <p className="field-label">
+              Waiting {waitedMinutes(s.updatedAt)} · Lighter usually credits in 15–20 minutes while
+              its fast bridge has no capacity. Your order is priced when it lands.
+            </p>
+          )}
           {s.blocked === 'locked' && <p className="error">Unlock Truly to continue. This step signs with the trade&apos;s keys.</p>}
           {s.error && s.error.code !== 'transient' && (
             <p className={s.detail.includes(s.error.message) ? 'field-label' : 'error'}>

@@ -58,6 +58,10 @@ export type Request =
   | { kind: 'checkDeposit' }
   // In-extension market trade (JIT funding)
   | { kind: 'markets' }
+  // How fast a deposit will credit. Lighter's fast bridge has been at zero
+  // capacity on Arbitrum, which means the ~15-20 minute path — and that is
+  // the gap between confirming a trade and it being priced.
+  | { kind: 'fundingSpeed' }
   | { kind: 'quoteTrade'; trade: TradeRequestWire }
   | { kind: 'openTrade'; trade: TradeRequestWire }
   | { kind: 'tradeSession' }
@@ -154,6 +158,7 @@ export interface ResultMap {
     accountIndex: number | null;
   };
   markets: PerpMarket[];
+  fundingSpeed: { fastBridgeLimit: string; fast: boolean };
   quoteTrade: TradeQuote;
   openTrade: TradeSession;
   tradeSession: SessionView | null;
