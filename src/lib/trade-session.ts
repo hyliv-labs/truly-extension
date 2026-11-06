@@ -975,7 +975,11 @@ export async function shieldFundedAccount(): Promise<TradeSession> {
       'Close the position on Lighter first. Nothing was withdrawn, and nothing was shielded.',
     );
   }
-  const signer = await signerFor(trade, session);
+  // A deposit-only account is traded on Lighter's own site, so Truly never
+  // registered a key for it, and the withdrawal has to be signed with one.
+  // Measured: "No trading key for this session yet." on Shield back.
+  const keyed = await ensureWithdrawalKey(trade, session);
+  const signer = await signerFor(trade, keyed);
   const auth = await createAuthToken(signer);
   const pool = await fastWithdrawPool(signer.accountIndex, auth);
   const fee = await transferFeeUnits(signer.accountIndex, pool.toAccountIndex, auth);
@@ -986,8 +990,69 @@ export async function shieldFundedAccount(): Promise<TradeSession> {
     );
   }
   const where = session.quote.fundingSource === 'Railgun' ? 'Railgun' : 'Privacy Pools';
-  await queueLighterExit(trade, session, account.collateralRaw, `Withdrawing USDC from Lighter to shield it back into ${where}.`);
+  await queueLighterExit(trade, keyed, account.collateralRaw, `Withdrawing USDC from Lighter to shield it back into ${where}.`);
   return (await advanceSession()) ?? (await requireSession());
+}
+
+/**
+ * Make sure this session has a Lighter API key registered at API_KEY_INDEX,
+ * registering one if not. Index 4 is outside the slots Lighter's own apps use,
+ * so the user's Lighter web session is not touched.
+ *
+ * Signed once and stored before sending; later calls drive the SAME signed
+ * change, so clicking again cannot register two keys. Waits up to ~30s for
+ * Lighter to apply it, then asks the user to click again rather than guess.
+ */
+async function ensureWithdrawalKey(trade: ActiveTrade, session: TradeSession): Promise<TradeSession> {
+  const accountIndex = requireAccount(trade);
+  const owner = await ownerAt(trade.ownerIndex);
+
+  let apiKey = session.apiKey;
+  if (apiKey?.registeredAt) return session;
+  if (!apiKey) {
+    const pair = await generateApiKey();
+    const fresh = {
+      index: API_KEY_INDEX,
+      publicKey: pair.publicKey,
+      sealed: await sealApiKey(owner.privateKey, accountIndex, pair.privateKey),
+    };
+    apiKey = fresh;
+    await updateSession(session.id, () => ({ apiKey: fresh }));
+  }
+  const key = apiKey;
+  const markRegistered = async () =>
+    updateSession(session.id, (s) => ({ apiKey: { ...s.apiKey!, registeredAt: Date.now() } }));
+
+  if (await isApiKeyRegistered(accountIndex, key.index, key.publicKey)) return markRegistered();
+
+  let tx = key.tx;
+  if (!tx || tx.status === 'expired' || tx.status === 'rejected') {
+    const signer = await signerFor(trade, { ...session, apiKey: key });
+    const nonce = await nextNonce(accountIndex, key.index);
+    const unsigned = await signChangePubKey(signer, key.publicKey, nonce);
+    const l1 = await privateKeyToAccount(owner.privateKey).signMessage({ message: unsigned.messageToSign });
+    const signed = record(withL1Signature(unsigned, l1), nonce);
+    tx = signed;
+    await updateSession(session.id, (s) => ({ apiKey: { ...s.apiKey!, tx: signed } }));
+  }
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const next = await driveTx(tx, accountIndex, key.index);
+    await updateSession(session.id, (s) => ({ apiKey: { ...s.apiKey!, tx: next } }));
+    if (await isApiKeyRegistered(accountIndex, key.index, key.publicKey)) return markRegistered();
+    if (next.status === 'rejected') {
+      throw new SessionError(
+        'key-rejected',
+        `Lighter refused the withdrawal key (${next.message ?? 'rejected'}). Nothing was withdrawn; click again to retry.`,
+      );
+    }
+    tx = next;
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+  throw new SessionError(
+    'key-pending',
+    'Lighter is still authorising the withdrawal key. Nothing was withdrawn. Click Shield back again in a minute.',
+  );
 }
 
 /** A refused or expired withdrawal can be signed again. An uncertain one cannot. */
