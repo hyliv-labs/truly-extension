@@ -38,6 +38,16 @@ export function App() {
       return 'A site';
     }
   });
+  const [connectFullOrigin] = useState<string | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get('connect');
+    if (!raw) return null;
+    try {
+      return new URL(raw).origin;
+    } catch {
+      return null;
+    }
+  });
+  const [connected, setConnected] = useState(false);
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
   const [shieldedLoading, setShieldedLoading] = useState(false);
@@ -111,13 +121,39 @@ export function App() {
         <p className="tagline">A new account, funded once.</p>
       </header>
 
-      {connectOrigin && !status?.activeTrade && (
+      {connectOrigin && !status?.activeTrade && !connected && (
         <div className="connect-hint">
           <p>
-            <strong>{connectOrigin}</strong> is waiting to connect.
+            <strong>{connectOrigin}</strong> wants to connect.
             {status?.unlocked
-              ? ' The shielded balance is at the top. Fund a new address from it and Truly connects that address. Closing this window cancels the request.'
-              : ' Unlock Truly, then fund a new address. Closing this window cancels the request.'}
+              ? ' Truly gives it a fresh address that has never been used. You fund it from the shielded balance when you trade, not now.'
+              : ' Unlock Truly first.'}
+          </p>
+          {/* The button the site's "click connect in your wallet popup" refers
+              to. Without it the window only offered funding, and the site sat
+              waiting on a button that did not exist. */}
+          {status?.unlocked && connectFullOrigin && (
+            <button
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await send({ kind: 'connectToSite', origin: connectFullOrigin });
+                  setConnected(true);
+                })
+              }
+            >
+              Connect to {connectOrigin}
+            </button>
+          )}
+          <p className="field-label">Closing this window cancels the request.</p>
+        </div>
+      )}
+
+      {connectOrigin && connected && (
+        <div className="connect-hint">
+          <p>
+            Connected to <strong>{connectOrigin}</strong>. You can close this window and
+            return to the site.
           </p>
         </div>
       )}

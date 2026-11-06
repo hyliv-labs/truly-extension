@@ -165,14 +165,20 @@ export async function quoteTrade(request: TradeRequest): Promise<TradeQuote> {
  * Returns before funding — runFunding() moves money and can take minutes.
  */
 export async function openTradeSession(request: TradeRequest): Promise<TradeSession> {
-  if (await getActiveTrade()) {
+  // A trade with no session is one the user CONNECTED to Lighter before
+  // funding it: the address Lighter is already holding. Funding must attach
+  // to that trade. Starting a fresh one instead would send the deposit to a
+  // different address from the one Lighter is connected to -- the money and
+  // the connection would end up on two separate accounts.
+  const existing = await getActiveTrade();
+  if (existing?.session) {
     throw new SessionError('trade-active', 'A trade is already active. Finish or abandon it first.');
   }
   // Market is read live. The shielded balance is the unlock snapshot;
   // runFunding scans again and refuses if the notes have moved.
   const quote = await quoteTrade(request);
 
-  const trade = await startTrade();
+  const trade = existing ?? (await startTrade());
   const now = Date.now();
   const session: TradeSession = {
     id: crypto.randomUUID(),

@@ -197,6 +197,41 @@ let connectWindowId: number | undefined;
  * The tab is spared so startTrade's session wipe does not close the page
  * that is waiting on this response.
  */
+const CONNECT_CONSENT = 'truly:connectConsent';
+/** Consent is for the request in front of the user now, not a standing grant. */
+const CONNECT_CONSENT_TTL_MS = 2 * 60_000;
+
+/**
+ * Record that the user pressed Connect for `origin` in the Truly window.
+ *
+ * Session storage: it never survives the browser, and it is consumed by the
+ * first connect from that origin, so it cannot quietly authorise a later one.
+ */
+export async function grantConnectConsent(origin: string): Promise<void> {
+  await chrome.storage.session.set({
+    [CONNECT_CONSENT]: { origin: normaliseOrigin(origin), at: Date.now() },
+  });
+}
+
+export async function consumeConnectConsent(origin: string): Promise<boolean> {
+  const stored = await chrome.storage.session.get(CONNECT_CONSENT);
+  const grant = stored[CONNECT_CONSENT] as { origin: string; at: number } | undefined;
+  await chrome.storage.session.remove(CONNECT_CONSENT);
+  return (
+    !!grant &&
+    grant.origin === normaliseOrigin(origin) &&
+    Date.now() - grant.at < CONNECT_CONSENT_TTL_MS
+  );
+}
+
+function normaliseOrigin(origin: string): string {
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return origin;
+  }
+}
+
 async function connectWhenTradeStarts(input: {
   origin: string;
   method: string;
@@ -208,6 +243,18 @@ async function connectWhenTradeStarts(input: {
   try {
     await openTrulyWindow(input.origin);
     const trade = await waitForActiveTrade();
+
+    // The user pressed "Connect" in the Truly window for THIS site. That
+    // click is the consent, so asking again in a second approval window would
+    // be a prompt for a prompt. Only for connecting: it reveals the owner
+    // address and nothing else, the same result execute() returns after an
+    // approval. Signing requests always go through the approval window.
+    if (await consumeConnectConsent(input.origin)) {
+      return input.method === 'wallet_requestPermissions'
+        ? accountsPermission(trade.ownerAddress)
+        : [trade.ownerAddress];
+    }
+
     return approveAndPerform({
       requestId: input.requestId,
       origin: input.origin,

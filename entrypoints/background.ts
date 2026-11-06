@@ -29,6 +29,7 @@ import {
 import { endTrade, getActiveTrade, startTrade } from '@truly/lib/trade';
 import {
   broadcastProviderEvent,
+  grantConnectConsent,
   handleProviderRequest,
   resumePendingApprovals,
   settle,
@@ -325,6 +326,16 @@ async function handle(
         periodInMinutes: DEPOSIT_POLL_MINUTES,
       });
       return { intentAddress };
+    }
+
+    case 'connectToSite': {
+      // Consent FIRST, then the trade. Starting the trade is what releases
+      // the held eth_requestAccounts, and it must find the consent already
+      // recorded or it falls back to opening a second approval window.
+      await grantConnectConsent(message.origin);
+      const trade = (await getActiveTrade()) ?? (await startTrade());
+      await touchAutoLock();
+      return { ownerAddress: trade.ownerAddress };
     }
 
     case 'fundingSpeed': {

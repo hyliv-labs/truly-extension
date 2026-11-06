@@ -30,6 +30,9 @@ export type Request =
   | { kind: 'lock' }
   | { kind: 'currentOwner' }
   | { kind: 'startTrade' }
+  // Connect a waiting site (Lighter) to a fresh owner address, now, without
+  // funding it first. Funding attaches to this same trade afterwards.
+  | { kind: 'connectToSite'; origin: string }
   | { kind: 'endTrade' }
   /** Retire a trade that is NOT finished, accepting that funds may remain. */
   | { kind: 'abandonTrade' }
@@ -168,6 +171,7 @@ export interface ResultMap {
     accountIndex: number | null;
   };
   markets: PerpMarket[];
+  connectToSite: { ownerAddress: string };
   fundingSpeed: { fastBridgeLimit: string; fast: boolean };
   quoteTrade: TradeQuote;
   openTrade: TradeSession;
