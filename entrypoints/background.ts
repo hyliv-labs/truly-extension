@@ -8,6 +8,13 @@
  * with the worker.
  */
 
+// MUST BE FIRST. ffjavascript, pulled in transitively by the Privacy Pools
+// SDK, calls URL.createObjectURL at module level — and that does not exist in
+// a service worker, so the import throws and the worker never registers.
+// ESM evaluates imports in order, so this side-effect module has to precede
+// anything that reaches the SDK.
+import { swGlobalsInstalled } from '@truly/shims/sw-globals';
+
 import type { Request, Response } from '@truly/lib/messages';
 import {
   createVault,
@@ -76,6 +83,11 @@ export default defineBackground({
     chrome.runtime.onInstalled.addListener(() => {
       console.info('[truly] installed');
     });
+
+    // Reads the shim's export so the module cannot be tree-shaken. Without a
+    // referenced binding the bundler drops it, and the worker goes back to
+    // dying on URL.createObjectURL before any of this runs.
+    console.info('[truly] worker up; sw globals installed:', swGlobalsInstalled);
 
     // Chrome may drop alarms across a browser restart. A deposit in flight has
     // real money sitting at an intent address, so re-arm rather than relying on

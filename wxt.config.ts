@@ -7,7 +7,51 @@ export default defineConfig({
   // Not '@': WXT already binds '@' and '~' to srcDir, which is the repo root here.
   alias: {
     '@truly': resolve('src'),
+    /**
+     * maci-crypto (transitively, via the Privacy Pools SDK) does
+     * require("assert") and calls it at module level. There is no Node
+     * builtin in a service worker and no `assert` package installed, so the
+     * bundler's stub had no callable `.default` — the worker threw during
+     * import and never registered (Chrome: "Service worker registration
+     * failed. Status code: 15").
+     */
+    assert: resolve('src/shims/assert.ts'),
   },
+  /**
+   * Keep the service-worker global shim in its OWN chunk.
+   *
+   * ESM evaluates every import before the importing module's body, so a shim
+   * inlined into background.js runs too late: the SDK chunk has already been
+   * evaluated and already thrown on URL.createObjectURL. Forcing it into a
+   * separate chunk makes it a real import, and imports run in source order —
+   * ours is first in background.ts.
+   */
+  vite: () => ({
+    plugins: [
+      {
+        name: 'truly:sw-globals-chunk',
+        config(config: { build?: { lib?: unknown } }) {
+          // NOT for the content-script builds. Those are lib mode (IIFE,
+          // codeSplitting false), where manualChunks is rejected outright:
+          // "output.manualChunks cannot be used when output.codeSplitting is
+          // set to false". They never touch the SDK, so they do not need it.
+          if (config.build?.lib) return;
+          return {
+            build: {
+              rollupOptions: {
+                output: {
+                  manualChunks(id: string) {
+                    return id.includes('src/shims/sw-globals') ? 'sw-globals' : undefined;
+                  },
+                },
+              },
+            },
+          };
+        },
+      },
+    ],
+  }),
+
   manifest: {
     name: 'Truly',
     // background.type is NOT set here — it is set on defineBackground in
