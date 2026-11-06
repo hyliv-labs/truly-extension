@@ -18,7 +18,8 @@
     "check:lighter": "tsx scripts/lighter-check.ts",
     "fetch:circuits": "tsx scripts/fetch-circuits.ts",
     "check:circuits": "tsx scripts/circuits-check.ts",
-    "check:withdrawal": "tsx scripts/withdrawal-proof-check.ts"
+    "check:withdrawal": "tsx scripts/withdrawal-proof-check.ts",
+    "check:account": "tsx scripts/account-service-check.ts"
   },
   "dependencies": {
     "@0xbow/privacy-pools-core-sdk": "^1.5.0",
