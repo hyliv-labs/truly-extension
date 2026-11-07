@@ -467,48 +467,74 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
  */
 async function sendOwnerTransaction(record: InFlightRequest, privateKey: Hex): Promise<Hex> {
   const latest = (await getInFlight(record.requestId)) ?? record;
-  if (latest.rawTx) return broadcastRaw(latest.rawTx as Hex);
+  if (latest.rawTx) {
+    try {
+      return await broadcastRaw(latest.rawTx as Hex);
+    } catch (error) {
+      // A stored transaction keeps the gas limit it was signed with. One that
+      // Arbitrum already rejected has to be signed again, or every retry sends
+      // the same failing bytes.
+      await clearRawTx(record.requestId);
+      if (!intrinsicGasTooLow(error)) throw error;
+    }
+  }
 
   const account = privateKeyToAccount(privateKey);
   const tx = parseTransactionRequest(record.params, record.ownerAddress);
-  const prepared = await publicClient.prepareTransactionRequest({
-    account,
-    to: tx.to,
-    data: tx.data,
-    value: tx.value,
-  });
-  // Arbitrum rejects a limit that does not also pay for posting the calldata
-  // to Ethereum, and the error is "intrinsic gas too low". eth_estimateGas
-  // over anon-rpc often returns the Ethereum minimum, and doubling that is
-  // still short of an approve. The NodeInterface precompile is the limit
-  // Arbitrum itself would have returned.
-  const estimated = prepared.gas ?? 21_000n;
-  const fromNode = await arbitrumNodeGas(tx.to, tx.data ?? '0x', tx.value).catch(() => 0n);
-  prepared.gas = highest(fromNode + fromNode / 2n, estimated * 2n, arbitrumGasFloor(tx.data, estimated), tx.gas ?? 0n);
+  // Do not call prepareTransactionRequest. It estimates gas, and that
+  // eth_estimateGas is the call returning "intrinsic gas too low" — the
+  // padding below it never ran. Nonce and base fee do not need an estimate.
+  const [nonce, block] = await Promise.all([
+    publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' }),
+    publicClient.getBlock(),
+  ]);
+  const base = block.baseFeePerGas ?? 0n;
+  if (base === 0n) {
+    throw new Error('Arbitrum did not return a base fee, so the transaction was not sent.');
+  }
+  const gas = await arbitrumGasLimit(tx);
   console.info('[truly] arbitrum gas limit', {
-    estimated: estimated.toString(),
-    fromNode: fromNode.toString(),
     site: tx.gas?.toString() ?? 'none',
-    chosen: prepared.gas.toString(),
+    chosen: gas.toString(),
+    maxFeePerGas: (base * 2n).toString(),
   });
-  // prepareTransactionRequest returns the chain object alongside the fields
-  // signTransaction wants. The runtime value is a transaction; the extra
-  // fields are what the type refuses.
-  const serialized = await account.signTransaction(
-    prepared as Parameters<typeof account.signTransaction>[0],
-  );
-  await putInFlight({ ...latest, rawTx: serialized });
+  const serialized = await account.signTransaction({
+    chainId: 42161,
+    type: 'eip1559',
+    nonce,
+    to: tx.to,
+    data: tx.data ?? '0x',
+    value: tx.value,
+    gas,
+    maxFeePerGas: base * 2n,
+    maxPriorityFeePerGas: 0n,
+  });
+  const current = (await getInFlight(record.requestId)) ?? latest;
+  await putInFlight({ ...current, rawTx: serialized });
 
   try {
     return await broadcastRaw(serialized);
   } catch (error) {
-    const stored = await getInFlight(record.requestId);
-    if (stored) {
-      const { rawTx: _omit, ...rest } = stored;
-      await putInFlight(rest);
+    await clearRawTx(record.requestId);
+    if (intrinsicGasTooLow(error)) {
+      throw new Error(
+        `Arbitrum rejected gas limit ${gas}. ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     throw error;
   }
+}
+
+async function clearRawTx(requestId: string): Promise<void> {
+  const stored = await getInFlight(requestId);
+  if (!stored?.rawTx) return;
+  const { rawTx: _omit, ...rest } = stored;
+  await putInFlight(rest);
+}
+
+function intrinsicGasTooLow(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /intrinsic gas too low/i.test(message);
 }
 
 /** Arbitrum's precompile for the gas limit a transaction actually needs. */
@@ -542,19 +568,38 @@ async function arbitrumNodeGas(to: Address, data: Hex, value: bigint): Promise<b
       args: [to, false, data],
     }),
     value,
+    // A missing gas on eth_call is what makes Arbitrum answer "intrinsic gas
+    // too low". The limit is for the simulation only; it is not charged.
+    gas: 5_000_000n,
   });
   if (!raw.data || raw.data.length < 66) return 0n;
   return BigInt(raw.data.slice(0, 66));
 }
 
+async function arbitrumGasLimit(tx: {
+  to: Address;
+  data?: Hex;
+  value: bigint;
+  gas?: bigint;
+}): Promise<bigint> {
+  const fromNode = await arbitrumNodeGas(tx.to, tx.data ?? '0x', tx.value).catch(() => 0n);
+  // 1.5× the precompile result, the site's own limit, and a calldata floor.
+  // The floor does not depend on eth_estimateGas: an approve measured on
+  // Arbitrum needs about 56k, and a 21k estimate doubled is still rejected.
+  const chosen = highest(fromNode + fromNode / 2n, arbitrumGasFloor(tx.data), tx.gas ?? 0n);
+  // Cap so the reserved fee stays inside the 0.0001 ETH a fresh address holds
+  // at the current ~0.02 gwei base fee, with room for the 2× fee above.
+  const cap = 1_500_000n;
+  return chosen > cap ? cap : chosen;
+}
+
 /**
- * Floor used when the precompile cannot be read. An approve measured on
- * Arbitrum needs about 56k, while a broken estimate comes back as 21k.
- * 500 gas per calldata byte covers the L1 posting on top of execution.
+ * Floor used when the precompile cannot be read. 800 gas per calldata byte
+ * is about triple the L1 posting cost measured for an approve.
  */
-function arbitrumGasFloor(data: Hex | undefined, estimated: bigint): bigint {
+function arbitrumGasFloor(data: Hex | undefined): bigint {
   const bytes = BigInt(Math.max(0, ((data?.length ?? 2) - 2) / 2));
-  return estimated + bytes * 500n + 80_000n;
+  return 200_000n + bytes * 800n;
 }
 
 function highest(...values: bigint[]): bigint {
