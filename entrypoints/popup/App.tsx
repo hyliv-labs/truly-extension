@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { LockScreen } from './LockScreen';
 import { Logo } from './Mascot';
 import { Onboarding } from './Onboarding';
+import { PhraseScreen } from './PhraseScreen';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
@@ -199,15 +200,33 @@ export function App() {
           error={error}
           notice={
             connectOrigin ? (
-              <div className="connect-hint">
-                <p>
-                  <strong>{connectOrigin}</strong> wants to connect. Unlock to continue.
-                </p>
+              <div className="gx-notice">
+                <span className="gx-live" />
+                <span>
+                  <strong>{connectOrigin}</strong> wants to connect
+                </span>
               </div>
             ) : undefined
           }
           onUnlock={(pw) => run(() => send({ kind: 'unlock', password: pw }).then(() => {}))}
         />
+      </main>
+    );
+  }
+
+  // Shown once, straight after the vault is created.
+  if (backup) {
+    return (
+      <main className="popup-gx">
+        <PhraseScreen phrase={backup} onDone={() => setBackup(null)} />
+      </main>
+    );
+  }
+
+  if (status && !status.hasVault) {
+    return (
+      <main className="popup-gx">
+        <Onboarding busy={busy} run={run} onBackup={setBackup} error={error} />
       </main>
     );
   }
@@ -323,16 +342,6 @@ export function App() {
             </p>
           )}
 
-          {backup && (
-            <div className="backup">
-              <strong>Write this down now.</strong>
-              <code>{backup}</code>
-              <p>It is the only way to recover funds from a trade in flight.</p>
-              <button className="secondary" disabled={busy} onClick={() => setBackup(null)}>
-                I&apos;ve written it down
-              </button>
-            </div>
-          )}
 
           {status.activeTrade && !status.activeTrade.session && !onSite(status.activeTrade.venue) && (
             <>
