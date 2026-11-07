@@ -16,6 +16,7 @@ import { ARBITRUM_CHAIN_ID, USDC_ADDRESS } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
 import { endTrade, getActiveTrade, startTrade, updateActiveTrade, type ActiveTrade } from './trade';
+import { arbitrumGasLimit } from './tx-gas';
 import { RAILGUN_RETURN_TOKENS, WETH_ADDRESS } from './uniswap';
 import { ownerAt } from './vault';
 
@@ -225,7 +226,9 @@ async function wrapLeftoverEth(trade: ActiveTrade): Promise<void> {
   const block = await publicClient.getBlock();
   const maxFeePerGas = (block.baseFeePerGas ?? 20_000_000n) * 2n;
   const data = '0xd0e30db0' as const;
-  const gas = ((await publicClient.estimateGas({ account: trade.ownerAddress, to: WETH_ADDRESS, data, value })) * 12n) / 10n;
+  // eth_estimateGas is the call that sits until the anon-rpc deadline and then
+  // answers "intrinsic gas too low". A WETH deposit's posting cost is known.
+  const gas = arbitrumGasLimit(data);
   const raw = await account.signTransaction({
     chainId: ARBITRUM_CHAIN_ID,
     nonce: await publicClient.getTransactionCount({ address: trade.ownerAddress }),

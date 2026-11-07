@@ -7,7 +7,7 @@
  * Offline: signs with a throwaway key, sends nothing. Part of `pnpm check`.
  */
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { maxCostWei } from '../src/lib/tx-gas.ts';
+import { arbitrumGasLimit, maxCostWei } from '../src/lib/tx-gas.ts';
 
 let failed = false;
 const fail = (m: string) => {
@@ -53,6 +53,19 @@ const account = privateKeyToAccount(generatePrivateKey());
   });
   if (maxCostWei(raw) !== 21_000n * 10n + 7n) fail('value is not counted in the cost');
   else pass('the cost includes the value carried');
+}
+
+{
+  // The unshield that landed used 1,363,258 gas for 1,476 bytes. A quote below
+  // that is what Arbitrum rejects.
+  const data = `0x${'ab'.repeat(1476)}` as const;
+  const got = arbitrumGasLimit(data, 21_000n);
+  if (got < 1_363_258n) fail(`unshield floor ${got} is under the transaction that landed`);
+  else pass(`a 1,476-byte unshield floor is ${got}`);
+  if (arbitrumGasLimit('0x') !== 100_000n) fail('an empty transfer floor should be 100,000');
+  else pass('an empty transfer is not left at 21,000');
+  if (arbitrumGasLimit('0x', 2_000_000n) !== 2_000_000n) fail('a higher quote should be kept');
+  else pass('a quote above the floor is kept');
 }
 
 console.log(failed ? '\nFAILED' : '\ntx gas OK');

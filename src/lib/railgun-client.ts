@@ -25,6 +25,7 @@ import {
   formatEther,
   http,
   keccak256,
+  parseTransaction,
   type Address,
   type Hash,
   type Hex,
@@ -39,7 +40,7 @@ import {
   USDC_ADDRESS,
 } from './config';
 import { ensureOffscreenDocument } from './offscreen';
-import { maxCostWei } from './tx-gas';
+import { arbitrumGasLimit, maxCostWei } from './tx-gas';
 import { publicClient } from './chain';
 import { DEFAULT_PERMIT_AMOUNT, encodePaymasterData, signPaymasterPermit } from './permit';
 import { RAILGUN_PROXY_ARBITRUM, railgunGrossForNet, railgunShieldAfterGasReserve } from './railgun';
@@ -198,7 +199,15 @@ export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 're
     // cannot afford (measured: 0.00005 ETH held, 0.0000570 wanted), and a
     // resend then fails every tick. Cover the shortfall first; with no ETH
     // anywhere in the vault this throws, naming the amount to send.
-    const raw = trade.withdrawal.raw as Hex;
+    // A limit Arbitrum already rejected is signed again. Resending those
+    // bytes fails the same way on every retry.
+    const owner = await ownerAt(trade.ownerIndex);
+    const raw = await raiseGasIfNeeded(owner.privateKey, trade.withdrawal.raw as Hex);
+    if (raw !== trade.withdrawal.raw) {
+      await updateActiveTrade({
+        withdrawal: { ...trade.withdrawal, raw, txHash: keccak256(raw) },
+      });
+    }
     await ensureUnshieldGas(trade.ownerIndex, trade.ownerAddress as Address, maxCostWei(raw));
     await broadcast(raw);
   }
@@ -526,7 +535,6 @@ const UNSHIELD_GAS_WEI = 50_000_000_000_000n;
  * estimate and the signed transaction, rather than two transfers.
  */
 const FRESH_OWNER_TOPUP_WEI = 100_000_000_000_000n;
-const ETH_TRANSFER_GAS = 21_000n;
 
 /**
  * The unshield is a normal transaction, so the fresh owner has to hold ETH.
@@ -546,7 +554,10 @@ export async function ensureUnshieldGas(ownerIndex: number, owner: Address, need
     const earlier = await ownerAt(index);
     const earlierBalance = await publicClient.getBalance({ address: earlier.address });
     const price = (await publicClient.getGasPrice()) * 2n;
-    const transferCost = ETH_TRANSFER_GAS * price;
+    // 21,000 is Ethereum's transfer minimum. Arbitrum adds the cost of posting
+    // the transaction to Ethereum and rejects that limit.
+    const gas = arbitrumGasLimit(undefined);
+    const transferCost = gas * price;
     if (earlierBalance < topUp + transferCost) continue;
 
     const account = privateKeyToAccount(earlier.privateKey);
@@ -556,7 +567,7 @@ export async function ensureUnshieldGas(ownerIndex: number, owner: Address, need
       nonce,
       to: owner,
       value: topUp,
-      gas: ETH_TRANSFER_GAS,
+      gas,
       maxFeePerGas: price,
       maxPriorityFeePerGas: 0n,
       type: 'eip1559',
@@ -584,8 +595,11 @@ async function signPopulated(
 ): Promise<{ hash: Hash; raw: Hex }> {
   const account = privateKeyToAccount(privateKey);
   const nonce = await publicClient.getTransactionCount({ address: account.address });
-  const gas = BigInt(tx.gasLimit);
-  if (gas === 0n) throw new Error('Railgun returned a transaction with no gas limit.');
+  const quoted = BigInt(tx.gasLimit);
+  if (quoted === 0n) throw new Error('Railgun returned a transaction with no gas limit.');
+  // The quote often misses the cost of posting the proof to Ethereum, and
+  // Arbitrum then rejects the broadcast with "intrinsic gas too low".
+  const gas = arbitrumGasLimit(tx.data as Hex, quoted);
   const raw = await account.signTransaction({
     chainId: ARBITRUM_CHAIN_ID,
     nonce,
@@ -598,6 +612,30 @@ async function signPopulated(
     type: 'eip1559',
   });
   return { hash: keccak256(raw), raw };
+}
+
+/**
+ * Re-sign a stored transaction whose gas limit cannot pay for posting its
+ * calldata. The nonce stays: Arbitrum rejected the old bytes, so they are
+ * not in the mempool. A limit that is already high enough is returned as-is.
+ */
+async function raiseGasIfNeeded(privateKey: Hex, raw: Hex): Promise<Hex> {
+  const parsed = parseTransaction(raw);
+  const next = arbitrumGasLimit(parsed.data, parsed.gas ?? 0n);
+  if (parsed.gas !== undefined && next <= parsed.gas) return raw;
+  if (!parsed.to) throw new Error('The stored unshield has no recipient.');
+  const account = privateKeyToAccount(privateKey);
+  return account.signTransaction({
+    chainId: parsed.chainId ?? ARBITRUM_CHAIN_ID,
+    nonce: parsed.nonce ?? 0,
+    to: parsed.to,
+    data: parsed.data,
+    value: parsed.value ?? 0n,
+    gas: next,
+    maxFeePerGas: parsed.maxFeePerGas ?? parsed.gasPrice ?? 0n,
+    maxPriorityFeePerGas: parsed.maxPriorityFeePerGas ?? 0n,
+    type: 'eip1559',
+  });
 }
 
 async function broadcast(raw: Hex): Promise<void> {

@@ -73,11 +73,35 @@ export function CompoundSupply({
     setWorking(kind);
     setError(null);
     try {
-      const view = kind === 'fund'
-        ? await send({ kind: 'fundCompound', amountUnits: units! }, SLOW_TIMEOUT_MS)
-        : await send({ kind: 'shieldCompound' }, SLOW_TIMEOUT_MS);
-      setProgress(view);
-      await onDone();
+      // The worker keeps going after one request gives up. A shield reads
+      // Compound and then builds a proof; both outlast 180s while the status
+      // record is still moving. Joining again waits on that same work.
+      let view: CompoundAccountView | null = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          view = kind === 'fund'
+            ? await send({ kind: 'fundCompound', amountUnits: units! }, SLOW_TIMEOUT_MS)
+            : await send({ kind: 'shieldCompound' }, SLOW_TIMEOUT_MS);
+          break;
+        } catch (e) {
+          const status = await send({ kind: 'status' }).catch(() => null);
+          const compound = status?.activeTrade?.compound;
+          if (compound?.status === 'done' || compound?.status === 'failed') {
+            view = compound;
+            break;
+          }
+          // Shield back retires the trade when it finishes, so the record is
+          // gone rather than sitting on "shielding".
+          if (!compound && attempt > 0) break;
+          if (compound) setProgress(compound);
+          const still = compound?.status === 'funding' || compound?.status === 'shielding';
+          if (!still || attempt === 7) throw e;
+        }
+      }
+      if (view) {
+        setProgress(view);
+        await onDone();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       const status = await send({ kind: 'status' }).catch(() => null);
