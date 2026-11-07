@@ -11,6 +11,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '../popup/App';
 import '../popup/style.css';
+import '../popup/ghosty.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('side panel root missing');

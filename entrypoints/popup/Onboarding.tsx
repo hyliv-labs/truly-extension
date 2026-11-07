@@ -1,29 +1,33 @@
 /**
- * Choosing how the vault is created.
+ * First run: Welcome, then Create (password, then the phrase screen in App)
+ * or Restore (phrase and a new password). The MetaMask and paste recoveries
+ * are for Privacy Pools accounts and live under "Other ways to restore".
  *
- * The three options are genuinely different accounts, not three ways in to one
- * — picking the wrong one finds no notes and looks like "you have no funds"
- * rather than an error. That is why the choice is explicit rather than
- * auto-detected.
+ * The recovery paths are genuinely different accounts, not three ways in to
+ * one, so the choice stays explicit rather than auto-detected.
  */
 
 import { useEffect, useState } from 'react';
 import { send } from '@truly/lib/messages';
 import type { RecoveryState } from '@truly/lib/recovery';
+import { Mascot } from './Mascot';
+import { GxBack, GxBrand, GxDots, GxScreen, PasswordField, Strength, passwordStrength } from './Ghosty';
 
-type Mode = 'choose' | 'new' | 'phrase' | 'wallet' | 'paste';
+type Mode = 'welcome' | 'create' | 'restore' | 'other' | 'wallet' | 'paste';
 type Version = 'v1' | 'v2';
 
 export function Onboarding({
   busy,
   run,
   onBackup,
+  error,
 }: {
   busy: boolean;
   run: (action: () => Promise<void>) => void;
   onBackup: (mnemonic: string) => void;
+  error?: string | null;
 }) {
-  const [mode, setMode] = useState<Mode>('choose');
+  const [mode, setMode] = useState<Mode>('welcome');
   const [password, setPassword] = useState('');
   const [phrase, setPhrase] = useState('');
   const [address, setAddress] = useState('');
@@ -52,117 +56,133 @@ export function Onboarding({
     };
   }, [mode]);
 
-  if (mode === 'choose') {
+  const go = (next: Mode) => {
+    setPassword('');
+    setMode(next);
+  };
+  const errorLine = error ? <p className="gx-error">{error}</p> : null;
+
+  if (mode === 'welcome') {
     return (
-      <section className="panel">
-        <p className="field-label">How do you want to set up Truly?</p>
-
-        <button disabled={busy} onClick={() => setMode('new')}>
-          Create a new vault
+      <GxScreen>
+        <div className="gx-top">
+          <GxBrand />
+        </div>
+        <div className="gx-hero">
+          <Mascot size={104} className="gx-mascot" />
+          <h1 className="gx-title display">Go ghost on any app.</h1>
+          <p className="gx-sub">Privacy where you already trade, swap and lend.</p>
+        </div>
+        <button type="button" className="gx-btn primary" disabled={busy} onClick={() => go('create')}>
+          Create Ghosty
         </button>
-
-        <button className="secondary" disabled={busy} onClick={() => setMode('wallet')}>
-          Recover with MetaMask
+        <button type="button" className="gx-btn quiet" disabled={busy} onClick={() => go('restore')}>
+          I already have Ghosty
         </button>
-        <p className="hint">
-          For a Privacy Pools account you made by connecting a wallet. MetaMask
-          asks you to sign once; no phrase needed.
-        </p>
-
-        <button className="secondary" disabled={busy} onClick={() => setMode('phrase')}>
-          Enter a recovery phrase
-        </button>
-        <p className="hint">
-          For an account whose 12 or 24 word phrase you wrote down.
-        </p>
-
-        <button className="link" disabled={busy} onClick={() => setMode('paste')}>
-          MetaMask not working? Sign elsewhere and paste →
-        </button>
-      </section>
+      </GxScreen>
     );
   }
 
-  const back = (
-    <button className="link" disabled={busy} onClick={() => setMode('choose')}>
-      ← back
-    </button>
-  );
+  const createVault = () => {
+    if (busy || passwordStrength(password) < 1) return;
+    run(async () => {
+      const { mnemonic } = await send({ kind: 'createVault', password });
+      onBackup(mnemonic);
+    });
+  };
 
-  const passwordField = (
-    <>
-      <label className="field-label" htmlFor="pw">
-        Password to encrypt this vault on your device
-      </label>
-      <input
-        id="pw"
-        type="password"
-        value={password}
-        disabled={busy}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-    </>
-  );
-
-  if (mode === 'new') {
+  if (mode === 'create') {
     return (
-      <section className="panel">
-        {back}
-        {passwordField}
-        <button
-          disabled={busy || !password}
-          onClick={() =>
-            run(async () => {
-              const { mnemonic } = await send({ kind: 'createVault', password });
-              onBackup(mnemonic);
-            })
-          }
-        >
-          Create vault
+      <GxScreen>
+        <div className="gx-top">
+          <GxBack onClick={() => go('welcome')} disabled={busy} />
+          <GxDots total={2} at={1} />
+        </div>
+        <h1 className="gx-title">Set a password</h1>
+        <p className="gx-sub">Unlocks Ghosty on this browser.</p>
+        <PasswordField label="New password" value={password} onChange={setPassword} onEnter={createVault} disabled={busy} autoFocus />
+        <Strength password={password} />
+        <div className="gx-spacer" />
+        {errorLine}
+        <button type="button" className="gx-btn primary" disabled={busy || passwordStrength(password) < 1} onClick={createVault}>
+          {busy ? 'Creating…' : 'Continue'}
         </button>
-      </section>
+      </GxScreen>
     );
   }
 
-  if (mode === 'phrase') {
+  const restore = () => {
+    if (busy || !phrase.trim() || passwordStrength(password) < 1) return;
+    run(async () => {
+      await send({
+        kind: 'createVault',
+        password,
+        // Whitespace and newlines are normal when pasting from a
+        // written-down phrase.
+        mnemonic: phrase.replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ').trim(),
+      });
+    });
+  };
+
+  if (mode === 'restore') {
     return (
-      <section className="panel">
-        {back}
-        <label className="field-label" htmlFor="phrase">
-          Recovery phrase (12 or 24 words)
-        </label>
+      <GxScreen>
+        <div className="gx-top">
+          <GxBack onClick={() => go('welcome')} disabled={busy} />
+        </div>
+        <h1 className="gx-title">Restore Ghosty</h1>
         <textarea
-          id="phrase"
-          rows={3}
+          className="gx-textarea"
+          aria-label="Recovery phrase"
+          placeholder="Paste your 12 or 24 words"
           value={phrase}
           disabled={busy}
           spellCheck={false}
+          autoFocus
           onChange={(e) => setPhrase(e.target.value)}
         />
-        {passwordField}
-        <button
-          disabled={busy || !password || !phrase.trim()}
-          onClick={() =>
-            run(async () => {
-              await send({
-                kind: 'createVault',
-                password,
-                // Whitespace and newlines are normal when pasting from a
-                // written-down phrase.
-                mnemonic: phrase.replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ').trim(),
-              });
-            })
-          }
-        >
-          Restore vault
+        <PasswordField label="New password" placeholder="New password" value={password} onChange={setPassword} onEnter={restore} disabled={busy} />
+        <div className="gx-spacer" />
+        {errorLine}
+        <button type="button" className="gx-btn primary" disabled={busy || !phrase.trim() || passwordStrength(password) < 1} onClick={restore}>
+          {busy ? 'Restoring…' : 'Restore'}
         </button>
-      </section>
+        <button type="button" className="gx-btn quiet" disabled={busy} onClick={() => go('other')}>
+          Other ways to restore
+        </button>
+      </GxScreen>
     );
   }
 
+  if (mode === 'other') {
+    return (
+      <GxScreen>
+        <div className="gx-top">
+          <GxBack onClick={() => go('restore')} disabled={busy} />
+        </div>
+        <h1 className="gx-title">Other ways to restore</h1>
+        <p className="gx-sub">For a Privacy Pools account made with a wallet.</p>
+        <button type="button" className="gx-option" onClick={() => go('wallet')}>
+          <b>Sign with MetaMask</b>
+          <span>MetaMask asks you to sign once.</span>
+        </button>
+        <button type="button" className="gx-option" onClick={() => go('paste')}>
+          <b>Sign elsewhere and paste</b>
+          <span>For any wallet, or if MetaMask isn&apos;t working.</span>
+        </button>
+      </GxScreen>
+    );
+  }
+
+  const back = <GxBack onClick={() => go('other')} disabled={busy} />;
+
+  const passwordField = (
+    <PasswordField label="New password" placeholder="New password for Ghosty" value={password} onChange={setPassword} disabled={busy} />
+  );
+
   if (mode === 'wallet') {
     return (
-      <section className="panel">
+      <section className="gx gx-legacy">
         {back}
 
         <label className="field-label">Account version</label>
@@ -229,7 +249,7 @@ export function Onboarding({
   }
 
   return (
-    <section className="panel">
+    <section className="gx gx-legacy">
       {back}
       <p className="hint">
         Fallback: sign the message below with your wallet however you like, then

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Mascot } from './Mascot';
+import { GxBrand, GxScreen, PasswordField } from './Ghosty';
 
 /**
  * The locked screen: mascot, one password field, one button.
  *
  * "Forgot password" does not reset anything. The vault is encrypted with the
- * password and Truly refuses to create a second vault over it, so the honest
- * answer is how to get back in with the recovery phrase or MetaMask.
+ * password and Ghosty refuses to create a second vault over it, so the honest
+ * answer is how to get back in with the recovery phrase.
  */
 export function LockScreen({
   busy,
@@ -21,7 +22,7 @@ export function LockScreen({
   onUnlock: (password: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState('');
-  const [help, setHelp] = useState<'none' | 'forgot' | 'about'>('none');
+  const [forgot, setForgot] = useState(false);
 
   const submit = async () => {
     if (!password || busy) return;
@@ -30,61 +31,29 @@ export function LockScreen({
   };
 
   return (
-    <div className="lock">
-      <div className="lock-top">
-        <span className="wordmark">truly</span>
-        <button
-          className="lock-help"
-          aria-label="What is Truly?"
-          onClick={() => setHelp(help === 'about' ? 'none' : 'about')}
-        >
-          ?
-        </button>
+    <GxScreen>
+      <div className="gx-top">
+        <GxBrand />
       </div>
-
       {notice}
-
-      <div className="lock-body">
-        <Mascot mood={error ? 'worried' : 'sleepy'} size={148} className="lock-mascot" />
-        <h2 className="lock-title">Enter your password</h2>
-        <input
-          className="lock-input"
-          type="password"
-          placeholder="Password"
-          aria-label="Password"
-          value={password}
-          disabled={busy}
-          autoFocus
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void submit();
-          }}
-        />
-        {error && <p className="lock-error">{error}</p>}
-
-        {help === 'about' && (
-          <p className="lock-note">
-            Truly funds each Lighter trade from your shielded balance through a fresh address, then shields
-            what comes back. Your password unlocks the vault on this device only.
-          </p>
-        )}
-        {help === 'forgot' && (
-          <p className="lock-note">
-            Truly cannot reset your password: it encrypts the vault on this device. Your funds follow your
-            recovery phrase (or your MetaMask signature), not the password. Remove and re-add the extension,
-            then choose “Enter a recovery phrase” or “Recover with MetaMask” and set a new password.
-          </p>
-        )}
+      <div className="gx-hero">
+        <Mascot size={notice ? 76 : 92} className="gx-mascot" />
+        <h1 className="gx-title">Welcome back</h1>
       </div>
-
-      <div className="lock-actions">
-        <button className="lock-unlock" disabled={busy || !password} onClick={() => void submit()}>
-          {busy ? 'Unlocking…' : 'Unlock'}
-        </button>
-        <button className="lock-forgot" onClick={() => setHelp(help === 'forgot' ? 'none' : 'forgot')}>
-          Forgot password
-        </button>
-      </div>
-    </div>
+      <PasswordField label="Password" value={password} onChange={setPassword} onEnter={() => void submit()} disabled={busy} autoFocus />
+      {error && <p className="gx-error">{error}</p>}
+      {forgot && (
+        <p className="gx-note">
+          Ghosty can&apos;t reset it: the password only unlocks this browser. Remove and re-add the extension,
+          then choose &ldquo;I already have Ghosty&rdquo; and paste your recovery phrase.
+        </p>
+      )}
+      <button type="button" className="gx-btn primary" disabled={busy || !password} onClick={() => void submit()}>
+        {busy ? 'Unlocking…' : 'Unlock'}
+      </button>
+      <button type="button" className="gx-btn quiet" onClick={() => setForgot(!forgot)}>
+        Forgot password?
+      </button>
+    </GxScreen>
   );
 }

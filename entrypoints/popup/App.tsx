@@ -7,6 +7,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { LockScreen } from './LockScreen';
 import { Logo } from './Mascot';
 import { Onboarding } from './Onboarding';
+import { PhraseScreen } from './PhraseScreen';
+import { AddFunds, ConnectScreen, GhostHome, GhostProgress, GoGhost, depositStage, venueFromSite } from './Deposit';
+import { GxBack } from './Ghosty';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
@@ -16,7 +19,7 @@ import {
   SLOW_TIMEOUT_MS,
 } from '@truly/lib/messages';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
-import type { ShieldedBalance } from '@truly/lib/shielded-balance';
+import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 
 function addressLabel(venue: 'lighter' | 'uniswap' | 'compound' | undefined): string {
   if (venue === 'uniswap') return 'Uniswap address';
@@ -60,6 +63,9 @@ export function App() {
     }
   });
   const [connected, setConnected] = useState(false);
+  // The Ghosty flow covers home to 'ready'; 'legacy' shows the full panels.
+  const [legacy, setLegacy] = useState(false);
+  const [screen, setScreen] = useState<'home' | 'go' | 'add'>('home');
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
   const [shieldedLoading, setShieldedLoading] = useState(false);
@@ -199,10 +205,11 @@ export function App() {
           error={error}
           notice={
             connectOrigin ? (
-              <div className="connect-hint">
-                <p>
-                  <strong>{connectOrigin}</strong> wants to connect. Unlock to continue.
-                </p>
+              <div className="gx-notice">
+                <span className="gx-live" />
+                <span>
+                  <strong>{connectOrigin}</strong> wants to connect
+                </span>
               </div>
             ) : undefined
           }
@@ -212,8 +219,98 @@ export function App() {
     );
   }
 
+  // Shown once, straight after the vault is created.
+  if (backup) {
+    return (
+      <main className="popup-gx">
+        <PhraseScreen phrase={backup} onDone={() => setBackup(null)} />
+      </main>
+    );
+  }
+
+  if (status && !status.hasVault) {
+    return (
+      <main className="popup-gx">
+        <Onboarding busy={busy} run={run} onBackup={setBackup} error={error} />
+      </main>
+    );
+  }
+
+  if (status?.unlocked && !legacy) {
+    const trade = status.activeTrade;
+    const stage = depositStage(status);
+    const notStarted = !trade || (!trade.session && !trade.uniswap && !trade.compound);
+    const spendable = shielded && railgunReady(shielded.railgun) ? BigInt(shielded.railgun.spendableUnits) : 0n;
+    const venue = trade?.venue ?? venueFromSite(connectOrigin);
+
+    if (connectOrigin && connectFullOrigin && !connected && !trade) {
+      return (
+        <main className="popup-gx">
+          <ConnectScreen
+            site={connectOrigin}
+            venue={venueFromSite(connectOrigin)}
+            busy={busy}
+            error={error}
+            onConnect={() =>
+              run(async () => {
+                await send({ kind: 'connectToSite', origin: connectFullOrigin }, SLOW_TIMEOUT_MS);
+                setConnected(true);
+                setScreen('go');
+              })
+            }
+          />
+        </main>
+      );
+    }
+
+    if (stage) {
+      return (
+        <main className="popup-gx">
+          <GhostProgress status={status} venue={stage.venue} stage={stage.stage} onChanged={refresh} onManage={() => setLegacy(true)} />
+        </main>
+      );
+    }
+
+    if (notStarted) {
+      return (
+        <main className="popup-gx">
+          {screen === 'go' ? (
+            <GoGhost
+              venue={venue}
+              spendableUnits={spendable}
+              onBack={() => setScreen('home')}
+              onStarted={async () => {
+                await refresh();
+                setScreen('home');
+              }}
+            />
+          ) : screen === 'add' ? (
+            <AddFunds onBack={() => setScreen('home')} />
+          ) : (
+            <GhostHome
+              balance={shielded}
+              balanceError={shieldedError}
+              balanceLoading={shieldedLoading}
+              sync={sync}
+              venue={venue}
+              onGoGhost={() => setScreen('go')}
+              onAddFunds={() => setScreen('add')}
+              onRetry={() => void refreshShielded()}
+              onAdvanced={() => setLegacy(true)}
+            />
+          )}
+        </main>
+      );
+    }
+  }
+
   return (
     <main className="popup">
+      {legacy && (
+        <div className="gx-legacy-bar">
+          <GxBack onClick={() => setLegacy(false)} label="Ghosty" />
+        </div>
+      )}
       <header>
         <h1>
           <Logo />
@@ -323,16 +420,6 @@ export function App() {
             </p>
           )}
 
-          {backup && (
-            <div className="backup">
-              <strong>Write this down now.</strong>
-              <code>{backup}</code>
-              <p>It is the only way to recover funds from a trade in flight.</p>
-              <button className="secondary" disabled={busy} onClick={() => setBackup(null)}>
-                I&apos;ve written it down
-              </button>
-            </div>
-          )}
 
           {status.activeTrade && !status.activeTrade.session && !onSite(status.activeTrade.venue) && (
             <>
