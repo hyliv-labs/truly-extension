@@ -6,10 +6,10 @@
  */
 
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RAILGUN_CIRCUITS, RAILGUN_CIRCUIT_FILES } from '../src/lib/railgun-circuit.ts';
+import { RAILGUN_CIRCUITS, RAILGUN_CIRCUIT_FILES, unbundledSpendCircuit } from '../src/lib/railgun-circuit.ts';
 import {
   RAILGUN_PROXY_ARBITRUM,
   RailgunFundingError,
@@ -108,11 +108,12 @@ const missing = engineFns.filter((name) => typeof wallet[name] !== 'function');
 if (missing.length > 0) fail(`Railgun SDK is missing ${missing.join(', ')}`);
 else pass('the Railgun wallet SDK exports the real proof and shield calls');
 
-// Every circuit a spend can pick must be bundled with the CURRENT key. One
-// that is missing is downloaded by the SDK from an old hash, and its proofs
-// revert on chain: "Invalid Snark Proof" (measured with 2x2, two notes).
+// A circuit that is not bundled is refused. Letting the SDK download it pulls
+// an old key, and that proof reverts on chain: "Invalid Snark Proof"
+// (measured with 2x2, and again with 3x2 on tx 0xe72b2832…).
+const circuitRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'railgun');
 for (const circuit of RAILGUN_CIRCUITS) {
-  const vkeyPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'railgun', circuit.id, 'vkey.json');
+  const vkeyPath = join(circuitRoot, circuit.id, 'vkey.json');
   try {
     const vkey = JSON.parse(readFileSync(vkeyPath, 'utf8')) as { IC?: string[][] };
     if (vkey.IC?.[0]?.[0] !== circuit.ic0) {
@@ -121,14 +122,22 @@ for (const circuit of RAILGUN_CIRCUITS) {
   } catch {
     fail(`the Railgun ${circuit.id} proving key is missing. Run: tsx scripts/fetch-railgun-circuit.ts`);
   }
-  for (const name of ['vkey.json', 'zkey', 'wasm']) {
+  for (const name of ['vkey.json', 'zkey', 'wasm'] as const) {
+    if (!existsSync(join(circuitRoot, circuit.id, name))) {
+      fail(`the Railgun ${circuit.id} ${name} is missing. Run: tsx scripts/fetch-railgun-circuit.ts`);
+    }
     if (RAILGUN_CIRCUIT_FILES[`artifacts-v2.1/${circuit.id}/${name}`] !== `railgun/${circuit.id}/${name}`) {
       fail(`the SDK path for ${circuit.id}/${name} is not served from the bundle`);
     }
   }
 }
-if (!RAILGUN_CIRCUITS.some((c) => c.id === '2x2')) fail('two-note spends (2x2) would fall back to the old key');
-else pass('one-note and two-note spends (1x2, 2x2) are served from the current keys');
+if (!['1x2', '2x2', '3x2'].every((id) => RAILGUN_CIRCUITS.some((circuit) => circuit.id === id))) {
+  fail('one-note, two-note, or three-note spends would fall back to the old key');
+} else pass('one-note, two-note, and three-note spends are served from the current keys');
+if (unbundledSpendCircuit('artifacts-v2.1/3x2/zkey') !== null) fail('the three-note key is treated as missing');
+else pass('the three-note key is served from the bundle');
+if (unbundledSpendCircuit('artifacts-v2.1/4x2/zkey') !== '4x2') fail('a four-note spend would download the old key');
+else pass('a four-note spend is refused instead of downloading the old key');
 
 console.log(failed ? '\nFAILED' : '\nrailgun spend rules OK');
 process.exit(failed ? 1 : 0);

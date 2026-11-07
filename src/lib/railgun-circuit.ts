@@ -2,25 +2,27 @@
  * The unshield circuits the Arbitrum Railgun proxy verifies, shipped in the
  * extension.
  *
- * Wallet 10.4.0 asks for each circuit by its old name (`1x2`, `2x2`) and, for
- * any it cannot find, downloads an older key whose first IC point does not
- * match the chain. A proof from an old key is included and then reverts:
- * "RailgunSmartWallet: Invalid Snark Proof." The bytes shipped here are the
- * current circuits (IPFS QmUsmnK4…), served under the paths the SDK requests.
+ * Wallet 10.4.0 asks for each circuit by its old name (`1x2`, `2x2`, `3x2`)
+ * and, for any it cannot find, downloads an older key whose first IC point
+ * does not match the chain. A proof from an old key is included and then
+ * reverts: "RailgunSmartWallet: Invalid Snark Proof." The bytes shipped here
+ * are the current circuits (IPFS QmUsmnK4…), served under the paths the SDK
+ * requests.
  *
  * Which circuit a spend uses depends on how many notes it consumes. One note
- * covering the amount is `1x2`; two notes is `2x2`. Measured: a 10 USDC
- * unshield from 16.91 USDC held in two notes used `2x2`, fetched the old key,
- * and reverted with that error (tx 0x027e945e…, Arbitrum).
+ * covering the amount is `1x2`; two notes is `2x2`; three notes is `3x2`.
+ * Measured: a 5 USDC unshield spent three notes, proved with the old `3x2`
+ * key, and reverted (tx 0xe72b2832…, Arbitrum). A 10 USDC unshield from two
+ * notes did the same with the old `2x2` key (tx 0x027e945e…).
  *
  * `ic0` is the verifier's IC[0].x read from the proxy (getVerificationKey).
  */
 
 export interface RailgunCircuit {
   /** The SDK's name, and the directory under public/railgun/. */
-  readonly id: '1x2' | '2x2';
+  readonly id: '1x2' | '2x2' | '3x2';
   /** The current circuit's name on IPFS. */
-  readonly ipfsName: '01x02' | '02x02';
+  readonly ipfsName: '01x02' | '02x02' | '03x02';
   readonly ic0: string;
   /** SHA-256 of the decompressed files, pinned from keys that match the proxy. */
   readonly sha256: { readonly 'vkey.json': string; readonly zkey: string; readonly wasm: string };
@@ -47,6 +49,16 @@ export const RAILGUN_CIRCUITS: readonly RailgunCircuit[] = [
       wasm: '8595023762a3067b70960be81e1a983c1630c9900d4caef3d608b9d849568829',
     },
   },
+  {
+    id: '3x2',
+    ipfsName: '03x02',
+    ic0: '15483731448806397148042980611251070385217877973365956952925943126266526421474',
+    sha256: {
+      'vkey.json': '7bad88c95fd760225e454750f51e82cbea46a6deae7f88fadd4cf9c13e7c1720',
+      zkey: '9072c04e553fb2ec060362c533a590d1037e387017c8bb004da8e18c97676014',
+      wasm: '0a2f0c62013e02a9ef3a7dc08d0f470bd45a812fea598f3f9ced7b0612b85445',
+    },
+  },
 ];
 
 export const RAILGUN_CIRCUIT_FILE_NAMES = ['vkey.json', 'zkey', 'wasm'] as const;
@@ -57,3 +69,15 @@ export const RAILGUN_CIRCUIT_FILES: Readonly<Record<string, string>> = Object.fr
     RAILGUN_CIRCUIT_FILE_NAMES.map((name) => [`artifacts-v2.1/${circuit.id}/${name}`, `railgun/${circuit.id}/${name}`]),
   ),
 );
+
+const SPEND_ARTIFACT = /^artifacts-v2\.1\/(\d+x\d+)\/(?:vkey\.json|zkey|wasm|dat)$/;
+
+/**
+ * A spend circuit the SDK would download from its old IPFS hash. Null when the
+ * path is bundled, or when it is not a spend circuit (POI still uses IndexedDB).
+ */
+export function unbundledSpendCircuit(path: string): string | null {
+  const match = SPEND_ARTIFACT.exec(path);
+  if (!match || path in RAILGUN_CIRCUIT_FILES) return null;
+  return match[1] ?? null;
+}

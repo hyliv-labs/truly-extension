@@ -44,6 +44,7 @@ const fmt = (units: bigint | string) => (Number(units) / 1e6).toFixed(2);
 /** Plain-language versions of the worker's failure details. The original stays in More options. */
 function friendly(detail: string | null | undefined): string {
   const d = detail ?? '';
+  if (/proving key/.test(d)) return d;
   if (/ETH/.test(d) && /gas/i.test(d)) return 'It needs a little ETH on Arbitrum for gas. Nothing left your private balance.';
   if (/timed? ?out|timeout/i.test(d)) return 'The network was slow to answer. Nothing left your private balance.';
   if (/insufficient|not enough/i.test(d)) return 'Not enough in your private balance for that amount.';

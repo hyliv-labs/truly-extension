@@ -4,7 +4,7 @@
  * Wallet 10.4.0's own IPFS hashes are older keys. The proxy verifies the
  * current ones (IPFS QmUsmnK4…). These files are decompressed and written
  * where the extension serves them under the old names the SDK requests
- * (`1x2`, `2x2`). Hashes are of the decompressed bytes, pinned from keys whose
+ * (`1x2`, `2x2`, `3x2`). Hashes are of the decompressed bytes, pinned from keys whose
  * IC[0] matches the proxy's getVerificationKey. See src/lib/railgun-circuit.ts.
  *
  * MV3 forbids remote code, so proving never downloads these at runtime.

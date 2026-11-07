@@ -52,7 +52,7 @@ import { installRpcThrottle } from './rpc-throttle';
  */
 const RAILGUN_RPC_URLS = [...new Set(['https://arb1.arbitrum.io/rpc', ARBITRUM_RPC_URL])];
 import { POI, RailgunEngine } from '@railgun-community/engine';
-import { RAILGUN_CIRCUIT_FILES } from './railgun-circuit';
+import { RAILGUN_CIRCUIT_FILES, unbundledSpendCircuit } from './railgun-circuit';
 import { RAILGUN_USDC, SELF_BROADCAST_SPEND_BUCKETS } from './railgun';
 
 const NETWORK = NetworkName.Arbitrum;
@@ -524,9 +524,19 @@ const circuitBytes = new Map<string, string | Uint8Array>();
 
 /**
  * The SDK looks up `artifacts-v2.1/1x2` and, on a miss, downloads the old key.
- * These three paths are answered from the extension package so that download
- * never runs. Anything else (POI) still uses IndexedDB.
+ * Bundled paths are answered from the extension package. A spend circuit that
+ * is not bundled throws, so the old key is neither read from IndexedDB nor
+ * downloaded. POI artifacts still use IndexedDB.
  */
+function refuseUnbundledSpendCircuit(path: string): void {
+  const missing = unbundledSpendCircuit(path);
+  if (missing) {
+    throw new Error(
+      `This spend needs the ${missing} Railgun proving key, which is not in the extension. Nothing was sent.`,
+    );
+  }
+}
+
 async function bundledCircuit(path: string): Promise<string | Uint8Array | undefined> {
   const file = RAILGUN_CIRCUIT_FILES[path];
   if (!file) return undefined;
@@ -547,16 +557,19 @@ function artifactStore(): ArtifactStore {
   const db = openArtifacts();
   return new ArtifactStore(
     async (path) => {
+      refuseUnbundledSpendCircuit(path);
       const bundled = await bundledCircuit(path);
       if (bundled !== undefined) return bundled as string | Buffer;
       const value = await idbGet(await db, path);
       return (value === undefined ? null : value) as string | Buffer | null;
     },
     async (_dir, path, item) => {
+      refuseUnbundledSpendCircuit(path);
       if (path in RAILGUN_CIRCUIT_FILES) return;
       await idbSet(await db, path, item);
     },
     async (path) => {
+      refuseUnbundledSpendCircuit(path);
       if (path in RAILGUN_CIRCUIT_FILES) return true;
       return (await idbGet(await db, path)) !== undefined;
     },
