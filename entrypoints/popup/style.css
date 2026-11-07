@@ -706,20 +706,27 @@ input[type='range'] {
   }
 }
 
-.uniswap {
+.uniswap,
+.compound {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.uniswap button {
+.uniswap button,
+.compound button {
   width: 100%;
 }
 
 .venues {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
+}
+
+.venues button {
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .venues button[aria-pressed='false'] {

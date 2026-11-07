@@ -85,7 +85,9 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
     throw new Error(
       trade.venue === 'uniswap'
         ? 'The Uniswap address is not ready to receive funds yet.'
-        : 'Lighter has not issued a deposit address yet.',
+        : trade.venue === 'compound'
+          ? 'The Compound address is not ready to receive funds yet.'
+          : 'Lighter has not issued a deposit address yet.',
     );
   }
   // A 'confirmed' record from before the receipt-status check may be a

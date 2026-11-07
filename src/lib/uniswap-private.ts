@@ -53,6 +53,9 @@ export async function shieldUniswapAccount(): Promise<UniswapAccountView> {
 async function fund(amountIn: bigint): Promise<UniswapAccountView> {
   if (amountIn < MIN_USDC) throw new Error('Fund at least 1 USDC.');
   const existing = await getActiveTrade();
+  if (existing?.venue === 'compound') {
+    throw new Error('A Compound address is open. Shield it back or abandon it before funding Uniswap.');
+  }
   if (existing?.session || existing?.venue === 'lighter') {
     throw new Error('A Lighter account is open. Finish or abandon it before funding Uniswap.');
   }

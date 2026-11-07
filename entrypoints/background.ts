@@ -57,6 +57,7 @@ import { configProblems, USDC_ADDRESS } from '@truly/lib/config';
 import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
+import { fundCompoundAccount, shieldCompoundAccount } from '@truly/lib/compound-private';
 import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
 import { fetchMarkets } from '@truly/lib/lighter-markets';
 import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
@@ -355,13 +356,34 @@ async function handle(
       const host = new URL(message.origin).hostname;
       const uniswap = host === 'uniswap.org' || host.endsWith('.uniswap.org');
       const lighter = host === 'lighter.xyz' || host.endsWith('.lighter.xyz');
-      if (uniswap && (trade.venue === 'lighter' || trade.session)) {
-        throw new Error('This address is for Lighter. Finish or abandon it before connecting Uniswap.');
+      const compound =
+        host === 'compound.xyz' ||
+        host.endsWith('.compound.xyz') ||
+        host === 'compound.finance' ||
+        host.endsWith('.compound.finance');
+      if (uniswap && (trade.venue === 'lighter' || trade.venue === 'compound' || trade.session)) {
+        throw new Error(
+          trade.venue === 'compound'
+            ? 'This address is for Compound. Shield it back or abandon it before connecting Uniswap.'
+            : 'This address is for Lighter. Finish or abandon it before connecting Uniswap.',
+        );
       }
-      if (lighter && trade.venue === 'uniswap') {
-        throw new Error('This address is for Uniswap. Shield it back or abandon it before connecting Lighter.');
+      if (compound && (trade.venue === 'lighter' || trade.venue === 'uniswap' || trade.session)) {
+        throw new Error(
+          trade.venue === 'uniswap'
+            ? 'This address is for Uniswap. Shield it back or abandon it before connecting Compound.'
+            : 'This address is for Lighter. Finish or abandon it before connecting Compound.',
+        );
+      }
+      if (lighter && (trade.venue === 'uniswap' || trade.venue === 'compound')) {
+        throw new Error(
+          trade.venue === 'compound'
+            ? 'This address is for Compound. Shield it back or abandon it before connecting Lighter.'
+            : 'This address is for Uniswap. Shield it back or abandon it before connecting Lighter.',
+        );
       }
       if (uniswap) await updateActiveTrade({ venue: 'uniswap', intentAddress: trade.ownerAddress });
+      if (compound) await updateActiveTrade({ venue: 'compound', intentAddress: trade.ownerAddress });
       if (lighter && !trade.venue) await updateActiveTrade({ venue: 'lighter' });
       await touchAutoLock();
       return { ownerAddress: trade.ownerAddress };
@@ -519,6 +541,18 @@ async function handle(
       return shielded;
     }
 
+    case 'fundCompound': {
+      await touchAutoLock();
+      return fundCompoundAccount(BigInt(message.amountUnits));
+    }
+
+    case 'shieldCompound': {
+      await touchAutoLock();
+      const shielded = await shieldCompoundAccount();
+      if (shielded.status === 'done') await announceTradeEnded();
+      return shielded;
+    }
+
     case 'lighterSignerSelfTest': {
       // A throwaway key and a fictitious account: nothing here is ever sent.
       const started = Date.now();
@@ -547,7 +581,9 @@ async function handle(
  */
 async function refreshLighterTabs(): Promise<void> {
   try {
-    const tabs = await chrome.tabs.query({ url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*'] });
+    const tabs = await chrome.tabs.query({
+      url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*'],
+    });
     for (const tab of tabs) {
       if (tab.id === undefined) continue;
       await chrome.tabs.reload(tab.id);

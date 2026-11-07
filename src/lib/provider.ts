@@ -14,7 +14,7 @@
  * second transaction.
  */
 
-import { keccak256, type Hex } from 'viem';
+import { encodeFunctionData, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getActiveTrade, type ActiveTrade } from './trade';
 import { isUnlocked, ownerAt } from './vault';
@@ -41,7 +41,12 @@ export const CHAIN_ID_HEX = '0xa4b1';
 
 const APPROVAL_WINDOW = { width: 400, height: 560 } as const;
 
-const SITE_TABS = ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*'];
+const SITE_TABS = [
+  'https://*.lighter.xyz/*',
+  'https://*.uniswap.org/*',
+  'https://*.compound.xyz/*',
+  'https://*.compound.finance/*',
+];
 
 /**
  * Worker-local waiters. The durable half is the in-flight record. If this
@@ -472,6 +477,20 @@ async function sendOwnerTransaction(record: InFlightRequest, privateKey: Hex): P
     data: tx.data,
     value: tx.value,
   });
+  // Arbitrum rejects a limit that does not also pay for posting the calldata
+  // to Ethereum, and the error is "intrinsic gas too low". eth_estimateGas
+  // over anon-rpc often returns the Ethereum minimum, and doubling that is
+  // still short of an approve. The NodeInterface precompile is the limit
+  // Arbitrum itself would have returned.
+  const estimated = prepared.gas ?? 21_000n;
+  const fromNode = await arbitrumNodeGas(tx.to, tx.data ?? '0x', tx.value).catch(() => 0n);
+  prepared.gas = highest(fromNode + fromNode / 2n, estimated * 2n, arbitrumGasFloor(tx.data, estimated), tx.gas ?? 0n);
+  console.info('[truly] arbitrum gas limit', {
+    estimated: estimated.toString(),
+    fromNode: fromNode.toString(),
+    site: tx.gas?.toString() ?? 'none',
+    chosen: prepared.gas.toString(),
+  });
   // prepareTransactionRequest returns the chain object alongside the fields
   // signTransaction wants. The runtime value is a transaction; the extra
   // fields are what the type refuses.
@@ -490,6 +509,56 @@ async function sendOwnerTransaction(record: InFlightRequest, privateKey: Hex): P
     }
     throw error;
   }
+}
+
+/** Arbitrum's precompile for the gas limit a transaction actually needs. */
+const ARBITRUM_NODE_INTERFACE: Address = '0x00000000000000000000000000000000000000C8';
+
+const nodeGasAbi = [
+  {
+    type: 'function',
+    name: 'gasEstimateComponents',
+    stateMutability: 'payable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'contractCreation', type: 'bool' },
+      { name: 'data', type: 'bytes' },
+    ],
+    outputs: [
+      { name: 'gasEstimate', type: 'uint64' },
+      { name: 'gasEstimateForL1', type: 'uint64' },
+      { name: 'baseFee', type: 'uint256' },
+      { name: 'l1BaseFeeEstimate', type: 'uint256' },
+    ],
+  },
+] as const;
+
+async function arbitrumNodeGas(to: Address, data: Hex, value: bigint): Promise<bigint> {
+  const raw = await publicClient.call({
+    to: ARBITRUM_NODE_INTERFACE,
+    data: encodeFunctionData({
+      abi: nodeGasAbi,
+      functionName: 'gasEstimateComponents',
+      args: [to, false, data],
+    }),
+    value,
+  });
+  if (!raw.data || raw.data.length < 66) return 0n;
+  return BigInt(raw.data.slice(0, 66));
+}
+
+/**
+ * Floor used when the precompile cannot be read. An approve measured on
+ * Arbitrum needs about 56k, while a broken estimate comes back as 21k.
+ * 500 gas per calldata byte covers the L1 posting on top of execution.
+ */
+function arbitrumGasFloor(data: Hex | undefined, estimated: bigint): bigint {
+  const bytes = BigInt(Math.max(0, ((data?.length ?? 2) - 2) / 2));
+  return estimated + bytes * 500n + 80_000n;
+}
+
+function highest(...values: bigint[]): bigint {
+  return values.reduce((max, value) => (value > max ? value : max));
 }
 
 async function broadcastRaw(serialized: Hex): Promise<Hex> {

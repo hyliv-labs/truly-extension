@@ -138,6 +138,8 @@ export interface ParsedTransaction {
   readonly to: `0x${string}`;
   readonly data?: `0x${string}`;
   readonly value: bigint;
+  /** Gas limit the site already chose, when it sent one. */
+  readonly gas?: bigint;
   readonly summary: string;
 }
 
@@ -156,6 +158,7 @@ export function parseTransactionRequest(
     to?: string;
     data?: string;
     value?: string | number | bigint;
+    gas?: string | number | bigint;
     chainId?: string | number;
   };
 
@@ -179,6 +182,7 @@ export function parseTransactionRequest(
 
   const data = body.data === undefined ? undefined : asHex(body.data, 'calldata');
   const value = asBigint(body.value);
+  const gas = body.gas === undefined ? undefined : asBigint(body.gas);
 
   const summary = [
     `To: ${body.to}`,
@@ -186,7 +190,7 @@ export function parseTransactionRequest(
     data ? `Data: ${previewData(data)}` : 'Data: none',
   ].join('\n');
 
-  return { to: body.to as `0x${string}`, data, value, summary };
+  return { to: body.to as `0x${string}`, data, value, gas, summary };
 }
 
 function parseJson(raw: string): unknown {

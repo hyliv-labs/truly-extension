@@ -18,6 +18,11 @@ const LIGHTER_ORIGINS: [string, ...string[]] = [
   'https://mainnet.zklighter.elliot.ai',
   'https://uniswap.org',
   'https://app.uniswap.org',
+  'https://compound.xyz',
+  'https://app.compound.xyz',
+  'https://compound.finance',
+  'https://app.compound.finance',
+  'https://v3-app.compound.finance',
 ];
 
 export interface CleanupResult {

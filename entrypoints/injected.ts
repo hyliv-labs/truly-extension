@@ -30,10 +30,24 @@ export default defineUnlistedScript(() => {
       }),
     );
 
+  const host = location.hostname;
+  const compound =
+    host === 'compound.xyz' ||
+    host.endsWith('.compound.xyz') ||
+    host === 'compound.finance' ||
+    host.endsWith('.compound.finance');
+
   // Announce once now, and again whenever a dapp asks — it may have published
   // its request before this script loaded.
-  window.addEventListener('eip6963:requestProvider', announce);
-  announce();
+  //
+  // Compound is the exception. Its modal only draws a wallet whose rdns is on
+  // a fixed list, and it hides "Browser Wallet" as soon as any extension
+  // announces. Announcing there deletes the only row that can reach Truly.
+  // Lighter and Uniswap still get the announcement.
+  if (!compound) {
+    window.addEventListener('eip6963:requestProvider', announce);
+    announce();
+  }
 
   // EIP-6963 is the correct discovery path and Truly announces on it. But a
   // dapp that offers a curated wallet list plus a generic "injected" option

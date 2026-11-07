@@ -18,6 +18,16 @@ import {
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { ShieldedBalance } from '@truly/lib/shielded-balance';
 
+function addressLabel(venue: 'lighter' | 'uniswap' | 'compound' | undefined): string {
+  if (venue === 'uniswap') return 'Uniswap address';
+  if (venue === 'compound') return 'Compound address';
+  return 'Lighter address';
+}
+
+function onSite(venue: 'lighter' | 'uniswap' | 'compound' | undefined): boolean {
+  return venue === 'uniswap' || venue === 'compound';
+}
+
 export function App() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
@@ -218,7 +228,9 @@ export function App() {
             {status?.unlocked
               ? connectOrigin.includes('uniswap')
                 ? ' Truly gives it a fresh address. Fund that address from Railgun below, then swap on Uniswap.'
-                : ' Truly gives it a fresh address that has never been used. You fund it from the shielded balance when you trade, not now.'
+                : connectOrigin.includes('compound')
+                  ? ' Truly gives it a fresh address. On Compound, choose Browser Wallet after other wallet extensions are off. Fund that address from Railgun below, then supply on the Arbitrum USDC market.'
+                  : ' Truly gives it a fresh address that has never been used. You fund it from the shielded balance when you trade, not now.'
               : ' Unlock Truly first.'}
           </p>
           {/* The button the site's "click connect in your wallet popup" refers
@@ -301,7 +313,7 @@ export function App() {
 
           <p className="who">
             <span className="field-label">
-              {status.activeTrade?.venue === 'uniswap' ? 'Uniswap address' : 'Lighter address'} #{status.ownerIndex}
+              {addressLabel(status.activeTrade?.venue)} #{status.ownerIndex}
             </span>
             <code>{owner ?? '…'}</code>
           </p>
@@ -322,7 +334,7 @@ export function App() {
             </div>
           )}
 
-          {status.activeTrade && !status.activeTrade.session && status.activeTrade.venue !== 'uniswap' && (
+          {status.activeTrade && !status.activeTrade.session && !onSite(status.activeTrade.venue) && (
             <>
               <p className="field-label">Trade active — Lighter can connect to this address.</p>
               {/* Lighter's login is Dynamic. Its six-wallet 'RECOMMENDED' list
@@ -339,7 +351,7 @@ export function App() {
 
           {/* A market-trade session reports its own progress; the exit phases
               (withdraw from Lighter, re-shield) apply again once it is closed. */}
-          {phase && status.activeTrade?.venue !== 'uniswap' && (!status.activeTrade?.session || ['closed', 'exited', 'withdraw-failed'].includes(status.activeTrade.session.state)) && (
+          {phase && !onSite(status.activeTrade?.venue) && (!status.activeTrade?.session || ['closed', 'exited', 'withdraw-failed'].includes(status.activeTrade.session.state)) && (
             <div className="phase">
               <strong>{phase.phase.replace(/-/g, ' ')}</strong>
               <p>{phase.detail}</p>
@@ -361,7 +373,7 @@ export function App() {
               {/* No separate 'Get deposit address' button here any more: the
                   Deposit form above fetches it as its first step, and two
                   actions for one job read as two different jobs. */}
-              {!status.activeTrade.session && status.activeTrade.intentAddress && status.activeTrade.venue !== 'uniswap' && (
+              {!status.activeTrade.session && status.activeTrade.intentAddress && !onSite(status.activeTrade.venue) && (
                 <>
                   <label className="field-label">
                     Deposit address (the unshield sends here)
@@ -407,7 +419,7 @@ export function App() {
 
           {status.activeTrade ? (
             <>
-              {(status.activeTrade.venue !== 'uniswap' || !status.activeTrade.withdrawal) && (
+              {(!onSite(status.activeTrade.venue) || !status.activeTrade.withdrawal) && (
                 <button
                   className="secondary"
                   disabled={busy}
@@ -421,7 +433,7 @@ export function App() {
                 disabled={busy}
                 onClick={() => {
                   const abandon = window.confirm(
-                    status.activeTrade?.venue === 'uniswap'
+                    onSite(status.activeTrade?.venue)
                       ? 'Abandon this address? It is burned and will not be reused. Tokens still on it stay there. Shield back first if they should return to Railgun.'
                       : 'Abandon this trade? Its owner address is burned and will not be reused. Funds still on Lighter or at that address stay there until you scan for them.',
                   );

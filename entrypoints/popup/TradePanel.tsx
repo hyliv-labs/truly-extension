@@ -11,6 +11,7 @@ import type { TradeQuote } from '@truly/lib/trade-plan';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
+import { CompoundSupply } from './CompoundSupply';
 import { UniswapSwap } from './UniswapSwap';
 
 const usdc = (units: string | bigint) => (Number(units) / 1e6).toFixed(2);
@@ -44,7 +45,7 @@ export function TradeForm({
   /** Origin of a site that asked to connect, when the popup was opened for that. */
   site?: string | null;
   /** Set once an address is opened for one venue. The other venue stays closed. */
-  activeVenue?: 'lighter' | 'uniswap' | null;
+  activeVenue?: 'lighter' | 'uniswap' | 'compound' | null;
   /**
    * Set when Lighter is already connected to a trade that has no deposit yet.
    * Funding attaches to that trade (openTradeSession), so the deposit goes to
@@ -59,8 +60,8 @@ export function TradeForm({
   sync?: RailgunSyncStatus | null;
 }) {
   const [margin, setMargin] = useState('10');
-  const [venue, setVenue] = useState<'uniswap' | 'lighter'>(
-    activeVenue ?? (site?.includes('lighter') ? 'lighter' : 'uniswap'),
+  const [venue, setVenue] = useState<'uniswap' | 'lighter' | 'compound'>(
+    activeVenue ?? (site?.includes('compound') ? 'compound' : site?.includes('lighter') ? 'lighter' : 'uniswap'),
   );
 
   useEffect(() => {
@@ -126,6 +127,9 @@ export function TradeForm({
           <button type="button" aria-pressed={venue === 'lighter'} onClick={() => setVenue('lighter')}>
             Lighter
           </button>
+          <button type="button" aria-pressed={venue === 'compound'} onClick={() => setVenue('compound')}>
+            Compound
+          </button>
         </div>
       )}
       <BalanceStrip
@@ -137,6 +141,8 @@ export function TradeForm({
       />
       {venue === 'uniswap' ? (
         <UniswapSwap busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
+      ) : venue === 'compound' ? (
+        <CompoundSupply busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
       ) : (
       <>
       <div className="trade-head">

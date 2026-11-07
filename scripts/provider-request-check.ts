@@ -93,6 +93,15 @@ if (tx.value !== 10n ** 18n) fail(`value parsed as ${tx.value}`);
 else pass('transaction value parsed');
 if (!tx.summary.includes(OTHER)) fail('summary hid the recipient');
 else pass('transaction summary names the recipient');
+if (tx.gas !== undefined) fail('gas should be absent when the site did not send one');
+else pass('missing gas stays unset');
+
+const withGas = parseTransactionRequest(
+  [{ from: OWNER, to: OTHER, gas: '0x030d40' }],
+  OWNER,
+);
+if (withGas.gas !== 200_000n) fail(`gas parsed as ${withGas.gas}`);
+else pass('site gas limit is kept');
 
 throws(
   'transaction from a different owner',

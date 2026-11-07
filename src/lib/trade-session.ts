@@ -173,10 +173,12 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
   // different address from the one Lighter is connected to -- the money and
   // the connection would end up on two separate accounts.
   const existing = await getActiveTrade();
-  if (existing?.venue === 'uniswap') {
+  if (existing?.venue === 'uniswap' || existing?.venue === 'compound') {
     throw new SessionError(
       'trade-active',
-      'This address is for Uniswap. Shield it back or abandon it before a Lighter deposit.',
+      existing.venue === 'compound'
+        ? 'This address is for Compound. Shield it back or abandon it before a Lighter deposit.'
+        : 'This address is for Uniswap. Shield it back or abandon it before a Lighter deposit.',
     );
   }
   if (existing?.session) {

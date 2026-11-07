@@ -11,6 +11,7 @@ import type { ShieldedBalance } from './shielded-balance';
 import type { Direction, TradeQuote } from './trade-plan';
 import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
+import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
 
 /** bigint does not survive the message channel, so margin travels as a string. */
@@ -89,6 +90,10 @@ export type Request =
   | { kind: 'fundUniswap'; amountUnits: string }
   /** Shield whatever that address still holds back into Railgun. */
   | { kind: 'shieldUniswap' }
+  /** Unshield USDC onto a fresh address. The user supplies it on app.compound.xyz. */
+  | { kind: 'fundCompound'; amountUnits: string }
+  /** Shield whatever that address still holds, once the Compound position is empty. */
+  | { kind: 'shieldCompound' }
   /** Starts the WASM signer in the worker and signs a throwaway order offline. */
   | { kind: 'lighterSignerSelfTest' }
   // Orchestrator (E8)
@@ -193,6 +198,8 @@ export interface ResultMap {
   shieldFunds: SessionView | null;
   fundUniswap: UniswapAccountView;
   shieldUniswap: UniswapAccountView;
+  fundCompound: CompoundAccountView;
+  shieldCompound: CompoundAccountView;
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
 }
 
