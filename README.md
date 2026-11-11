@@ -99,6 +99,11 @@ venues) existed before and is the baseline.
   and waiting help.
 - Bring in uses Circle's paymaster when the fresh owner has no ETH; up to
   ~1 USDC of the permit reserve can stay at the retired owner.
+- **Gas link on Send out.** The unshield is a normal transaction, so the fresh
+  owner needs a little ETH. Ghosty tops it up from an earlier owner of the same
+  vault, which links those two owners on chain (not the user's wallet, and not
+  the destination). A Railgun broadcaster would remove this link; it is not
+  wired in yet.
 - Live-verified so far: every featured route quotes in both directions (dry),
   and real (non-dry) quote and status responses match the checks. The first
   money-moving runs are listed below as they happen.
@@ -111,10 +116,11 @@ fresh owner address, and returns what's left to the pool when the trade closes.
 **One trade, one address, never reused.** Lighter sees a brand-new account
 every time, with no on-chain link to the last one.
 
-> **Status: not production ready, and not yet end to end.** Entry from Privacy
-> Pools (the relayed withdrawal and its proof) is not built, so no complete
-> trade can run even on testnet. See
-> [What is not proven](#what-is-not-proven).
+> **Status: not production ready.** It has been run on Arbitrum mainnet with
+> small real amounts (Railgun-funded fresh owners trading on Lighter, then
+> shielding back). The NEAR Intents section above says which of its own steps
+> are live-verified. [What is not proven](#what-is-not-proven) was written
+> before those mainnet runs and is kept as the original record.
 
 ## Why
 
@@ -245,7 +251,9 @@ Design notes worth reading before changing anything:
 
 ## What is not proven
 
-Stated plainly, because the tests above prove less than they might appear to.
+Written before the mainnet test runs of 6–10 Nov 2026, and kept as that
+record. Stated plainly, because the tests above prove less than they might
+appear to.
 
 - **E3, the entry path, is not built.** No relayer client, no withdrawal
   proof, no note discovery. Without it there is no way to fund a trade from
