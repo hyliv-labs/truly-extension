@@ -606,6 +606,9 @@ async function handle(
     }
 
     case 'intentsAdvance': {
+      // The panel is open and polling: the user is here, so do not auto-lock
+      // in the middle of a long entry (BTC, ZEC, a wallet to open).
+      if (await isUnlocked()) await touchAutoLock();
       const view = await advanceIntents();
       await armIntentsTick();
       return view;

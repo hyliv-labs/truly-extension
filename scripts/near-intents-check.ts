@@ -25,6 +25,7 @@ import {
   type QuoteResponse,
   type StatusResponse,
 } from '../src/lib/near-intents.ts';
+import { exitInterrupted, intentsAbandonBlocker, intentsNeedsTick, nextFromStatus, type IntentsView } from '../src/lib/intents.ts';
 
 let failed = false;
 const fail = (msg: string) => {
@@ -222,6 +223,70 @@ try {
   if (error instanceof Error && error.message === 'recipient is not valid') pass("1Click's own message is surfaced");
   else fail(`400 threw ${String(error)}`);
 }
+
+// --- Move state rules (pure; the worker applies them) ---------------------------
+const exitView: IntentsView = {
+  direction: 'exit',
+  stage: 'swapping',
+  detail: '',
+  originAsset: ARB_USDC_ASSET,
+  originLabel: 'Shielded USDC (Railgun)',
+  originDecimals: 6,
+  destinationAsset: BASE_USDC,
+  destinationLabel: 'USDC on Base',
+  destinationDecimals: 6,
+  recipient: R,
+  refundTo: '0x3333333333333333333333333333333333333333',
+  amountIn: '1995000',
+  grossUnits: '2000000',
+  confidential: false,
+  depositAddress: '0xD052002F1e145b3080aD2a069b62Dd86a4718565',
+  amountOut: '1992365',
+  minAmountOut: '1972391',
+  timeEstimate: 27,
+  inactiveAt: '2026-11-14T12:20:12.000Z',
+  refundAfter: '2026-11-11T12:20:12.000Z',
+  correlationId: 'c',
+  quoteSignature: 's',
+  quotedAt: now,
+  updatedAt: now,
+};
+const entryView: IntentsView = { ...exitView, direction: 'entry', stage: 'awaiting-deposit', recipient: exitView.refundTo, refundTo: 't1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs' };
+
+const expect = (label: string, got: unknown, want: unknown) =>
+  JSON.stringify(got) === JSON.stringify(want) ? pass(label) : fail(`${label}: got ${JSON.stringify(got)}`);
+
+expect('exit SUCCESS finishes as done', pick(nextFromStatus(exitView, 'SUCCESS', now)), { stage: 'done', then: 'finish' });
+expect('exit REFUNDED shields the refund back', pick(nextFromStatus(exitView, 'REFUNDED', now)), { stage: 'shielding', then: 'shield' });
+expect('entry SUCCESS shields into Railgun', pick(nextFromStatus(entryView, 'SUCCESS', now)), { stage: 'shielding', then: 'shield' });
+expect('entry REFUNDED finishes as refunded', pick(nextFromStatus(entryView, 'REFUNDED', now)), { stage: 'refunded', then: 'finish' });
+expect('entry PENDING_DEPOSIT keeps waiting', pick(nextFromStatus(entryView, 'PENDING_DEPOSIT', now)), { stage: 'awaiting-deposit' });
+expect('exit PENDING_DEPOSIT is swapping (the unshield is on its way)', pick(nextFromStatus(exitView, 'PENDING_DEPOSIT', now)), { stage: 'swapping' });
+expect('INCOMPLETE_DEPOSIT keeps watching for the refund', pick(nextFromStatus(entryView, 'INCOMPLETE_DEPOSIT', now)), { stage: 'swapping' });
+expect('FAILED surfaces for Retry', nextFromStatus(exitView, 'FAILED', now).stage, 'failed');
+expect(
+  'an entry address past its inactive time with nothing received stops',
+  nextFromStatus(entryView, 'PENDING_DEPOSIT', Date.parse('2026-11-15T00:00:00.000Z')).stage,
+  'failed',
+);
+function pick(next: ReturnType<typeof nextFromStatus>) {
+  return next.then ? { stage: next.stage, then: next.then } : { stage: next.stage };
+}
+
+const unshielding = { venue: 'intents', intents: { ...exitView, stage: 'unshielding' as const } };
+expect('an exit cut off before signing is interrupted', exitInterrupted(unshielding, false), true);
+expect('an exit whose proof is running is not interrupted', exitInterrupted(unshielding, true), false);
+expect('an exit with a pending withdrawal resumes instead', exitInterrupted({ ...unshielding, withdrawal: { status: 'pending' } }, false), false);
+
+expect('abandon is free before an exit sends anything', intentsAbandonBlocker(unshielding), null);
+expect('abandon is refused once the unshield exists', typeof intentsAbandonBlocker({ ...unshielding, withdrawal: { status: 'pending' } }), 'string');
+expect('abandon is free while an entry only waits', intentsAbandonBlocker({ venue: 'intents', intents: entryView }), null);
+expect('abandon is refused once the entry deposit is seen', typeof intentsAbandonBlocker({ venue: 'intents', intents: { ...entryView, stage: 'swapping' } }), 'string');
+expect('abandon is refused after the user said they paid', typeof intentsAbandonBlocker({ venue: 'intents', intents: { ...entryView, userDepositTx: '0xabc' } }), 'string');
+expect('a finished move never blocks', intentsAbandonBlocker({ venue: 'intents', intents: { ...exitView, stage: 'done' }, withdrawal: { status: 'confirmed' } }), null);
+expect('a live move ticks', intentsNeedsTick({ venue: 'intents', intents: exitView }), true);
+expect('a failed move does not tick', intentsNeedsTick({ venue: 'intents', intents: { ...exitView, stage: 'failed' } }), false);
+expect('another venue does not tick', intentsNeedsTick({ venue: 'lighter' }), false);
 
 if (failed) process.exit(1);
 console.log('near-intents: all checks passed');

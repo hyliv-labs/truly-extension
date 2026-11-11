@@ -38,8 +38,17 @@ import {
   type OneClickToken,
   type QuoteResponse,
 } from './near-intents';
-import type { IntentsAsset, IntentsDirection, IntentsPreview, IntentsStage, IntentsView } from './intents';
-import { railgunReady, readShieldedBalance } from './shielded-balance';
+import {
+  exitInterrupted,
+  intentsAbandonBlocker,
+  intentsNeedsTick,
+  nextFromStatus,
+  type IntentsAsset,
+  type IntentsDirection,
+  type IntentsPreview,
+  type IntentsView,
+} from './intents';
+import { loadShieldedBalance, railgunReady, readShieldedBalance } from './shielded-balance';
 import { shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
 import { endTrade, getActiveTrade, startTrade, updateActiveTrade, type ActiveTrade } from './trade';
 
@@ -212,7 +221,13 @@ function checkEntrySize(origin: OneClickToken, units: bigint): void {
 
 // --- Start ---------------------------------------------------------------------------
 
-async function refuseOtherVenues(): Promise<ActiveTrade | null> {
+/**
+ * A NEAR Intents move always starts on a brand-new owner. An existing trade
+ * is refused, even one with no venue yet: a trade started from the panel or a
+ * site connect has already had its owner announced to connected sites, and
+ * reusing it would tie that site to the cross-chain move.
+ */
+async function refuseOtherVenues(): Promise<null> {
   const existing = await getActiveTrade();
   if (!existing) return null;
   if (existing.venue === 'intents' && existing.intents) {
@@ -222,11 +237,7 @@ async function refuseOtherVenues(): Promise<ActiveTrade | null> {
   if (existing.venue === 'uniswap' || existing.venue === 'compound') {
     throw new Error(`A ${existing.venue === 'uniswap' ? 'Uniswap' : 'Compound'} address is open. Shield it back or abandon it first.`);
   }
-  if (existing.withdrawal || existing.intentAddress) {
-    throw new Error('The current address was already used. Abandon it to move to a fresh one.');
-  }
-  // A trade started by connecting a site and never funded: reuse its owner.
-  return existing;
+  throw new Error('Another address is open (connected to a site or started earlier). Abandon it first, so this move gets a fresh one.');
 }
 
 export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
@@ -360,9 +371,13 @@ export async function advanceIntents(): Promise<IntentsView | null> {
   const view = trade.intents;
   switch (view.stage) {
     case 'unshielding':
-      // Only resume an unshield that may already be on chain. One that failed
-      // before broadcasting waits for Retry, so a proof is never built twice
-      // without the user asking.
+      // Only resume an unshield that may already be on chain. One cut off
+      // before signing (worker restart mid-proof) surfaces for Retry, so a
+      // proof is never built twice without the user asking.
+      if (exitInterrupted(trade, exitRun !== null)) {
+        const message = 'The proof was interrupted before anything was sent. Nothing left Railgun. Retry builds it again.';
+        return patch({ stage: 'failed', error: message, detail: message });
+      }
       if (!exitRun && trade.withdrawal) kickExit();
       return view;
     case 'awaiting-deposit':
@@ -408,44 +423,22 @@ async function pollStatus(trade: ActiveTrade, view: IntentsView): Promise<Intent
       : {}),
   };
 
-  switch (status.status) {
-    case 'PENDING_DEPOSIT':
-      // Nothing came, and 1Click no longer watches the address. Stop ticking;
-      // the user can abandon (nothing is at risk) or start again.
-      if (view.direction === 'entry' && Date.parse(view.inactiveAt) < Date.now()) {
-        return patch({
-          ...base,
-          stage: 'failed',
-          error: 'The deposit address expired with nothing received. Do not send to it any more. Cancel and start again.',
-        });
-      }
-      return patch({ ...base, stage: view.direction === 'entry' ? 'awaiting-deposit' : 'swapping' });
-    case 'KNOWN_DEPOSIT_TX':
-    case 'PROCESSING':
-    case 'INCOMPLETE_DEPOSIT':
-      return patch({ ...base, stage: 'swapping' });
-    case 'SUCCESS':
-      if (view.direction === 'exit') {
-        return finish({ ...base, stage: 'done', detail: `Delivered ${formatUnits(view.amountOut, view.destinationDecimals)} ${view.destinationLabel} (quoted).` });
-      }
-      {
-        const next = await patch({ ...base, stage: 'shielding', detail: 'USDC arrived at the fresh address. Shielding it into Railgun.' });
-        kickShield();
-        return next;
-      }
-    case 'REFUNDED':
-      if (view.direction === 'exit') {
-        const next = await patch({ ...base, stage: 'shielding', detail: 'The swap did not fill. Shielding the refunded USDC back into Railgun.' });
-        kickShield();
-        return next;
-      }
-      return finish({ ...base, stage: 'refunded' });
-    case 'FAILED':
-      return patch({ ...base, stage: 'failed', error: 'NEAR Intents reported the swap as failed. Retry checks for USDC at the fresh address and shields it back.' });
-    default:
-      void trade;
-      return patch(base);
-  }
+  const next = nextFromStatus(view, status.status);
+  const delivered_ =
+    view.direction === 'exit' && next.stage === 'done'
+      ? `Delivered ${formatUnits(view.amountOut, view.destinationDecimals)} ${view.destinationLabel} (quoted).`
+      : next.detail;
+  const fields: Partial<IntentsView> = {
+    ...base,
+    stage: next.stage,
+    ...(delivered_ ? { detail: delivered_ } : {}),
+    ...(next.error ? { error: next.error } : {}),
+  };
+  void trade;
+  if (next.then === 'finish') return finish(fields);
+  const saved = await patch(fields);
+  if (next.then === 'shield') kickShield();
+  return saved;
 }
 
 function kickExit(): void {
@@ -508,6 +501,8 @@ async function runShield(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/already (submitted|broadcast)/i.test(message)) await patch({ detail: message });
+    // Auto-lock during a long entry: keep the stage, so unlocking resumes it.
+    else if (/^locked$|is locked|Locked before/i.test(message)) await patch({ detail: 'Unlock Ghosty to finish shielding. Your USDC is waiting at the fresh address.' });
     else await patch({ stage: 'failed', error: message, detail: message });
   }
 }
@@ -557,22 +552,6 @@ async function requoteExit(trade: ActiveTrade, view: IntentsView): Promise<void>
   await patch({ ...fields, confidential });
 }
 
-/**
- * Why abandoning now would strand money, or null if it would not. A retired
- * owner is still reachable from the phrase, but nothing would watch it.
- */
-export function intentsAbandonBlocker(trade: ActiveTrade | null): string | null {
-  const view = trade?.venue === 'intents' ? trade.intents : undefined;
-  if (!view || view.stage === 'done' || view.stage === 'refunded') return null;
-  if (view.direction === 'exit' && (trade?.withdrawal || view.unshieldTx)) {
-    return 'The unshield already went to NEAR Intents. Wait for delivery or the refund; abandoning now would stop Ghosty from shielding a refund back.';
-  }
-  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx)) {
-    return 'Your deposit is with NEAR Intents. Wait for it to land and be shielded; abandoning now would leave the USDC at an address nothing watches.';
-  }
-  return null;
-}
-
 export async function lastIntentsView(): Promise<IntentsView | null> {
   const stored = await chrome.storage.local.get(LAST_VIEW);
   return (stored[LAST_VIEW] as IntentsView | undefined) ?? null;
@@ -580,11 +559,6 @@ export async function lastIntentsView(): Promise<IntentsView | null> {
 
 export async function dismissLastIntents(): Promise<void> {
   await chrome.storage.local.remove(LAST_VIEW);
-}
-
-export function intentsNeedsTick(trade: ActiveTrade | null): boolean {
-  const stage: IntentsStage | undefined = trade?.venue === 'intents' ? trade.intents?.stage : undefined;
-  return stage === 'unshielding' || stage === 'awaiting-deposit' || stage === 'swapping' || stage === 'shielding';
 }
 
 // --- Record helpers ------------------------------------------------------------------------
@@ -607,7 +581,10 @@ async function finish(fields: Partial<IntentsView>): Promise<IntentsView> {
   const next = await patch(fields);
   await chrome.storage.local.set({ [LAST_VIEW]: next });
   await endTrade();
+  // The home screen and the exit form read the cached snapshot. Rescan, so a
+  // just-shielded entry is spendable and a finished exit is gone from it.
+  void loadShieldedBalance(true).catch(() => undefined);
   return next;
 }
 
-export { TERMINAL_STATUSES };
+export { TERMINAL_STATUSES, intentsAbandonBlocker, intentsNeedsTick };

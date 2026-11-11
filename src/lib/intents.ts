@@ -78,6 +78,80 @@ export interface IntentsView {
 /** Stages the extension still has work to do in, or is waiting on 1Click. */
 export const LIVE_INTENTS_STAGES: readonly IntentsStage[] = ['unshielding', 'awaiting-deposit', 'swapping', 'shielding'];
 
+/** The slice of the active trade these rules read. Structural, so this file needs no chrome. */
+export interface IntentsTradeLike {
+  readonly venue?: string;
+  readonly intents?: IntentsView;
+  readonly withdrawal?: { readonly status: string };
+}
+
+/**
+ * What a 1Click status means for the move. Pure: the worker applies it.
+ * `then` says what to start after saving: a shield back, or retiring the owner.
+ */
+export function nextFromStatus(
+  view: IntentsView,
+  status: SwapStatus,
+  now = Date.now(),
+): { stage: IntentsStage; then?: 'shield' | 'finish'; error?: string; detail?: string } {
+  switch (status) {
+    case 'PENDING_DEPOSIT':
+      if (view.direction === 'entry' && Date.parse(view.inactiveAt) < now) {
+        return {
+          stage: 'failed',
+          error: 'The deposit address expired with nothing received. Do not send to it any more. Cancel and start again.',
+        };
+      }
+      return { stage: view.direction === 'entry' ? 'awaiting-deposit' : 'swapping' };
+    case 'KNOWN_DEPOSIT_TX':
+    case 'PROCESSING':
+    case 'INCOMPLETE_DEPOSIT':
+      return { stage: 'swapping' };
+    case 'SUCCESS':
+      return view.direction === 'exit'
+        ? { stage: 'done', then: 'finish' }
+        : { stage: 'shielding', then: 'shield', detail: 'USDC arrived at the fresh address. Shielding it into Railgun.' };
+    case 'REFUNDED':
+      return view.direction === 'exit'
+        ? { stage: 'shielding', then: 'shield', detail: 'The swap did not fill. Shielding the refunded USDC back into Railgun.' }
+        : { stage: 'refunded', then: 'finish' };
+    case 'FAILED':
+      return { stage: 'failed', error: 'NEAR Intents reported the swap as failed. Retry checks for USDC at the fresh address and shields it back.' };
+    default:
+      return { stage: view.stage };
+  }
+}
+
+/**
+ * An exit still 'unshielding' with no worker running it and no withdrawal
+ * record was cut off before anything was signed (a worker restart mid-proof).
+ * Nothing will resume it on its own, so it must surface as failed for Retry.
+ */
+export function exitInterrupted(trade: IntentsTradeLike, running: boolean): boolean {
+  return trade.intents?.direction === 'exit' && trade.intents.stage === 'unshielding' && !running && !trade.withdrawal;
+}
+
+/**
+ * Why abandoning now would strand money, or null if it would not. A retired
+ * owner is still reachable from the phrase, but nothing would watch it.
+ */
+export function intentsAbandonBlocker(trade: IntentsTradeLike | null): string | null {
+  const view = trade?.venue === 'intents' ? trade.intents : undefined;
+  if (!view || view.stage === 'done' || view.stage === 'refunded') return null;
+  if (view.direction === 'exit' && (trade?.withdrawal || view.unshieldTx)) {
+    return 'The unshield already went to NEAR Intents. Wait for delivery or the refund; abandoning now would stop Ghosty from shielding a refund back.';
+  }
+  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx)) {
+    return 'Your deposit is with NEAR Intents. Wait for it to land and be shielded; abandoning now would leave the USDC at an address nothing watches.';
+  }
+  return null;
+}
+
+export function intentsNeedsTick(trade: IntentsTradeLike | null): boolean {
+  const stage = trade?.venue === 'intents' ? trade.intents?.stage : undefined;
+  return stage !== undefined && LIVE_INTENTS_STAGES.includes(stage);
+}
+
 export interface IntentsPreview {
   readonly direction: IntentsDirection;
   readonly amountIn: string;
