@@ -84,6 +84,9 @@ export async function handleProviderRequest(
     }
     return refuseWithoutTrade(method);
   }
+  // A NEAR Intents owner is never a dapp account. Showing it to a site would
+  // tie that site's session to the cross-chain move.
+  if (trade.venue === 'intents') return refuseWithoutTrade(method);
 
   switch (method) {
     case 'eth_chainId':
@@ -277,7 +280,7 @@ function waitForActiveTrade(): Promise<ActiveTrade> {
     tradeWaiters.push(waiter);
     watchTrades();
     void getActiveTrade().then((trade) => {
-      if (!trade || !tradeWaiters.includes(waiter)) return;
+      if (!trade || trade.venue === 'intents' || !tradeWaiters.includes(waiter)) return;
       settleWaiter(waiter, trade);
     });
   });
@@ -298,7 +301,7 @@ function unwatchTrades(): void {
 function onTradeStorage(_changes: { [key: string]: chrome.storage.StorageChange }, area: string): void {
   if (area !== 'local' || tradeWaiters.length === 0) return;
   void getActiveTrade().then((trade) => {
-    if (!trade) return;
+    if (!trade || trade.venue === 'intents') return;
     for (const waiter of [...tradeWaiters]) settleWaiter(waiter, trade);
   });
 }

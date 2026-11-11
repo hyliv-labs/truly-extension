@@ -79,12 +79,14 @@ export async function railgunUsdcBalances(): Promise<RailgunUsdcBalances> {
  * address. Refuses to build a second proof while a previous one may have
  * been broadcast.
  */
-export async function unshieldRailgunForTrade(netUnits: bigint): Promise<RailgunUnshieldResult> {
+export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?: bigint): Promise<RailgunUnshieldResult> {
   const trade = await getActiveTrade();
   if (!trade) throw new Error('No trade is active.');
   if (!trade.intentAddress) {
     throw new Error(
-      trade.venue === 'uniswap'
+      trade.venue === 'intents'
+        ? 'NEAR Intents has not issued a deposit address yet.'
+        : trade.venue === 'uniswap'
         ? 'The Uniswap address is not ready to receive funds yet.'
         : trade.venue === 'compound'
           ? 'The Compound address is not ready to receive funds yet.'
@@ -108,7 +110,18 @@ export async function unshieldRailgunForTrade(netUnits: bigint): Promise<Railgun
   await ensureUnshieldGas(trade.ownerIndex, owner.address);
   const mnemonic = await requireUnlockedMnemonic();
   const balances = await railgunUsdcBalances();
-  const gross = railgunGrossForNet(netUnits, balances.feeBps);
+  // A 1Click deposit must arrive as exactly the quoted amount, so the exit
+  // passes the gross it quoted the net of. Rounding net -> gross up can land
+  // one unit high, and 1Click refunds the excess with a fee.
+  const gross = exactGrossUnits ?? railgunGrossForNet(netUnits, balances.feeBps);
+  if (exactGrossUnits !== undefined && gross - (gross * balances.feeBps) / 10_000n !== netUnits) {
+    throw new Error('The Railgun fee changed since the quote, so the deposit would not match it. Nothing left the pool. Retry for a new quote.');
+  }
+  // Only the bundled 1x2/2x2/3x2 circuits exist, and spending every note
+  // leaves no change output (an N x 1 proof). Keep at least one unit back.
+  if (exactGrossUnits !== undefined && balances.spendableUnits <= gross) {
+    throw new Error('The spendable Railgun balance does not cover this amount plus the change note it must leave. Nothing left the pool.');
+  }
   const populated = await ask<PopulatedRailgunTx>({
     kind: 'railgunUnshield',
     mnemonic,

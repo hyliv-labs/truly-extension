@@ -15,6 +15,7 @@ import { clearLighterSiteData } from './site-cleanup';
 import type { TradeSession } from './session-types';
 import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
+import type { IntentsView } from './intents';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 const LOCAL_TRADE_HISTORY = 'truly:tradeHistory';
@@ -97,11 +98,13 @@ export interface ActiveTrade {
   /** The in-extension market trade this owner exists for, when there is one. */
   readonly session?: TradeSession;
   /** Which venue this address was opened for. Absent on older Lighter trades. */
-  readonly venue?: 'lighter' | 'uniswap' | 'compound';
+  readonly venue?: 'lighter' | 'uniswap' | 'compound' | 'intents';
   /** Uniswap funding and the shield back. A retry continues this record. */
   readonly uniswap?: UniswapAccountView;
   /** Compound funding and the shield back. A retry continues this record. */
   readonly compound?: CompoundAccountView;
+  /** A NEAR Intents exit or entry. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
+  readonly intents?: IntentsView;
 }
 
 /**
@@ -169,7 +172,7 @@ export async function getActiveTrade(): Promise<ActiveTrade | null> {
  * Mark the current owner as trading. E8 will replace this with the funded
  * lifecycle; for now it exists so E5 can be exercised end to end.
  */
-export async function startTrade(): Promise<ActiveTrade> {
+export async function startTrade(venue?: ActiveTrade['venue']): Promise<ActiveTrade> {
   if (await getActiveTrade()) {
     throw new Error('a trade is already active');
   }
@@ -194,6 +197,9 @@ export async function startTrade(): Promise<ActiveTrade> {
     ownerIndex: owner.index,
     ownerAddress: owner.address,
     startedAt: Date.now(),
+    // Set at birth for a venue that must never be shown to a dapp, so no
+    // storage listener sees a venue-less trade first.
+    ...(venue ? { venue } : {}),
   };
 
   await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: trade });

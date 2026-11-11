@@ -85,6 +85,7 @@ export function GhostHome({
   onAddFunds,
   onRetry,
   onAdvanced,
+  onAnyChain,
 }: {
   balance: ShieldedBalance | null;
   balanceError: string | null;
@@ -95,6 +96,8 @@ export function GhostHome({
   onAddFunds: () => void;
   onRetry: () => void;
   onAdvanced: () => void;
+  /** NEAR Intents: send out to, or bring in from, any chain. */
+  onAnyChain?: () => void;
 }) {
   const [revealed, setRevealed] = useState(false);
   const ready = balance !== null && railgunReady(balance.railgun);
@@ -173,6 +176,13 @@ export function GhostHome({
           Bring back
         </button>
       </div>
+
+      {onAnyChain && ready && (
+        <button type="button" className="gx-option" onClick={onAnyChain}>
+          <b>Any chain · NEAR Intents</b>
+          <span>{empty ? 'Bring funds in from Zcash, Aleo, Solana, Bitcoin and 30+ chains.' : 'Send out to 30+ chains, or bring funds in from Zcash, Aleo and more.'}</span>
+        </button>
+      )}
     </GxScreen>
   );
 }

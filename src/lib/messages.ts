@@ -13,6 +13,7 @@ import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
 import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
+import type { IntentsAsset, IntentsDirection, IntentsPreview, IntentsView } from './intents';
 
 /** bigint does not survive the message channel, so margin travels as a string. */
 export interface TradeRequestWire {
@@ -96,6 +97,26 @@ export type Request =
   | { kind: 'shieldCompound' }
   /** Starts the WASM signer in the worker and signs a throwaway order offline. */
   | { kind: 'lighterSignerSelfTest' }
+  // NEAR Intents (1Click): private exit to any chain, private entry from any chain
+  | { kind: 'intentsAssets' }
+  | {
+      kind: 'intentsPreview';
+      direction: IntentsDirection;
+      assetId: string;
+      /** Exit: gross USDC units out of Railgun. Entry: origin-asset units. */
+      amountUnits: string;
+      /** Exit: the user's address on the destination chain. Entry: their refund address on the origin chain. */
+      address: string;
+    }
+  | { kind: 'intentsStartExit'; assetId: string; grossUnits: string; recipient: string }
+  | { kind: 'intentsStartEntry'; assetId: string; amountUnits: string; refundTo: string }
+  | { kind: 'intentsAdvance' }
+  | { kind: 'intentsDepositSent'; txHash: string }
+  | { kind: 'intentsRetry' }
+  | { kind: 'intentsDismiss' }
+  /** The user's own 1Click partner key. Only whether one is set comes back. */
+  | { kind: 'intentsSetKey'; key: string | null }
+  | { kind: 'intentsKeyStatus' }
   // Orchestrator (E8)
   | { kind: 'tradeStatus' }
   | { kind: 'scanStranded' }
@@ -201,6 +222,16 @@ export interface ResultMap {
   fundCompound: CompoundAccountView;
   shieldCompound: CompoundAccountView;
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
+  intentsAssets: IntentsAsset[];
+  intentsPreview: IntentsPreview;
+  intentsStartExit: IntentsView;
+  intentsStartEntry: IntentsView;
+  intentsAdvance: IntentsView | null;
+  intentsDepositSent: IntentsView;
+  intentsRetry: IntentsView;
+  intentsDismiss: null;
+  intentsSetKey: { confidential: boolean };
+  intentsKeyStatus: { confidential: boolean };
 }
 
 /**

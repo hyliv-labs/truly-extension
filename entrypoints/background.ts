@@ -59,6 +59,20 @@ import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
 import { fundCompoundAccount, shieldCompoundAccount } from '@truly/lib/compound-private';
 import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
+import {
+  advanceIntents,
+  dismissLastIntents,
+  getPartnerKey,
+  intentsAbandonBlocker,
+  intentsAssets,
+  intentsDepositSent,
+  intentsNeedsTick,
+  previewIntents,
+  retryIntents,
+  setPartnerKey,
+  startIntentsEntry,
+  startIntentsExit,
+} from '@truly/lib/intents-private';
 import { fetchMarkets } from '@truly/lib/lighter-markets';
 import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
 import {
@@ -97,6 +111,8 @@ const DEPOSIT_POLL_MINUTES = 1;
  * advances it faster while open; this keeps it moving when it is closed.
  */
 const SESSION_ALARM = 'truly:session-tick';
+/** A NEAR Intents move keeps moving with the panel closed: 1Click status, then the shield back. */
+const INTENTS_ALARM = 'truly:intents-tick';
 
 export default defineBackground({
   /**
@@ -164,13 +180,16 @@ export default defineBackground({
     chrome.runtime.onStartup.addListener(() => {
       void resumeDepositWatch();
       void armSessionTick();
+      void armIntentsTick();
     });
     void armSessionTick();
+    void armIntentsTick();
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === AUTO_LOCK_ALARM) void autoLock();
       if (alarm.name === DEPOSIT_ALARM) void pollDeposit();
       if (alarm.name === SESSION_ALARM) void tickSession();
+      if (alarm.name === INTENTS_ALARM) void tickIntents();
     });
 
     chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
@@ -255,17 +274,23 @@ async function handle(
       return null;
     }
 
-    case 'abandonTrade':
+    case 'abandonTrade': {
       // Deliberate escape hatch: the user has been warned and chosen to
       // retire an unfinished trade. The seed still reaches the funds.
+      // Except a NEAR Intents move with money already in 1Click's hands: a
+      // retired owner would never see the refund or the delivery shielded.
+      const blocked = intentsAbandonBlocker(await getActiveTrade());
+      if (blocked) throw new Error(blocked);
       await endTrade();
       // Stop watching immediately rather than letting the next tick discover
       // there is no trade: that tick would be a network call tying this owner
       // to a moment after the trade closed.
       await chrome.alarms.clear(DEPOSIT_ALARM);
       await chrome.alarms.clear(SESSION_ALARM);
+      await chrome.alarms.clear(INTENTS_ALARM);
       await announceTradeEnded();
       return null;
+    }
 
     case 'provider': {
       // Trust the sender's own URL over anything the page claims: a page cannot
@@ -352,7 +377,11 @@ async function handle(
       // the held eth_requestAccounts, and it must find the consent already
       // recorded or it falls back to opening a second approval window.
       await grantConnectConsent(message.origin);
-      const trade = (await getActiveTrade()) ?? (await startTrade());
+      const active = await getActiveTrade();
+      if (active?.venue === 'intents') {
+        throw new Error('This address is in a NEAR Intents move. Let it finish before connecting a site.');
+      }
+      const trade = active ?? (await startTrade());
       const host = new URL(message.origin).hostname;
       const uniswap = host === 'uniswap.org' || host.endsWith('.uniswap.org');
       const lighter = host === 'lighter.xyz' || host.endsWith('.lighter.xyz');
@@ -553,6 +582,56 @@ async function handle(
       return shielded;
     }
 
+    case 'intentsAssets':
+      return intentsAssets();
+
+    case 'intentsPreview':
+      await touchAutoLock();
+      return message.direction === 'exit'
+        ? previewIntents('exit', { assetId: message.assetId, grossUnits: message.amountUnits, recipient: message.address })
+        : previewIntents('entry', { assetId: message.assetId, amountUnits: message.amountUnits, refundTo: message.address });
+
+    case 'intentsStartExit': {
+      await touchAutoLock();
+      const view = await startIntentsExit({ assetId: message.assetId, grossUnits: message.grossUnits, recipient: message.recipient });
+      await armIntentsTick();
+      return view;
+    }
+
+    case 'intentsStartEntry': {
+      await touchAutoLock();
+      const view = await startIntentsEntry({ assetId: message.assetId, amountUnits: message.amountUnits, refundTo: message.refundTo });
+      await armIntentsTick();
+      return view;
+    }
+
+    case 'intentsAdvance': {
+      const view = await advanceIntents();
+      await armIntentsTick();
+      return view;
+    }
+
+    case 'intentsDepositSent':
+      await touchAutoLock();
+      return intentsDepositSent(message.txHash);
+
+    case 'intentsRetry': {
+      await touchAutoLock();
+      const view = await retryIntents();
+      await armIntentsTick();
+      return view;
+    }
+
+    case 'intentsDismiss':
+      await dismissLastIntents();
+      return null;
+
+    case 'intentsSetKey':
+      return setPartnerKey(message.key);
+
+    case 'intentsKeyStatus':
+      return { confidential: (await getPartnerKey()) !== null };
+
     case 'lighterSignerSelfTest': {
       // A throwaway key and a fictitious account: nothing here is ever sent.
       const started = Date.now();
@@ -614,6 +693,8 @@ async function touchAutoLock(): Promise<void> {
 async function resumeDepositWatch(): Promise<void> {
   const trade = await getActiveTrade();
   if (!trade?.intentAddress || trade.accountIndex !== undefined) return;
+  // A NEAR Intents deposit address is not a Lighter deposit; its own alarm watches it.
+  if (trade.venue === 'intents') return;
   // A market-trade session polls the deposit itself, on its own alarm.
   if (trade.session) return;
 
@@ -692,6 +773,25 @@ async function tickSession(): Promise<void> {
     console.warn('[truly] session tick failed', error);
   } finally {
     await armSessionTick();
+  }
+}
+
+/** Tick while a NEAR Intents move waits on 1Click or on a chain. */
+async function armIntentsTick(): Promise<void> {
+  if (intentsNeedsTick(await getActiveTrade())) {
+    await chrome.alarms.create(INTENTS_ALARM, { periodInMinutes: 0.5 });
+  } else {
+    await chrome.alarms.clear(INTENTS_ALARM);
+  }
+}
+
+async function tickIntents(): Promise<void> {
+  try {
+    await advanceIntents();
+  } catch (error) {
+    console.warn('[truly] intents tick failed', error);
+  } finally {
+    await armIntentsTick();
   }
 }
 

@@ -10,6 +10,7 @@ import { Onboarding } from './Onboarding';
 import { PhraseScreen } from './PhraseScreen';
 import { AddFunds, ConnectScreen, GhostHome, GhostProgress, GoGhost, depositStage, venueFromSite } from './Deposit';
 import { GxBack } from './Ghosty';
+import { IntentsMove, IntentsProgress } from './Intents';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
@@ -21,14 +22,17 @@ import {
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 
-function addressLabel(venue: 'lighter' | 'uniswap' | 'compound' | undefined): string {
+type AnyVenue = 'lighter' | 'uniswap' | 'compound' | 'intents' | undefined;
+
+function addressLabel(venue: AnyVenue): string {
+  if (venue === 'intents') return 'NEAR Intents address';
   if (venue === 'uniswap') return 'Uniswap address';
   if (venue === 'compound') return 'Compound address';
   return 'Lighter address';
 }
 
-function onSite(venue: 'lighter' | 'uniswap' | 'compound' | undefined): boolean {
-  return venue === 'uniswap' || venue === 'compound';
+function onSite(venue: AnyVenue): boolean {
+  return venue === 'uniswap' || venue === 'compound' || venue === 'intents';
 }
 
 export function App() {
@@ -65,7 +69,9 @@ export function App() {
   const [connected, setConnected] = useState(false);
   // The Ghosty flow covers home to 'ready'; 'legacy' shows the full panels.
   const [legacy, setLegacy] = useState(false);
-  const [screen, setScreen] = useState<'home' | 'go' | 'add'>('home');
+  const [screen, setScreen] = useState<'home' | 'go' | 'add' | 'intents'>('home');
+  /** Kept on after a NEAR Intents move ends, so its result stays on screen until Done. */
+  const [intentsOpen, setIntentsOpen] = useState(false);
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
   const [shieldedLoading, setShieldedLoading] = useState(false);
@@ -239,9 +245,23 @@ export function App() {
   if (status?.unlocked && !legacy) {
     const trade = status.activeTrade;
     const stage = depositStage(status);
-    const notStarted = !trade || (!trade.session && !trade.uniswap && !trade.compound);
+    const notStarted = !trade || (!trade.session && !trade.uniswap && !trade.compound && !trade.intents);
     const spendable = shielded && railgunReady(shielded.railgun) ? BigInt(shielded.railgun.spendableUnits) : 0n;
-    const venue = trade?.venue ?? venueFromSite(connectOrigin);
+    const venue = (trade?.venue === 'intents' ? null : trade?.venue) ?? venueFromSite(connectOrigin);
+
+    if (trade?.venue === 'intents' || intentsOpen) {
+      return (
+        <main className="popup-gx">
+          <IntentsProgress
+            onClose={() => {
+              setIntentsOpen(false);
+              setScreen('home');
+              void refresh();
+            }}
+          />
+        </main>
+      );
+    }
 
     if (connectOrigin && connectFullOrigin && !connected && !trade) {
       return (
@@ -286,6 +306,16 @@ export function App() {
             />
           ) : screen === 'add' ? (
             <AddFunds onBack={() => setScreen('home')} />
+          ) : screen === 'intents' ? (
+            <IntentsMove
+              spendableUnits={spendable}
+              onBack={() => setScreen('home')}
+              onStarted={() => {
+                setIntentsOpen(true);
+                setScreen('home');
+                void refresh();
+              }}
+            />
           ) : (
             <GhostHome
               balance={shielded}
@@ -295,6 +325,7 @@ export function App() {
               venue={venue}
               onGoGhost={() => setScreen('go')}
               onAddFunds={() => setScreen('add')}
+              onAnyChain={() => setScreen('intents')}
               onRetry={() => void refreshShielded()}
               onAdvanced={() => setLegacy(true)}
             />
@@ -397,7 +428,7 @@ export function App() {
               busy={busy}
               connecting={connectOrigin !== null}
               site={connectOrigin}
-              activeVenue={status.activeTrade?.venue ?? null}
+              activeVenue={status.activeTrade?.venue === 'intents' ? null : (status.activeTrade?.venue ?? null)}
               connectedAddress={status.activeTrade ? owner : null}
               onOpened={refresh}
               balance={shielded}

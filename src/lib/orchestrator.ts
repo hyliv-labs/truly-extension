@@ -44,6 +44,14 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
   const trade = await getActiveTrade();
   if (!trade) return null;
 
+  if (trade.venue === 'intents') {
+    const view = trade.intents;
+    return {
+      phase: view?.stage === 'done' || view?.stage === 'refunded' ? 'reshielded' : 'trading',
+      detail: view?.detail ?? 'NEAR Intents move.',
+    };
+  }
+
   if (trade.venue === 'uniswap' || trade.venue === 'compound') {
     const account = trade.venue === 'compound' ? trade.compound : trade.uniswap;
     const name = trade.venue === 'compound' ? 'Compound' : 'Uniswap';

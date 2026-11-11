@@ -127,6 +127,9 @@ export default defineConfig({
       'https://ipfs-lb.com/*',
       'https://ppoi.fdi.network/*',
       'https://rail-squid.squids.live/*',
+      // NEAR Intents 1Click: quotes, deposit status and token list for the
+      // cross-chain exit and entry. Called directly, not over anon-rpc.
+      'https://1click.chaindefuser.com/*',
     ],
     // Puts the anon-rpc worker at an opaque origin with its own CSP. The '*'
     // is a real wildcard, which is what keeps this entry stable even though

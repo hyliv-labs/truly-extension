@@ -1,0 +1,31 @@
+/* NEAR Intents screens. Built on the gx- design tokens in ghosty.css. */
+
+.ix-badge {
+  font-size: 11px; letter-spacing: 0.02em; color: var(--gx-body);
+  background: var(--gx-surf2); border: 1px solid var(--gx-line2);
+  border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+}
+.ix-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ix-head { font-size: 18px; margin: 0; }
+.ix-hero { gap: 6px; }
+.ix-label { font-size: 12px; color: var(--muted); }
+.ix-select .ix-label { flex: none; }
+.ix-select select {
+  all: unset; flex: 1; min-width: 0; font-family: inherit; font-size: 14px; color: var(--fg);
+  text-align: right; cursor: pointer; padding-right: 6px;
+}
+.ix-select select option, .ix-select select optgroup { background: var(--gx-field); color: var(--fg); }
+.ix-strong { color: var(--fg); font-weight: 600; }
+.ix-bad span { color: var(--gx-danger); }
+.ix-key { display: flex; align-items: center; gap: 8px; }
+.ix-key .gx-field { flex: 1; }
+.ix-mode { align-self: center; font-size: 12px; }
+.ix-deposit { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px; text-align: center; }
+.ix-deposit b { font-size: 20px; color: var(--fg); }
+.ix-addr {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--fg);
+  word-break: break-all; background: var(--gx-field); border: 1px solid var(--gx-line2);
+  border-radius: 10px; padding: 8px 10px; width: 100%; box-sizing: border-box;
+}
+.gx-facts a { color: var(--accent); text-decoration: none; }
+.gx-facts a:hover { text-decoration: underline; }
