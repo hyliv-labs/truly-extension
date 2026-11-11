@@ -410,6 +410,15 @@ async function pollStatus(trade: ActiveTrade, view: IntentsView): Promise<Intent
 
   switch (status.status) {
     case 'PENDING_DEPOSIT':
+      // Nothing came, and 1Click no longer watches the address. Stop ticking;
+      // the user can abandon (nothing is at risk) or start again.
+      if (view.direction === 'entry' && Date.parse(view.inactiveAt) < Date.now()) {
+        return patch({
+          ...base,
+          stage: 'failed',
+          error: 'The deposit address expired with nothing received. Do not send to it any more. Cancel and start again.',
+        });
+      }
       return patch({ ...base, stage: view.direction === 'entry' ? 'awaiting-deposit' : 'swapping' });
     case 'KNOWN_DEPOSIT_TX':
     case 'PROCESSING':

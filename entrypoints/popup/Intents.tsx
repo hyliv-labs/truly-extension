@@ -317,6 +317,8 @@ export function IntentsProgress({ onClose }: { onClose: () => void }) {
 
   const finished = view.stage === 'done' || view.stage === 'refunded';
   const entryWaiting = view.direction === 'entry' && view.stage === 'awaiting-deposit';
+  const entryExpired =
+    view.direction === 'entry' && view.stage === 'failed' && (!view.swapStatus || view.swapStatus === 'PENDING_DEPOSIT') && !view.userDepositTx;
   const originSymbol = view.originLabel.split(' on ')[0];
 
   return (
@@ -406,7 +408,7 @@ export function IntentsProgress({ onClose }: { onClose: () => void }) {
           Retry
         </button>
       ) : null}
-      {!finished && (entryWaiting || (view.stage === 'failed' && !view.unshieldTx && view.direction === 'exit')) && (
+      {!finished && (entryWaiting || entryExpired || (view.stage === 'failed' && !view.unshieldTx && view.direction === 'exit')) && (
         <button
           type="button"
           className="gx-btn quiet"
