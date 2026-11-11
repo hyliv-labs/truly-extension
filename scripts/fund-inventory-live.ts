@@ -4,7 +4,16 @@ import { readFileSync } from 'node:fs';
 import { createPublicClient, erc20Abi, formatUnits, http, type Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum } from 'viem/chains';
-import { deriveFundingWallet, deriveOwner } from '../src/lib/keys.ts';
+import { HDKey } from '@scure/bip32';
+import { mnemonicToSeed } from '@scure/bip39';
+import { deriveOwner } from '../src/lib/keys.ts';
+
+/** Add funds' receiving address (m/44'/60'/7702'/1/0). Derived here so the script needs no uncommitted export. */
+async function deriveFundingWallet(mnemonic: string): Promise<{ address: Address }> {
+  const node = HDKey.fromMasterSeed(await mnemonicToSeed(mnemonic.trim())).derive("m/44'/60'/7702'/1/0");
+  if (!node.privateKey) throw new Error('no key at the funding path');
+  return { address: privateKeyToAccount(`0x${Buffer.from(node.privateKey).toString('hex')}`).address };
+}
 
 const env = Object.fromEntries(
   readFileSync('/home/jiojohny/Desktop/ethglobal/truly-extension/.env.local', 'utf8')
