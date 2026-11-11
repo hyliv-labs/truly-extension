@@ -1,4 +1,109 @@
-# Truly
+# Truly (Ghosty)
+
+## NEAR HACKATHON: private cross-chain exit and entry with NEAR Intents
+
+**Problem.** A shielded balance is only private until you spend it. Leaving
+Railgun normally means unshielding to an address you own, then bridging, and
+that address links the pool exit to wherever the money goes next. Coming in
+is the same problem in reverse.
+
+**What we built.** Ghosty (this extension) now uses NEAR Intents 1Click as its
+cross-chain layer, in both directions:
+
+- **Send out.** Shielded USDC on Arbitrum is unshielded *straight into a
+  one-time 1Click deposit address*, and arrives on any of 30+ chains as the
+  asset you pick (ZEC, USDCx on Aleo, SOL, BTC, USDC on Base/Solana/NEAR…).
+  The transaction is signed by a fresh, never-reused owner key. No address of
+  yours ever sits between the shielded pool and the destination. If solvers
+  cannot fill it, 1Click refunds to that fresh owner and Ghosty shields the
+  refund back into Railgun.
+- **Bring in.** Ghosty quotes a one-time deposit address on the origin chain.
+  You pay it from any wallet, ideally a shielded one: Zashi (shielded ZEC to the
+  transparent deposit address) or an Aleo wallet (private-to-public transfer).
+  The USDC lands at a fresh owner on Arbitrum, and Ghosty shields it into
+  Railgun.
+
+So value moves between Railgun, Zcash, Aleo and 30+ public chains with no
+public address of the user's in between.
+
+**What NEAR does here.** NEAR Intents is the settlement layer: 1Click gets a
+quote from solvers, returns a one-time deposit address, and delivers on the
+destination chain or refunds. Ghosty never bridges or swaps itself.
+
+### Try it
+
+1. `pnpm install && pnpm build`, then load `.output/chrome-mv3` as an unpacked
+   extension (chrome://extensions → Developer mode → Load unpacked).
+2. Create or restore a vault. Open the side panel.
+3. **Bring in:** home → **Any chain · NEAR Intents** → **Bring in** → pick
+   *USDC on Ethereum* (or ZEC, USDCx on Aleo, SOL) → amount → your refund
+   address → the dry quote appears → **Get deposit address** → pay exactly the
+   shown amount to the shown address → see the steps go *deposit → solvers fill
+   → USDC at a fresh address → shielded into Railgun*.
+4. **Send out:** **Any chain · NEAR Intents** → **Send out** → pick a
+   destination asset → amount of shielded USDC → your address on that chain →
+   **Send privately** → see *unshield into NEAR Intents → solvers fill →
+   delivered*, with the Arbitrum unshield and destination tx links.
+5. Without the extension: `pnpm check:intents` dry-quotes every featured route
+   in both directions; `pnpm check` runs the offline checks
+   (`scripts/near-intents-check.ts`) for the fee math and quote validation.
+
+### Built during the hackathon
+
+Everything NEAR-related was written in the window. Diff:
+[`pre-hackathon...near-intents`](https://github.com/hyliv-labs/truly-extension/compare/pre-hackathon...near-intents).
+The extension itself (Railgun funding of fresh owners, Lighter/Uniswap/Compound
+venues) existed before and is the baseline.
+
+| File | What it does |
+| --- | --- |
+| `src/lib/near-intents.ts` | 1Click client; checks every quote against the request (recipient, refund address, assets, amount, signature, expiry) before money moves; exact Railgun fee math |
+| `src/lib/intents-private.ts` | Exit and entry state machines: quote, unshield to the deposit address, poll status, shield back; resumable after a worker restart |
+| `src/lib/intents.ts` | The saved view the panel renders |
+| `entrypoints/popup/Intents.tsx` | Send out / Bring in screens with a live dry quote |
+| `scripts/near-intents-check.ts`, `scripts/near-intents-live-check.ts` | Offline checks and live dry quotes |
+
+### Design notes
+
+- **Exact deposit.** Railgun takes 0.25% inside the unshield
+  (`base = amount − ⌊amount·bps/10000⌋`). Ghosty quotes EXACT_INPUT for the
+  amount that will actually arrive and unshields the matching gross, so the
+  deposit equals `amountIn` to the unit. Rounding the other way would put one
+  extra unit on the address and trigger a refund with a fee.
+- **Quote checks.** A quote whose echoed recipient, refund address, assets or
+  amount differ from the request is refused. So is one without a signature, a
+  deposit address, or with an inactive address.
+- **Saved before moving.** The quote (deposit address, correlation id, 1Click's
+  signature, deadlines) is stored before the proof is built. A retry continues
+  the same deposit address and never builds a second proof for it.
+- **Refunds stay private.** Exit refunds go to the fresh owner and are shielded
+  back automatically. Entry refunds go to the user's own origin address.
+- **No leaks to dapps.** An owner in a NEAR Intents move is never exposed to a
+  connected site (`eth_accounts` returns nothing), and abandon is refused while
+  money is with 1Click.
+- **Change note.** Only the 1x2/2x2/3x2 Railgun circuits are bundled, so an exit
+  always leaves a little shielded change.
+
+### Limits (stated, not hidden)
+
+- **Confidential Intents** needs a 1Click partner key. Without one, quotes are
+  *public intents*: the chain shows no link between the Railgun exit and the
+  delivery, but 1Click and solvers can match deposit to payout. A key can be
+  entered at runtime in the panel; none is bundled.
+- 1Click is called directly, not over anon-rpc, so 1Click sees the user's IP
+  next to the quote.
+- Zcash routes use **transparent** addresses (1Click does not support shielded
+  ZEC addresses). The privacy comes from paying from, or receiving into, a
+  Zashi wallet that shields. Aleo deliveries arrive as a public balance.
+- Exact amounts and timing can correlate deposit and delivery; round amounts
+  and waiting help.
+- Bring in uses Circle's paymaster when the fresh owner has no ETH; up to
+  ~1 USDC of the permit reserve can stay at the retired owner.
+- Live-verified so far: every featured route quotes in both directions (dry),
+  and real (non-dry) quote and status responses match the checks. The first
+  money-moving runs are listed below as they happen.
+
+---
 
 A Chrome extension that funds each perp trade from Privacy Pools through a
 fresh owner address, and returns what's left to the pool when the trade closes.
