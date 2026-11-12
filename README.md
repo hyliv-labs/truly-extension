@@ -51,7 +51,13 @@ destination chain or refunds. Ghosty never bridges or swaps itself.
    destination asset → amount of shielded USDC → your address on that chain →
    **Send privately** → see *unshield into NEAR Intents → solvers fill →
    delivered*, with the Arbitrum unshield and destination tx links.
-5. Without the extension: `pnpm check:intents` dry-quotes every featured route
+5. **One journey:** after a Bring in lands, **Trade with it** opens Go ghost
+   on the fresh balance (also from a home card if the panel was closed while it
+   finished). **Add funds** and a Go ghost with too little both offer the
+   private route in; after **Bring back**, **Send out to another chain** opens
+   the exit. So: shielded ZEC → Railgun → a fresh account on Uniswap or
+   Lighter → back into Railgun → out to any chain.
+6. Without the extension: `pnpm check:intents` dry-quotes every featured route
    in both directions; `pnpm check` runs the offline checks
    (`scripts/near-intents-check.ts`) for the fee math and quote validation.
 
