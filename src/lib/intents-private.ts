@@ -51,6 +51,7 @@ import {
 import { loadShieldedBalance, railgunReady, readShieldedBalance } from './shielded-balance';
 import { shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
 import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
+import { zcashAddressForIntents } from './zcash';
 
 /** The NEAR Intents slot of the venue book. Other venues stay open on their own owners. */
 const getIntentsTrade = () => getVenueTrade('intents');
@@ -118,6 +119,21 @@ async function asset(assetId: string): Promise<OneClickToken> {
   return token;
 }
 
+/**
+ * The user's own address as 1Click needs it. Zcash: a unified address from
+ * Zashi, Zingo, YWallet… is reduced to its transparent receiver (1Click
+ * refuses u1…); the preview shows the user which address that is.
+ */
+function userAddress(token: OneClickToken, address: string, role: 'refund' | 'recipient'): { address: string; fromUnified: boolean } {
+  if (token.blockchain === 'zec') return zcashAddressForIntents(address, role);
+  return { address: address.trim(), fromUnified: false };
+}
+
+/** A person pays an entry from their own wallet, so the amount may be off; Ghosty's own exits are exact. */
+function entrySwapType(confidential: boolean): 'EXACT_INPUT' | 'FLEX_INPUT' {
+  return confidential ? 'EXACT_INPUT' : 'FLEX_INPUT';
+}
+
 function label(token: OneClickToken): string {
   const featured = pickerAssets([token])[0];
   return featured?.label ?? `${token.symbol} on ${token.blockchain}`;
@@ -166,12 +182,13 @@ export async function previewIntents(direction: IntentsDirection, input: ExitInp
     const feeBps = await railgunFeeBps();
     const net = railgunNetForGross(gross, feeBps);
     const destination = await asset(exit.assetId);
+    const recipient = userAddress(destination, exit.recipient, 'recipient');
     const { quote } = await getQuote(api, {
       dry: true,
       originAsset: ARB_USDC_ASSET,
       destinationAsset: exit.assetId,
       amountUnits: net,
-      recipient: exit.recipient,
+      recipient: recipient.address,
       refundTo: PREVIEW_OWNER,
       slippageBps: exit.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
       deadlineMinutes: EXIT_DEADLINE_MINUTES,
@@ -188,31 +205,38 @@ export async function previewIntents(direction: IntentsDirection, input: ExitInp
       minAmountOutFormatted: formatUnits(quote.minAmountOut, destination.decimals),
       timeEstimate: quote.timeEstimate,
       confidential,
+      address: recipient.address,
+      addressFromUnified: recipient.fromUnified,
     };
   }
   const entry = input as EntryInput;
   const origin = await asset(entry.assetId);
   checkEntrySize(origin, BigInt(entry.amountUnits));
+  const refundTo = userAddress(origin, entry.refundTo, 'refund');
   const { quote } = await getQuote(api, {
     dry: true,
     originAsset: entry.assetId,
     destinationAsset: ARB_USDC_ASSET,
     amountUnits: BigInt(entry.amountUnits),
     recipient: PREVIEW_OWNER,
-    refundTo: entry.refundTo,
+    refundTo: refundTo.address,
     slippageBps: entry.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
     deadlineMinutes: ENTRY_DEADLINE_MINUTES,
     confidential,
+    swapType: entrySwapType(confidential),
   });
   return {
     direction,
     amountIn: quote.amountIn,
     amountInFormatted: formatUnits(quote.amountIn, origin.decimals),
+    ...(quote.minAmountIn ? { minAmountInFormatted: formatUnits(quote.minAmountIn, origin.decimals) } : {}),
     amountOut: quote.amountOut,
     amountOutFormatted: formatUnits(quote.amountOut, 6),
     minAmountOutFormatted: formatUnits(quote.minAmountOut, 6),
     timeEstimate: quote.timeEstimate,
     confidential,
+    address: refundTo.address,
+    addressFromUnified: refundTo.fromUnified,
   };
 }
 
@@ -247,6 +271,7 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
   }
   await refuseSecondMove();
   const destination = await asset(input.assetId);
+  const recipient = userAddress(destination, input.recipient, 'recipient').address;
   const feeBps = await railgunFeeBps();
   const net = railgunNetForGross(gross, feeBps);
   const { api, confidential } = await client();
@@ -259,7 +284,7 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
       originAsset: ARB_USDC_ASSET,
       destinationAsset: input.assetId,
       amountUnits: net,
-      recipient: input.recipient,
+      recipient,
       // A refund lands on the fresh owner and goes back into Railgun.
       refundTo: trade.ownerAddress,
       slippageBps: input.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
@@ -300,6 +325,7 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
   const origin = await asset(input.assetId);
   if (input.assetId === ARB_USDC_ASSET) throw new Error('That is already Arbitrum USDC. Use Add funds instead.');
   checkEntrySize(origin, BigInt(input.amountUnits));
+  const refundTo = userAddress(origin, input.refundTo, 'refund').address;
   await refuseSecondMove();
   const { api, confidential } = await client();
 
@@ -312,10 +338,11 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
       destinationAsset: ARB_USDC_ASSET,
       amountUnits: BigInt(input.amountUnits),
       recipient: trade.ownerAddress,
-      refundTo: input.refundTo,
+      refundTo,
       slippageBps: input.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
       deadlineMinutes: ENTRY_DEADLINE_MINUTES,
       confidential,
+      swapType: entrySwapType(confidential),
     });
   } catch (error) {
     await endVenue('intents').catch(() => undefined);
@@ -325,7 +352,9 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
   const view: IntentsView = {
     direction: 'entry',
     stage: 'awaiting-deposit',
-    detail: `Send exactly ${formatUnits(quoted.quote.amountIn, origin.decimals)} ${origin.symbol} to the deposit address.`,
+    detail: quoted.quote.minAmountIn
+      ? `Send ${formatUnits(quoted.quote.amountIn, origin.decimals)} ${origin.symbol} to the deposit address, from any wallet.`
+      : `Send exactly ${formatUnits(quoted.quote.amountIn, origin.decimals)} ${origin.symbol} to the deposit address.`,
     originAsset: input.assetId,
     originLabel: label(origin),
     originDecimals: origin.decimals,
@@ -335,6 +364,7 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
     recipient: trade.ownerAddress,
     refundTo: quoted.request.refundTo,
     amountIn: quoted.quote.amountIn,
+    ...(quoted.quote.minAmountIn ? { minAmountIn: quoted.quote.minAmountIn } : {}),
     confidential,
     ...quoteFields(quoted.response),
     updatedAt: Date.now(),
@@ -419,9 +449,14 @@ async function pollStatus(trade: ActiveTrade, view: IntentsView): Promise<Intent
     ...(status.swapDetails?.refundedAmount && status.swapDetails.refundedAmount !== '0'
       ? { refundedAmount: status.swapDetails.refundedAmount }
       : {}),
+    // A short deposit: kept so the panel can say how much is missing, and so
+    // Cancel is no longer offered once money is at the address.
+    ...(status.status === 'INCOMPLETE_DEPOSIT' && status.swapDetails?.depositedAmount && status.swapDetails.depositedAmount !== '0'
+      ? { depositedAmount: status.swapDetails.depositedAmount }
+      : {}),
   };
 
-  const next = nextFromStatus(view, status.status);
+  const next = nextFromStatus(view, status.status, Date.now(), status.swapDetails?.depositedAmount);
   const delivered_ =
     view.direction === 'exit' && next.stage === 'done'
       ? `Delivered ${formatUnits(view.amountOut, view.destinationDecimals)} ${view.destinationLabel} (quoted).`

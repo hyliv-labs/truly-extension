@@ -10,7 +10,7 @@
  *          arrives at a fresh owner on Arbitrum -> shielded into Railgun.
  */
 
-import type { ChainTx, SwapStatus } from './near-intents';
+import { formatUnits, type ChainTx, type SwapStatus } from './near-intents';
 
 export type IntentsDirection = 'exit' | 'entry';
 
@@ -47,6 +47,13 @@ export interface IntentsView {
   readonly refundTo: string;
   /** Origin units that must land on the deposit address (EXACT_INPUT). */
   readonly amountIn: string;
+  /**
+   * Entry only, FLEX_INPUT quotes: the smallest total deposit that still
+   * swaps. Absent on an EXACT_INPUT quote (an exit, or Confidential mode).
+   */
+  readonly minAmountIn?: string;
+  /** Entry: what 1Click has received so far, when it is less than quoted. */
+  readonly depositedAmount?: string;
   /** Exit only: what leaves the Railgun balance, before Railgun's fee. */
   readonly grossUnits?: string;
   readonly confidential: boolean;
@@ -102,7 +109,11 @@ export function nextFromStatus(
   view: IntentsView,
   status: SwapStatus,
   now = Date.now(),
+  deposited?: string | null,
 ): { stage: IntentsStage; then?: 'shield' | 'finish'; error?: string; detail?: string } {
+  if (status === 'INCOMPLETE_DEPOSIT' && view.direction === 'entry') {
+    return { stage: 'awaiting-deposit', detail: shortDepositDetail(view, deposited) };
+  }
   switch (status) {
     case 'PENDING_DEPOSIT':
       if (view.direction === 'entry' && Date.parse(view.inactiveAt) < now) {
@@ -132,6 +143,27 @@ export function nextFromStatus(
 }
 
 /**
+ * What to tell someone whose wallet or exchange sent less than quoted. With a
+ * FLEX_INPUT quote 1Click counts everything that reaches the address before
+ * the deadline, so paying the difference completes it. An EXACT_INPUT quote
+ * (Confidential mode) refunds a short deposit, so say that instead.
+ */
+export function shortDepositDetail(view: IntentsView, deposited?: string | null): string {
+  const symbol = view.originLabel.split(' on ')[0] ?? '';
+  const fmt = (units: bigint) => `${formatUnits(units, view.originDecimals)} ${symbol}`;
+  const got = deposited && /^\d+$/.test(deposited) ? BigInt(deposited) : null;
+  const until = new Date(view.refundAfter).toLocaleString();
+  if (!view.minAmountIn) {
+    return `${got !== null ? `NEAR Intents received ${fmt(got)}, less than the ${fmt(BigInt(view.amountIn))} quoted. ` : 'The deposit is less than quoted. '}It will be refunded to ${view.refundTo} after ${until}.`;
+  }
+  const floor = BigInt(view.minAmountIn);
+  if (got === null) return `The deposit so far is under the ${fmt(floor)} minimum. Send the rest to the same address before ${until}.`;
+  if (got >= floor) return `NEAR Intents received ${fmt(got)}, enough to swap. Waiting for it to start.`;
+  const missing = floor - got;
+  return `NEAR Intents received ${fmt(got)}. Send at least ${fmt(missing)} more to the same address before ${until}, or it is refunded to ${view.refundTo}.`;
+}
+
+/**
  * An exit still 'unshielding' with no worker running it and no withdrawal
  * record was cut off before anything was signed (a worker restart mid-proof).
  * Nothing will resume it on its own, so it must surface as failed for Retry.
@@ -150,7 +182,7 @@ export function intentsAbandonBlocker(trade: IntentsTradeLike | null): string | 
   if (view.direction === 'exit' && (trade?.withdrawal || view.unshieldTx)) {
     return 'The unshield already went to NEAR Intents. Wait for delivery or the refund; abandoning now would stop Ghosty from shielding a refund back.';
   }
-  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx)) {
+  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx || view.depositedAmount)) {
     return 'Your deposit is with NEAR Intents. Wait for it to land and be shielded; abandoning now would leave the USDC at an address nothing watches.';
   }
   return null;
@@ -171,8 +203,14 @@ export interface IntentsPreview {
   readonly amountOut: string;
   readonly amountOutFormatted: string;
   readonly minAmountOutFormatted: string;
+  /** Entry, flexible quote: the least the deposit may total and still swap. */
+  readonly minAmountInFormatted?: string;
   readonly timeEstimate: number;
   readonly confidential: boolean;
+  /** The user's address exactly as 1Click will use it (refund or delivery). */
+  readonly address: string;
+  /** True when that address is the transparent part of a unified Zcash address the user pasted. */
+  readonly addressFromUnified: boolean;
 }
 
 export interface IntentsAsset {

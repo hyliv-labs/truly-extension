@@ -25,7 +25,8 @@ import {
   type QuoteResponse,
   type StatusResponse,
 } from '../src/lib/near-intents.ts';
-import { exitInterrupted, intentsAbandonBlocker, intentsNeedsTick, nextFromStatus, type IntentsView } from '../src/lib/intents.ts';
+import { exitInterrupted, intentsAbandonBlocker, intentsNeedsTick, nextFromStatus, shortDepositDetail, type IntentsView } from '../src/lib/intents.ts';
+import { f4jumble, f4jumbleInverse, parseZcashAddress, unifiedReceivers, zcashAddressForIntents, zip321Amount, zip321Uri } from '../src/lib/zcash.ts';
 
 let failed = false;
 const fail = (msg: string) => {
@@ -262,7 +263,8 @@ expect('entry SUCCESS shields into Railgun', pick(nextFromStatus(entryView, 'SUC
 expect('entry REFUNDED finishes as refunded', pick(nextFromStatus(entryView, 'REFUNDED', now)), { stage: 'refunded', then: 'finish' });
 expect('entry PENDING_DEPOSIT keeps waiting', pick(nextFromStatus(entryView, 'PENDING_DEPOSIT', now)), { stage: 'awaiting-deposit' });
 expect('exit PENDING_DEPOSIT is swapping (the unshield is on its way)', pick(nextFromStatus(exitView, 'PENDING_DEPOSIT', now)), { stage: 'swapping' });
-expect('INCOMPLETE_DEPOSIT keeps watching for the refund', pick(nextFromStatus(entryView, 'INCOMPLETE_DEPOSIT', now)), { stage: 'swapping' });
+expect('entry INCOMPLETE_DEPOSIT waits for the rest at the same address', pick(nextFromStatus(entryView, 'INCOMPLETE_DEPOSIT', now)), { stage: 'awaiting-deposit' });
+expect('exit INCOMPLETE_DEPOSIT keeps watching (the unshield is exact)', pick(nextFromStatus(exitView, 'INCOMPLETE_DEPOSIT', now)), { stage: 'swapping' });
 expect('FAILED surfaces for Retry', nextFromStatus(exitView, 'FAILED', now).stage, 'failed');
 expect(
   'an entry address past its inactive time with nothing received stops',
@@ -287,6 +289,55 @@ expect('a finished move never blocks', intentsAbandonBlocker({ venue: 'intents',
 expect('a live move ticks', intentsNeedsTick({ venue: 'intents', intents: exitView }), true);
 expect('a failed move does not tick', intentsNeedsTick({ venue: 'intents', intents: { ...exitView, stage: 'failed' } }), false);
 expect('another venue does not tick', intentsNeedsTick({ venue: 'lighter' }), false);
+
+// --- Flexible entries: a wallet or exchange that sends a little less -------------
+const flex = buildQuoteRequest({ ...requestInput(), originAsset: 'nep141:zec.omft.near', destinationAsset: ARB_USDC_ASSET, swapType: 'FLEX_INPUT' });
+expect('an entry can ask for FLEX_INPUT', flex.swapType, 'FLEX_INPUT');
+throws('FLEX_INPUT is refused in Confidential mode', () => buildQuoteRequest({ ...requestInput(), swapType: 'FLEX_INPUT', confidential: true }), /Confidential/);
+// Shape of a real FLEX_INPUT quote (2026-11-12, 0.01 ZEC -> Arbitrum USDC): amountIn echoes, minAmountIn is 1% under.
+const flexQuote = (minAmountIn?: string): QuoteResponse => ({
+  ...real,
+  quote: { ...real.quote, amountIn: flex.amount, ...(minAmountIn === undefined ? {} : { minAmountIn }) },
+  quoteRequest: { ...flex },
+});
+expect('a FLEX_INPUT quote with a floor passes', checkQuote(flex, flexQuote('1980000'), now).minAmountIn, '1980000');
+throws('a FLEX_INPUT quote without a floor is refused', () => checkQuote(flex, flexQuote(), now), /minimum deposit/);
+throws('a FLEX_INPUT floor above the amount is refused', () => checkQuote(flex, flexQuote('2000001'), now), /minimum deposit/);
+
+const zecEntry: IntentsView = { ...entryView, originAsset: 'nep141:zec.omft.near', originLabel: 'ZEC on Zcash', originDecimals: 8, amountIn: '1000000', minAmountIn: '990000' };
+const short1 = shortDepositDetail(zecEntry, '985000');
+expect('a short flexible deposit says how much more to send', /received 0\.00985 ZEC.*at least 0\.00005 ZEC more/.test(short1), true);
+expect('a deposit at the floor is enough', /enough to swap/.test(shortDepositDetail(zecEntry, '990000')), true);
+expect('a short exact deposit says it is refunded', /refunded to t1/.test(shortDepositDetail({ ...zecEntry, minAmountIn: undefined }, '985000')), true);
+expect('abandon is refused once part of an entry arrived', typeof intentsAbandonBlocker({ venue: 'intents', intents: { ...zecEntry, depositedAmount: '985000' } }), 'string');
+
+// --- Zcash addresses from any wallet (ZIP-316 vectors, zcash/zcash-test-vectors) --
+const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+const F4_IN = '5d7a8f739a2d9e945b0ce152a8049e294c4d6e66b164939daffa2ef6ee6921481cdd86b3cc4318d9614fc820905d042b';
+const F4_OUT = '0304d029141b995da5387c125970673504d6c764d91ea6c082123770c7139ccd88ee27368cd0c0921a0444c8e5858d22';
+expect('f4jumble matches the ZIP-316 vector', hex(f4jumble(Buffer.from(F4_IN, 'hex'))), F4_OUT);
+expect('f4jumble inverse matches the ZIP-316 vector', hex(f4jumbleInverse(Buffer.from(F4_OUT, 'hex'))), F4_IN);
+const UA_WITH_T =
+  'u1l8xunezsvhq8fgzfl7404m450nwnd76zshscn6nfys7vyz2ywyh4cc5daaq0c7q2su5lqfh23sp7fkf3kt27ve5948mzpfdvckzaect2jtte308mkwlycj2u0eac077wu70vqcetkxf';
+const UA_NO_T =
+  'u1ay3aawlldjrmxqnjf5medr5ma6p3acnet464ht8lmwplq5cd3ugytcmlf96rrmtgwldc75x94qn4n8pgen36y8tywlq6yjk7lkf3fa8wzjrav8z2xpxqnrnmjxh8tmz6jhfh425t7f3vy6p4pd3zmqayq49efl2c4xydc0gszg660q9p';
+expect('the vector UA carries its P2PKH receiver', hex(unifiedReceivers(UA_WITH_T).get(0)!), '7bb83570b8fae146e03c5331a020b1e0892f631d');
+// t1 of that hash, encoded independently (Python base58check over 1cb8 || hash).
+expect('a unified address yields its transparent t1', zcashAddressForIntents(UA_WITH_T, 'refund'), { address: 't1V9mnyk5Z5cTNMCkLbaDwSskgJZucTLdgW', fromUnified: true });
+expect('a UA with no transparent part is recognised', parseZcashAddress(UA_NO_T), { kind: 'unified' });
+throws('a UA with no transparent part is refused with where to look', () => zcashAddressForIntents(UA_NO_T, 'refund'), /no transparent part.*Zashi: Receive/);
+expect('a t1 address passes as is', zcashAddressForIntents('t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs', 'recipient'), { address: 't1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs', fromUnified: false });
+expect('a tex1 address passes as is', zcashAddressForIntents('tex1qurswpc8qurswpc8qurswpc8qurswpc83kt6pz', 'recipient').address, 'tex1qurswpc8qurswpc8qurswpc8qurswpc83kt6pz');
+expect('a t1 with a bad checksum is invalid', parseZcashAddress('t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbt').kind, 'invalid');
+expect('a one-character change in a UA is invalid', parseZcashAddress(UA_WITH_T.slice(0, -1) + 'q').kind, 'invalid');
+throws('a testnet address is refused', () => zcashAddressForIntents('tmBsTi2xWTjUdEXnuTceL7fecEQKeWaPDJd', 'refund'), /testnet/);
+throws('an EVM address is not a Zcash address', () => zcashAddressForIntents(R, 'refund'), /not a Zcash address/);
+
+expect('ZIP-321 amount trims zeros', zip321Amount(1_000_000n), '0.01');
+expect('ZIP-321 amount keeps all 8 decimals', zip321Amount(123_456_789n), '1.23456789');
+expect('ZIP-321 amount of whole ZEC has no point', zip321Amount(200_000_000n), '2');
+expect('ZIP-321 URI has address and amount, no memo or label', zip321Uri('t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs', 1_000_000n), 'zcash:t1Hsc1LR8yKnbbe3twRp88p6vFfC5t7DLbs?amount=0.01');
+throws('ZIP-321 URI refuses a unified deposit address', () => zip321Uri(UA_WITH_T, 1n), /transparent/);
 
 if (failed) process.exit(1);
 console.log('near-intents: all checks passed');

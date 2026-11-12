@@ -56,6 +56,8 @@ export interface QuoteRequest {
 export interface Quote {
   readonly amountIn: string;
   readonly amountInFormatted: string;
+  /** FLEX_INPUT: the smallest total deposit that still swaps. */
+  readonly minAmountIn?: string;
   readonly amountOut: string;
   readonly amountOutFormatted: string;
   readonly amountOutUsd?: string;
@@ -210,9 +212,20 @@ export function buildQuoteRequest(input: {
   slippageBps: number;
   deadlineMinutes: number;
   confidential?: boolean;
+  /**
+   * EXACT_INPUT (default) when Ghosty sends the deposit itself and knows it to
+   * the unit. FLEX_INPUT when a person pays from their own wallet: an exchange
+   * that takes its fee out of the amount, or a second payment to make up a
+   * short one, still swaps. 1Click does not offer FLEX_INPUT confidentially.
+   */
+  swapType?: 'EXACT_INPUT' | 'FLEX_INPUT';
   now?: number;
 }): QuoteRequest {
   if (input.amountUnits <= 0n) throw new OneClickError('The amount must be positive.');
+  const swapType = input.swapType ?? 'EXACT_INPUT';
+  if (swapType === 'FLEX_INPUT' && input.confidential) {
+    throw new OneClickError('NEAR Intents does not offer a flexible amount in Confidential mode.');
+  }
   if (!Number.isInteger(input.slippageBps) || input.slippageBps < 0 || input.slippageBps > 1_000) {
     throw new OneClickError('Slippage must be between 0 and 10%.');
   }
@@ -221,7 +234,7 @@ export function buildQuoteRequest(input: {
   }
   return {
     dry: input.dry,
-    swapType: 'EXACT_INPUT',
+    swapType,
     slippageTolerance: input.slippageBps,
     originAsset: input.originAsset,
     depositType: 'ORIGIN_CHAIN',
@@ -260,8 +273,15 @@ export function checkQuote(request: QuoteRequest, response: QuoteResponse, now =
 
   // EXACT_INPUT: the deposit must be exactly this. More is refunded with a
   // fee, less is refunded whole; either way the swap does not happen.
+  // FLEX_INPUT quotes the same amountIn, plus a floor the total may fall to.
   if (quote.amountIn !== request.amount) {
     throw new OneClickError(`1Click wants ${quote.amountIn} units in, not the ${request.amount} asked for. Nothing was sent.`);
+  }
+  if (request.swapType === 'FLEX_INPUT') {
+    const floor = quote.minAmountIn ?? '';
+    if (!/^\d+$/.test(floor) || BigInt(floor) <= 0n || BigInt(floor) > BigInt(quote.amountIn)) {
+      throw new OneClickError('1Click returned no usable minimum deposit for a flexible quote. Nothing was sent.');
+    }
   }
   if (!/^\d+$/.test(quote.amountOut ?? '') || BigInt(quote.amountOut) <= 0n) {
     throw new OneClickError('1Click quoted nothing out for this amount. Nothing was sent.');
@@ -311,7 +331,7 @@ export function describeStatus(status: SwapStatus, direction: 'exit' | 'entry'):
     case 'SUCCESS':
       return 'Delivered.';
     case 'INCOMPLETE_DEPOSIT':
-      return 'The deposit was smaller than quoted. 1Click refunds it to the refund address.';
+      return 'The deposit so far is smaller than quoted.';
     case 'REFUNDED':
       return direction === 'exit'
         ? 'The swap did not fill. 1Click refunded the USDC to this fresh address.'
