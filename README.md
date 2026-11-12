@@ -197,20 +197,34 @@ Railgun ──unshield──▶ fresh owner ──USDC transfer──▶ Bridge2
 - **Bring back** refuses while a position, an open order or a non-USDC spot
   token remains (Ghosty never trades for you). Otherwise the owner signs a
   `withdraw3` to itself, saved with its nonce before it is sent so a retry can
-  only resend the same withdrawal. The USDC reaches Arbitrum in 3 to 5
-  minutes and is shielded into Railgun; the owner is retired.
-- Unified-account mode is handled (the spot balance is the account).
-- The recovery scan reads every derived address's Hyperliquid account too.
+  only resend the same withdrawal; Hyperliquid's ledger confirms whether a
+  send whose answer was lost went through. The USDC reaches Arbitrum in 3 to 5
+  minutes and is shielded into Railgun. A withdrawal you made on Hyperliquid's
+  own site is found in the ledger and waited for too. The address is retired
+  only once Hyperliquid shows nothing left; otherwise what arrived is shielded
+  and the account stays open for another Bring back.
+- Unified-account mode is handled offline (the spot balance is the account);
+  not verified live.
+- The recovery scan reads every derived address's Hyperliquid balance too,
+  and shows a failed read instead of an empty account.
 
 Verified: the `withdraw3` and `ApproveAgent` signatures match Hyperliquid's
 own Python SDK byte for byte (`scripts/hyperliquid-check.ts`); the live
-`/info` reads parse; on app.hyperliquid.xyz the page sees Ghosty over EIP-6963,
-connects a fresh owner, and Enable trading's typed data is shown, approved and
+`/info` and ledger reads parse; Bridge2 reads as not paused. On
+app.hyperliquid.xyz, Hyperliquid's own Connect modal lists Truly and picking
+it connects a fresh owner (browser test, throwaway vault). The site then asks
+the wallet to accept its Terms of Use before Enable trading; the test stops
+there, since accepting terms is the user's call. Enable trading's
+ApproveAgent request, sent to the provider directly, is shown, approved and
 recovers to that owner. viem refuses Hyperliquid's type names (they contain a
 `:`), so these are hashed by `src/lib/typed-data.ts` with viem's own encoder
 minus that one check.
 
-Not yet run with money: a bridge deposit, a trade, a withdrawal. Stated limits:
+Not yet run with money: a bridge deposit, a trade, a withdrawal. Whether the
+1 USDC fee comes out of the amount or on top is not documented; a live ledger
+row shows the amount paid on Arbitrum with the fee listed apart, and if a
+full-balance withdrawal is refused Bring back asks once for 1 USDC less.
+Stated limits:
 Hyperliquid's docs call Bridge2 the legacy bridge and prefer CCTP, though its
 site still deposits Arbitrum USDC through Bridge2; a withdrawal can be refused
 when the bridge is short of liquidity, in which case nothing leaves Hyperliquid
