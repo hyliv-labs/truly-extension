@@ -5,22 +5,33 @@
  * CompoundSupply; only the screens are new. Bringing funds back is Return.tsx.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { send, SLOW_TIMEOUT_MS, type VaultStatus } from '@truly/lib/messages';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { TradeQuote } from '@truly/lib/trade-plan';
+import { HYPERLIQUID_APP, HYPERLIQUID_MIN_FUND_UNITS } from '@truly/lib/hyperliquid';
 import type { SessionView } from '@truly/lib/trade-session';
 import { Mascot } from './Mascot';
 import { EyeIcon, GxBack, GxBrand, GxScreen } from './Ghosty';
 
-export type Venue = 'lighter' | 'uniswap' | 'compound';
+export type Venue = 'lighter' | 'uniswap' | 'compound' | 'hyperliquid';
 
 export const VENUES: Record<Venue, { name: string; url: string; minUnits: bigint; ready: string }> = {
   lighter: { name: 'Lighter', url: 'https://app.lighter.xyz', minUnits: 5_000_000n, ready: 'Trade' },
   uniswap: { name: 'Uniswap', url: 'https://app.uniswap.org/swap?chain=arbitrum', minUnits: 1_000_000n, ready: 'Swap' },
   compound: { name: 'Compound', url: 'https://app.compound.finance/markets/usdc-arb', minUnits: 1_000_000n, ready: 'Supply' },
+  hyperliquid: { name: 'Hyperliquid', url: HYPERLIQUID_APP, minUnits: HYPERLIQUID_MIN_FUND_UNITS, ready: 'Trade' },
 };
+
+/** The account record a dapp venue keeps on its trade. Lighter keeps a session instead. */
+export function appView(venue: Venue, trade: NonNullable<VaultStatus['activeTrade']> | null | undefined) {
+  if (!trade) return undefined;
+  if (venue === 'uniswap') return trade.uniswap;
+  if (venue === 'compound') return trade.compound;
+  if (venue === 'hyperliquid') return trade.hyperliquid;
+  return undefined;
+}
 
 export const venueLogo = (v: Venue) => chrome.runtime.getURL(`apps/${v}.png`);
 
@@ -29,6 +40,7 @@ export function venueFromSite(site: string | null | undefined): Venue | null {
   if (site.includes('lighter')) return 'lighter';
   if (site.includes('uniswap')) return 'uniswap';
   if (site.includes('compound')) return 'compound';
+  if (site.includes('hyperliquid')) return 'hyperliquid';
   return null;
 }
 
@@ -507,7 +519,7 @@ export function GoGhost({
   const openVenues = activeVenues ?? [];
   const resumeHere = openVenues.includes(venue);
   const canGo = resumeHere || (units !== null && !tooSmall && !tooBig && !working);
-  const readyIn = venue === 'lighter' ? (fast === false ? '15 to 20 minutes' : 'About a minute') : 'About a minute';
+  const readyIn = venue === 'lighter' ? (fast === false ? '15 to 20 minutes' : 'About a minute') : venue === 'hyperliquid' ? 'A few minutes' : 'About a minute';
 
   const preset = (u: bigint) => setAmount(fmt(u < 0n ? 0n : u));
 
@@ -530,6 +542,8 @@ export function GoGhost({
         await send({ kind: 'openTrade', trade }, SLOW_TIMEOUT_MS);
       } else if (venue === 'uniswap') {
         await send({ kind: 'fundUniswap', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
+      } else if (venue === 'hyperliquid') {
+        await send({ kind: 'fundHyperliquid', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       } else {
         await send({ kind: 'fundCompound', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       }
@@ -643,9 +657,11 @@ export function GoGhost({
 type Stage = 'paying' | 'crediting' | 'ready' | 'failed';
 
 function stageOf(venue: Venue, trade: NonNullable<VaultStatus['activeTrade']>): { venue: Venue; stage: Stage } | null {
-  if (venue === 'uniswap' || venue === 'compound') {
-    const view = venue === 'uniswap' ? trade.uniswap : trade.compound;
+  if (venue !== 'lighter') {
+    const view = appView(venue, trade);
     if (!view) return null;
+    if (venue === 'hyperliquid' && trade.hyperliquid?.status === 'funding' && trade.hyperliquid.step === 'crediting') return { venue, stage: 'crediting' };
+    if (venue === 'hyperliquid' && trade.hyperliquid?.status === 'failed') return trade.hyperliquid.failedIn === 'shielding' ? null : { venue, stage: 'failed' };
     if (view.status === 'funding') return { venue, stage: 'paying' };
     if (view.status === 'funded') return { venue, stage: 'ready' };
     if (view.status === 'failed' && !view.unshieldTx) return { venue, stage: 'failed' };
@@ -670,12 +686,12 @@ export function openStages(status: VaultStatus | null): { venue: Venue; stage: S
   if (!status) return [];
   const book = status.openVenues ?? {};
   const rows: { venue: Venue; stage: Stage; amountUnits: string }[] = [];
-  for (const venue of ['lighter', 'uniswap', 'compound'] as const) {
+  for (const venue of Object.keys(VENUES) as Venue[]) {
     const trade = book[venue] ?? (status.activeTrade && (status.activeTrade.venue ?? 'lighter') === venue ? status.activeTrade : null);
     if (!trade) continue;
     const stage = stageOf(venue, trade);
     if (!stage) continue;
-    const amountUnits = venue === 'lighter' ? trade.session?.marginUnits ?? '0' : (venue === 'uniswap' ? trade.uniswap?.amountIn : trade.compound?.amountIn) ?? '0';
+    const amountUnits = venue === 'lighter' ? trade.session?.marginUnits ?? '0' : appView(venue, trade)?.amountIn ?? '0';
     rows.push({ ...stage, amountUnits });
   }
   return rows;
@@ -703,18 +719,30 @@ export function GhostProgress({
   const [error, setError] = useState<string | null>(null);
   const t = status.activeTrade!;
   const lighter = venue === 'lighter';
-  const amountUnits = lighter ? t.session?.marginUnits : (t.uniswap ?? t.compound)?.amountIn;
+  const wallet = appView(venue, t);
+  const amountUnits = lighter ? t.session?.marginUnits : wallet?.amountIn;
   const name = VENUES[venue].name;
 
   // A Lighter trade only moves while something asks it to: this is that.
+  // A Hyperliquid funding that a worker restart cut off resumes the same way:
+  // the worker continues the saved record and never pays the bridge twice.
+  const resuming = useRef(false);
   const poll = useCallback(async () => {
     try {
       if (lighter) setView(await send({ kind: stage === 'ready' ? 'tradeSession' : 'advanceTrade' }, SLOW_TIMEOUT_MS));
+      if (venue === 'hyperliquid' && stage === 'crediting' && !resuming.current && amountUnits) {
+        resuming.current = true;
+        void send({ kind: 'fundHyperliquid', amountUnits }, SLOW_TIMEOUT_MS)
+          .catch(() => undefined)
+          .finally(() => {
+            resuming.current = false;
+          });
+      }
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [lighter, stage, onChanged]);
+  }, [lighter, venue, stage, amountUnits, onChanged]);
 
   useEffect(() => {
     if (stage === 'ready' && !lighter) return;
@@ -729,6 +757,7 @@ export function GhostProgress({
     try {
       if (lighter) await send({ kind: 'retryFunding' }, SLOW_TIMEOUT_MS);
       else if (venue === 'uniswap') await send({ kind: 'fundUniswap', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
+      else if (venue === 'hyperliquid') await send({ kind: 'fundHyperliquid', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
       else await send({ kind: 'fundCompound', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
       await poll();
     } catch (e) {
@@ -768,7 +797,9 @@ export function GhostProgress({
           <h1 className="gx-title">You&apos;re a ghost on {name}</h1>
           <p className="gx-sub">
             {VENUES[venue].ready} as usual. {name} sees a private account{amountUnits ? ` with ${fmt(amountUnits)} USDC` : ''}.
-            {venue !== 'lighter' && ' Pick Arbitrum, then Ghosty in its wallet list.'}
+            {venue === 'hyperliquid'
+              ? ' Connect, pick Ghosty in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
+              : venue !== 'lighter' && ' Pick Arbitrum, then Ghosty in its wallet list.'}
           </p>
         </div>
         <button type="button" className="gx-btn primary" onClick={() => void chrome.tabs.create({ url: VENUES[venue].url })}>
@@ -782,13 +813,13 @@ export function GhostProgress({
   }
 
   const failed = stage === 'failed';
-  const detail = lighter ? view?.session.detail ?? t.session?.detail : (t.uniswap ?? t.compound)?.detail;
+  const detail = lighter ? view?.session.detail ?? t.session?.detail : wallet?.detail;
   const steps: { label: string; state: 'done' | 'now' | 'todo' | 'bad' }[] = [
     { label: stage === 'paying' || failed ? 'Paying from your private balance' : 'Paid from your private balance', state: failed ? 'bad' : stage === 'paying' ? 'now' : 'done' },
-    ...(lighter ? [{ label: 'Lighter is crediting it', state: (stage === 'crediting' ? 'now' : 'todo') as 'now' | 'todo' }] : []),
+    ...(lighter || venue === 'hyperliquid' ? [{ label: `${name} is crediting it`, state: (stage === 'crediting' ? 'now' : 'todo') as 'now' | 'todo' }] : []),
     { label: `Ready to ${VENUES[venue].ready.toLowerCase()}`, state: 'todo' },
   ];
-  const wait = lighter && stage === 'crediting' ? 'This can take up to 20 minutes.' : 'About a minute.';
+  const wait = lighter && stage === 'crediting' ? 'This can take up to 20 minutes.' : venue === 'hyperliquid' ? 'A few minutes.' : 'About a minute.';
 
   return (
     <GxScreen>

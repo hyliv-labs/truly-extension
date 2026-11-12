@@ -22,16 +22,18 @@ import {
   SLOW_TIMEOUT_MS,
 } from '@truly/lib/messages';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
+import type { VenueId } from '@truly/lib/trade';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 
-function addressLabel(venue: 'lighter' | 'uniswap' | 'compound' | undefined): string {
+function addressLabel(venue: VenueId | undefined): string {
   if (venue === 'uniswap') return 'Uniswap address';
   if (venue === 'compound') return 'Compound address';
+  if (venue === 'hyperliquid') return 'Hyperliquid address';
   return 'Lighter address';
 }
 
-function onSite(venue: 'lighter' | 'uniswap' | 'compound' | undefined): boolean {
-  return venue === 'uniswap' || venue === 'compound';
+function onSite(venue: VenueId | undefined): boolean {
+  return venue === 'uniswap' || venue === 'compound' || venue === 'hyperliquid';
 }
 
 export function App() {
@@ -71,7 +73,7 @@ export function App() {
   const [more, setMore] = useState(false);
   /** The funded screen can be left. Home then shows that account and the actions. */
   const [atHome, setAtHome] = useState(false);
-  const [settled, setSettled] = useState<{ venue: 'lighter' | 'uniswap' | 'compound'; shielded: { token: string; symbol: string; amount: string; reason?: string }[]; left: { token: string; symbol: string; amount: string; reason?: string }[] } | null>(null);
+  const [settled, setSettled] = useState<{ venue: VenueId; shielded: { token: string; symbol: string; amount: string; reason?: string }[]; left: { token: string; symbol: string; amount: string; reason?: string }[] } | null>(null);
   const [screen, setScreen] = useState<'home' | 'go' | 'add' | 'intents'>('home');
   /** Kept on after a NEAR Intents move ends, so its result stays on screen until Done. */
   const [intentsOpen, setIntentsOpen] = useState(false);

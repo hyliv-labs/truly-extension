@@ -25,6 +25,14 @@ const LIGHTER_ORIGINS: [string, ...string[]] = [
   'https://v3-app.compound.finance',
 ];
 
+/**
+ * Hyperliquid keeps its own list. Its app stores the agent key it trades
+ * with in localStorage, per connected address. Clearing it whenever Lighter
+ * starts would make an open Hyperliquid account ask to Enable trading again,
+ * so it is cleared only when a Hyperliquid address starts or ends.
+ */
+const HYPERLIQUID_ORIGINS: [string, ...string[]] = ['https://hyperliquid.xyz', 'https://app.hyperliquid.xyz'];
+
 export interface CleanupResult {
   readonly origins: string[];
 }
@@ -35,6 +43,15 @@ export interface CleanupResult {
  * under the page.
  */
 export async function clearLighterSiteData(): Promise<CleanupResult> {
+  return clearOrigins(LIGHTER_ORIGINS);
+}
+
+/** The same cleanup for Hyperliquid's app, between Hyperliquid addresses. */
+export async function clearHyperliquidSiteData(): Promise<CleanupResult> {
+  return clearOrigins(HYPERLIQUID_ORIGINS);
+}
+
+async function clearOrigins(origins: [string, ...string[]]): Promise<CleanupResult> {
   // Best effort, and bounded. chrome.browsingData.remove can sit forever
   // while one of these origins still has an open page. Connect must not wait
   // on that.
@@ -42,7 +59,7 @@ export async function clearLighterSiteData(): Promise<CleanupResult> {
     5_000,
     chrome.browsingData
       .remove(
-        { origins: [...LIGHTER_ORIGINS] },
+        { origins: [...origins] },
         {
           cookies: true,
           localStorage: true,
@@ -58,7 +75,7 @@ export async function clearLighterSiteData(): Promise<CleanupResult> {
     undefined,
   );
 
-  return { origins: [...LIGHTER_ORIGINS] };
+  return { origins: [...origins] };
 }
 
 function within<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {

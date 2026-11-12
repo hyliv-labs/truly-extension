@@ -26,7 +26,7 @@ import {
   unlock,
   requireUnlockedMnemonic,
 } from '@truly/lib/vault';
-import { endTrade, endVenue, getActiveTrade, getVenueTrade, listOpenVenues, startTrade, startVenue, tradeForOrigin, type VenueId } from '@truly/lib/trade';
+import { endTrade, endVenue, getActiveTrade, getVenueTrade, listOpenVenues, startTrade, startVenue, tradeForOrigin, venueFromOrigin, type VenueId } from '@truly/lib/trade';
 import {
   broadcastProviderEvent,
   grantConnectConsent,
@@ -58,6 +58,7 @@ import { publicClient } from '@truly/lib/chain';
 import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
 import { fundCompoundAccount, shieldCompoundAccount } from '@truly/lib/compound-private';
+import { fundHyperliquidAccount, shieldHyperliquidAccount } from '@truly/lib/hyperliquid-private';
 import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
 import {
   advanceIntents,
@@ -548,6 +549,18 @@ async function handle(
       return shielded;
     }
 
+    case 'fundHyperliquid': {
+      await touchAutoLock();
+      return fundHyperliquidAccount(BigInt(message.amountUnits));
+    }
+
+    case 'shieldHyperliquid': {
+      await touchAutoLock();
+      const shielded = await shieldHyperliquidAccount();
+      if (shielded.status === 'done') await announceVenueEnded('hyperliquid');
+      return shielded;
+    }
+
     case 'fundingWallet': {
       await touchAutoLock();
       const view = await fundingWalletBalances();
@@ -653,7 +666,7 @@ async function handle(
 async function refreshLighterTabs(): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({
-      url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*'],
+      url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*'],
     });
     for (const tab of tabs) {
       if (tab.id === undefined) continue;
@@ -787,22 +800,13 @@ async function tickIntents(): Promise<void> {
 
 /** Lighter should drop the owner the moment the trade is no longer active. */
 function venueOfMessage(origin: string): VenueId {
-  let host = origin;
-  try {
-    host = new URL(origin).hostname;
-  } catch {
-    host = origin;
-  }
-  if (host === 'uniswap.org' || host.endsWith('.uniswap.org')) return 'uniswap';
-  if (host === 'compound.xyz' || host.endsWith('.compound.xyz') || host === 'compound.finance' || host.endsWith('.compound.finance')) {
-    return 'compound';
-  }
-  return 'lighter';
+  return venueFromOrigin(origin) ?? 'lighter';
 }
 
 function venueTabs(venue: VenueId): string[] {
   if (venue === 'uniswap') return ['https://*.uniswap.org/*'];
   if (venue === 'compound') return ['https://*.compound.xyz/*', 'https://*.compound.finance/*'];
+  if (venue === 'hyperliquid') return ['https://*.hyperliquid.xyz/*'];
   return ['https://*.lighter.xyz/*'];
 }
 

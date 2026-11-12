@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { send, SLOW_TIMEOUT_MS } from '@truly/lib/messages';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 import type { TradeQuote } from '@truly/lib/trade-plan';
+import type { VenueId } from '@truly/lib/trade';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
@@ -45,7 +46,7 @@ export function TradeForm({
   /** Origin of a site that asked to connect, when the popup was opened for that. */
   site?: string | null;
   /** Set once an address is opened for one venue. The other venue stays closed. */
-  activeVenue?: 'lighter' | 'uniswap' | 'compound' | null;
+  activeVenue?: VenueId | null;
   /**
    * Set when Lighter is already connected to a trade that has no deposit yet.
    * Funding attaches to that trade (openTradeSession), so the deposit goes to
@@ -60,7 +61,7 @@ export function TradeForm({
   sync?: RailgunSyncStatus | null;
 }) {
   const [margin, setMargin] = useState('10');
-  const [venue, setVenue] = useState<'uniswap' | 'lighter' | 'compound'>(
+  const [venue, setVenue] = useState<VenueId>(
     activeVenue ?? (site?.includes('compound') ? 'compound' : site?.includes('lighter') ? 'lighter' : 'uniswap'),
   );
 
@@ -141,6 +142,8 @@ export function TradeForm({
       />
       {venue === 'uniswap' ? (
         <UniswapSwap busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
+      ) : venue === 'hyperliquid' ? (
+        <p className="field-label">This Hyperliquid account is funded and brought back from the Ghosty screens.</p>
       ) : venue === 'compound' ? (
         <CompoundSupply busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
       ) : (

@@ -12,6 +12,8 @@ import { erc20Abi, formatUnits, multicall3Abi, type Address } from 'viem';
 import { publicClient } from './chain';
 import { COMPOUND_MARKETS } from './compound';
 import { getAccountIndex } from './lighter';
+import { readHyperliquid } from './hyperliquid-api';
+import { totalUsdc, type HyperliquidAccount } from './hyperliquid';
 import { readTradingAccount } from './lighter-trading';
 import { ownerUsdcBalance } from './reshield';
 import { RAILGUN_RETURN_TOKENS } from './uniswap';
@@ -71,7 +73,7 @@ const COMPOUND_DECIMALS: Record<string, number> = {
 };
 
 export interface WalletHolding {
-  readonly place: 'Arbitrum' | 'Lighter' | 'Compound';
+  readonly place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid';
   readonly symbol: string;
   readonly amount: string;
 }
@@ -100,7 +102,8 @@ function showDecimal(raw: string): string {
  *
  * The old scan only reads USDC on Arbitrum, so a Lighter deposit or a Compound
  * supply looks like an empty address. This one also reads ETH and the tokens
- * Railgun can bring back, the four Arbitrum Comets, and Lighter collateral.
+ * Railgun can bring back, the four Arbitrum Comets, Lighter collateral, and
+ * the Hyperliquid account (perp and spot USDC, open positions).
  * The funding address is included. It is not a trade owner.
  */
 export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
@@ -142,6 +145,11 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
     }),
   );
 
+  // One read per address. A failed read shows nothing rather than failing the scan.
+  const hyperliquid: (HyperliquidAccount | null)[] = await Promise.all(
+    rows.map((row) => readHyperliquid(row.address).catch(() => null)),
+  );
+
   return rows.flatMap((row, rowIndex) => {
     const holdings: WalletHolding[] = [];
     const start = rowIndex * stride;
@@ -168,6 +176,14 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
         place: 'Lighter',
         symbol: account.positions.length > 0 ? 'USDC · position open' : 'USDC',
         amount: showDecimal(account.collateralRaw),
+      });
+    }
+    const hl = hyperliquid[rowIndex];
+    if (hl && (totalUsdc(hl) > 0n || hl.openPositions.length > 0 || hl.spotOther.length > 0)) {
+      holdings.push({
+        place: 'Hyperliquid',
+        symbol: hl.openPositions.length > 0 ? 'USDC · position open' : hl.spotOther.length > 0 ? `USDC · ${hl.spotOther.map((t) => t.coin).join(', ')}` : 'USDC',
+        amount: showAmount(totalUsdc(hl) < 0n ? 0n : totalUsdc(hl), 6),
       });
     }
     return holdings.length > 0 ? [{ ...row, holdings }] : [];

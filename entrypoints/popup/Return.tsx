@@ -1,29 +1,31 @@
 /**
  * Bring funds back, in the same Ghosty screens as the deposit.
  *
- * Lighter: fast-withdraw, then shield. Uniswap and Compound: read the
+ * Lighter: fast-withdraw, then shield. Hyperliquid: withdraw to the
+ * address over its bridge, then shield. Uniswap and Compound: read the
  * address and shield what Railgun can hold. Same worker calls as the old
  * panels. An open Lighter position or an open Compound position is refused
  * by the worker; this screen only starts the call.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatUnits } from 'viem';
 import { send, SLOW_TIMEOUT_MS, type VaultStatus } from '@truly/lib/messages';
 import { dappVenue } from '@truly/lib/intents';
 import { RAILGUN_RETURN_TOKENS } from '@truly/lib/uniswap';
 import { Mascot } from './Mascot';
 import { GxBack, GxBrand, GxScreen } from './Ghosty';
-import { VENUES, venueLogo, type Venue } from './Deposit';
+import { appView, VENUES, venueLogo, type Venue } from './Deposit';
 
 export type ReturnPhase = 'confirm' | 'moving' | 'done' | 'failed';
 
 type TokenLine = { token: string; symbol: string; amount: string; reason?: string };
 
 function phaseOf(venue: Venue, trade: NonNullable<VaultStatus['activeTrade']>): { venue: Venue; phase: ReturnPhase } | null {
-  if (venue === 'uniswap' || venue === 'compound') {
-    const wallet = venue === 'uniswap' ? trade.uniswap : trade.compound;
+  if (venue !== 'lighter') {
+    const wallet = appView(venue, trade);
     if (!wallet) return null;
+    if (venue === 'hyperliquid' && wallet.status === 'failed') return trade.hyperliquid?.failedIn === 'shielding' ? { venue, phase: 'failed' } : null;
     if (wallet.status === 'shielding') return { venue, phase: 'moving' };
     if (wallet.status === 'done') return { venue, phase: 'done' };
     if (wallet.status === 'failed' && wallet.unshieldTx) return { venue, phase: 'failed' };
@@ -39,7 +41,7 @@ function phaseOf(venue: Venue, trade: NonNullable<VaultStatus['activeTrade']>): 
 export function returnPhase(status: VaultStatus | null): { venue: Venue; phase: ReturnPhase } | null {
   if (!status) return null;
   const book = status.openVenues;
-  for (const venue of ['lighter', 'uniswap', 'compound'] as const) {
+  for (const venue of Object.keys(VENUES) as Venue[]) {
     const trade = book?.[venue];
     if (!trade) continue;
     const phase = phaseOf(venue, trade);
@@ -81,7 +83,7 @@ function SiteChip({ venue }: { venue: Venue }) {
 }
 
 function linesOf(status: VaultStatus, venue: Venue): { shielded: TokenLine[]; left: TokenLine[] } {
-  const view = venue === 'uniswap' ? status.activeTrade?.uniswap : venue === 'compound' ? status.activeTrade?.compound : null;
+  const view = appView(venue, status.activeTrade);
   return { shielded: view?.shielded ?? [], left: view?.left ?? [] };
 }
 
@@ -113,7 +115,7 @@ export function GhostReturn({
   const name = VENUES[venue].name;
   const lighter = venue === 'lighter';
   const session = status.activeTrade?.session;
-  const wallet = status.activeTrade?.uniswap ?? status.activeTrade?.compound;
+  const wallet = appView(venue, status.activeTrade);
 
   useEffect(() => {
     const next = linesOf(status, venue);
@@ -138,11 +140,25 @@ export function GhostReturn({
     };
   }, [phase, lighter, onChanged]);
 
+  // A Hyperliquid withdrawal waits minutes for Arbitrum. If the worker that was
+  // waiting is gone, ask again: it continues the saved, signed withdrawal.
+  const resuming = useRef(false);
   useEffect(() => {
     if (phase !== 'moving' || lighter) return;
-    const id = setInterval(() => void onChanged(), 4_000);
+    const tick = () => {
+      if (venue === 'hyperliquid' && !working && !resuming.current) {
+        resuming.current = true;
+        void send({ kind: 'shieldHyperliquid' }, SLOW_TIMEOUT_MS)
+          .catch(() => undefined)
+          .finally(() => {
+            resuming.current = false;
+          });
+      }
+      void onChanged();
+    };
+    const id = setInterval(tick, 4_000);
     return () => clearInterval(id);
-  }, [phase, lighter, onChanged]);
+  }, [phase, lighter, venue, working, onChanged]);
 
   const bring = async () => {
     setWorking(true);
@@ -154,13 +170,14 @@ export function GhostReturn({
           if (lighter && session?.state === 'withdraw-failed') outcome = await send({ kind: 'retryLighterExit' }, SLOW_TIMEOUT_MS);
           else if (lighter) outcome = await send({ kind: 'shieldFunds' }, SLOW_TIMEOUT_MS);
           else if (venue === 'uniswap') outcome = await send({ kind: 'shieldUniswap' }, SLOW_TIMEOUT_MS);
+          else if (venue === 'hyperliquid') outcome = await send({ kind: 'shieldHyperliquid' }, SLOW_TIMEOUT_MS);
           else outcome = await send({ kind: 'shieldCompound' }, SLOW_TIMEOUT_MS);
           break;
         } catch (e) {
           const latest = await send({ kind: 'status' }).catch(() => null);
           const next = returnPhase(latest);
           if (next && next.phase !== 'confirm') break;
-          const walletView = latest?.activeTrade?.uniswap ?? latest?.activeTrade?.compound;
+          const walletView = appView(venue, latest?.openVenues?.[venue] ?? latest?.activeTrade);
           if (walletView?.status === 'done') {
             outcome = walletView;
             break;
@@ -257,6 +274,7 @@ export function GhostReturn({
 
   if (phase === 'moving') {
     const state = session?.state;
+    const hlStep = status.activeTrade?.hyperliquid?.step;
     const steps: { label: string; state: 'done' | 'now' | 'todo' }[] = lighter
       ? [
           { label: `Taking USDC off ${name}`, state: state === 'withdrawing' ? 'now' : 'done' },
@@ -265,10 +283,16 @@ export function GhostReturn({
             state: state === 'withdrawing' ? 'todo' : 'now',
           },
         ]
-      : [
-          { label: `Reading what ${name} left`, state: 'now' },
-          { label: 'Shielding into your private balance', state: 'todo' },
-        ];
+      : venue === 'hyperliquid'
+        ? [
+            { label: `Withdrawing USDC from ${name}`, state: hlStep === 'withdrawing' ? 'now' : 'done' },
+            { label: 'Waiting for it on Arbitrum', state: hlStep === 'withdrawing' ? 'todo' : hlStep === 'arriving' ? 'now' : 'done' },
+            { label: 'Shielding into your private balance', state: hlStep === 'shielding' ? 'now' : 'todo' },
+          ]
+        : [
+            { label: `Reading what ${name} left`, state: 'now' },
+            { label: 'Shielding into your private balance', state: 'todo' },
+          ];
     return (
       <GxScreen>
         {top}
@@ -333,7 +357,9 @@ export function GhostReturn({
     ? `Close the position on ${name} first. This withdraws the USDC and shields it back. An open position stays where it is.`
     : venue === 'compound'
       ? `Withdraw on ${name} first. This will not shield while a supply, borrow, or reward is still open.`
-      : `When you finish on ${name}, this reads the address and shields USDC, WETH, USDT, DAI, and ARB. Anything else stays there, and gets named.`;
+      : venue === 'hyperliquid'
+        ? `Close your positions and cancel open orders on ${name} first. This withdraws the USDC to Arbitrum (${name} keeps a 1 USDC fee) and shields it back.`
+        : `When you finish on ${name}, this reads the address and shields USDC, WETH, USDT, DAI, and ARB. Anything else stays there, and gets named.`;
 
   return (
     <GxScreen>
@@ -358,7 +384,7 @@ export function GhostReturn({
         </div>
         <div>
           <span>You do there</span>
-          <span>{lighter ? 'Close the position' : venue === 'compound' ? 'Withdraw the supply' : 'Finish the swap'}</span>
+          <span>{lighter || venue === 'hyperliquid' ? 'Close the position' : venue === 'compound' ? 'Withdraw the supply' : 'Finish the swap'}</span>
         </div>
         <div>
           <span>Then Ghosty</span>
@@ -412,11 +438,12 @@ export function GhostMore({
         <GxBack onClick={onBack} label="More options" disabled={disabled} />
       </div>
       <p className="gx-sub">These don’t move funds unless you abandon an address that still holds some.</p>
-      {(status.activeTrade?.session?.error?.message ?? status.activeTrade?.session?.detail ?? status.activeTrade?.uniswap?.error ?? status.activeTrade?.compound?.error) && (
+      {(status.activeTrade?.session?.error?.message ?? status.activeTrade?.session?.detail ?? status.activeTrade?.uniswap?.error ?? status.activeTrade?.compound?.error ?? status.activeTrade?.hyperliquid?.error) && (
         <p className="gx-note">
           {status.activeTrade?.session?.error?.message
             ?? status.activeTrade?.uniswap?.error
             ?? status.activeTrade?.compound?.error
+            ?? status.activeTrade?.hyperliquid?.error
             ?? status.activeTrade?.session?.detail}
         </p>
       )}
@@ -438,7 +465,9 @@ export function GhostMore({
           disabled={disabled}
           onClick={() => {
             const abandon = window.confirm(
-              venue === 'uniswap' || venue === 'compound'
+              venue === 'hyperliquid'
+                ? 'Abandon this address? It is burned and will not be reused. USDC still on Hyperliquid stays there until you scan old addresses for it.'
+                : venue === 'uniswap' || venue === 'compound'
                 ? 'Abandon this address? It is burned and will not be reused. Tokens still on it stay there. Bring funds back first if they should return.'
                 : 'Abandon this account? Its address is burned and will not be reused. Funds still on Lighter or at that address stay there until you scan for them.',
             );

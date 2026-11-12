@@ -11,22 +11,23 @@ import type { Address } from 'viem';
 import { currentOwner, getOwnerIndex, retireOwner } from './vault';
 import { skipUsedOwners } from './fresh-owner';
 import { configProblems } from './config';
-import { clearLighterSiteData } from './site-cleanup';
+import { clearHyperliquidSiteData, clearLighterSiteData } from './site-cleanup';
 import type { TradeSession } from './session-types';
 import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
 import type { IntentsView } from './intents';
+import type { HyperliquidAccountView } from './hyperliquid';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 
-export type VenueId = 'lighter' | 'uniswap' | 'compound';
+export type VenueId = 'lighter' | 'uniswap' | 'compound' | 'hyperliquid';
 /**
  * A slot in the book. 'intents' is a NEAR Intents exit or entry: it has its
  * own fresh owner like any venue, but no dapp ever connects to it, so it is
  * never the "focused" trade a site or the Lighter flow reads.
  */
 export type BookSlot = VenueId | 'intents';
-const SLOTS: readonly BookSlot[] = ['lighter', 'uniswap', 'compound', 'intents'];
+const SLOTS: readonly BookSlot[] = ['lighter', 'uniswap', 'compound', 'hyperliquid', 'intents'];
 
 export function venueFromOrigin(origin: string): VenueId | null {
   let host = origin;
@@ -37,6 +38,7 @@ export function venueFromOrigin(origin: string): VenueId | null {
   }
   if (host === 'uniswap.org' || host.endsWith('.uniswap.org')) return 'uniswap';
   if (host === 'lighter.xyz' || host.endsWith('.lighter.xyz')) return 'lighter';
+  if (host === 'hyperliquid.xyz' || host.endsWith('.hyperliquid.xyz')) return 'hyperliquid';
   if (
     host === 'compound.xyz' ||
     host.endsWith('.compound.xyz') ||
@@ -58,6 +60,7 @@ export interface VenueBook {
   lighter?: ActiveTrade;
   uniswap?: ActiveTrade;
   compound?: ActiveTrade;
+  hyperliquid?: ActiveTrade;
   intents?: ActiveTrade;
 }
 const LOCAL_TRADE_HISTORY = 'truly:tradeHistory';
@@ -140,11 +143,13 @@ export interface ActiveTrade {
   /** The in-extension market trade this owner exists for, when there is one. */
   readonly session?: TradeSession;
   /** Which venue this address was opened for. Absent on older Lighter trades. */
-  readonly venue?: 'lighter' | 'uniswap' | 'compound' | 'intents';
+  readonly venue?: BookSlot;
   /** Uniswap funding and the shield back. A retry continues this record. */
   readonly uniswap?: UniswapAccountView;
   /** Compound funding and the shield back. A retry continues this record. */
   readonly compound?: CompoundAccountView;
+  /** Hyperliquid funding (bridge deposit), the withdrawal and the shield back. */
+  readonly hyperliquid?: HyperliquidAccountView;
   /** A NEAR Intents move. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
   readonly intents?: IntentsView;
 }
@@ -165,7 +170,7 @@ function serialized<T>(task: () => Promise<T>): Promise<T> {
 type TradePatch = Partial<Omit<ActiveTrade, 'ownerIndex' | 'ownerAddress' | 'startedAt'>>;
 
 function venueOf(trade: ActiveTrade): BookSlot {
-  return trade.venue === 'uniswap' || trade.venue === 'compound' || trade.venue === 'intents' ? trade.venue : 'lighter';
+  return trade.venue && trade.venue !== 'lighter' && SLOTS.includes(trade.venue) ? trade.venue : 'lighter';
 }
 
 function isTrade(value: unknown): value is ActiveTrade {
@@ -179,11 +184,11 @@ async function readBook(): Promise<VenueBook> {
   if (!raw) return {};
   if (isTrade(raw)) return { [venueOf(raw)]: raw };
   const book = raw as VenueBook;
-  return { lighter: book.lighter, uniswap: book.uniswap, compound: book.compound, intents: book.intents };
+  return { lighter: book.lighter, uniswap: book.uniswap, compound: book.compound, hyperliquid: book.hyperliquid, intents: book.intents };
 }
 
 async function writeBook(book: VenueBook): Promise<void> {
-  if (!book.lighter && !book.uniswap && !book.compound && !book.intents) {
+  if (SLOTS.every((slot) => !book[slot])) {
     await chrome.storage.local.remove(LOCAL_ACTIVE_TRADE);
     return;
   }
@@ -192,7 +197,7 @@ async function writeBook(book: VenueBook): Promise<void> {
 
 function focused(book: VenueBook): ActiveTrade | null {
   if (book.lighter) return book.lighter;
-  const rest = [book.uniswap, book.compound].filter((trade): trade is ActiveTrade => Boolean(trade));
+  const rest = [book.uniswap, book.compound, book.hyperliquid].filter((trade): trade is ActiveTrade => Boolean(trade));
   return rest.length === 1 ? rest[0] ?? null : null;
 }
 
@@ -305,6 +310,7 @@ export function startVenue(venue: BookSlot): Promise<ActiveTrade> {
       throw new Error(problems.map((p) => p.reason).join(' '));
     }
     if (venue === 'lighter') await clearLighterSiteData();
+    if (venue === 'hyperliquid') await clearHyperliquidSiteData();
 
     await skipUsedOwners();
     const held = new Set(
@@ -322,7 +328,7 @@ export function startVenue(venue: BookSlot): Promise<ActiveTrade> {
       ownerAddress: owner.address,
       startedAt: Date.now(),
       venue,
-      // Uniswap and Compound receive on the owner. Lighter's deposit address
+      // Uniswap, Compound and Hyperliquid receive on the owner. Lighter's deposit address
       // is issued later and is not this owner.
       ...(venue === 'lighter' ? {} : { intentAddress: owner.address }),
     };
@@ -379,5 +385,6 @@ export function endVenue(venue: BookSlot): Promise<void> {
     delete book[venue];
     await writeBook(book);
     if (venue === 'lighter') await clearLighterSiteData().catch(() => {});
+    if (venue === 'hyperliquid') await clearHyperliquidSiteData().catch(() => {});
   });
 }

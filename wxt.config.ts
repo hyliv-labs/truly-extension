@@ -103,6 +103,9 @@ export default defineConfig({
       // Compound's app, so Truly can be the wallet on a supply there.
       'https://*.compound.xyz/*',
       'https://*.compound.finance/*',
+      // Hyperliquid's app, and its API: the worker reads the account and
+      // signs the withdrawal back to Arbitrum itself.
+      'https://*.hyperliquid.xyz/*',
       // Lighter's API is on a DIFFERENT registrable domain, so the pattern
       // above does not cover it. E4/E6 call this host from the worker.
       'https://mainnet.zklighter.elliot.ai/*',
@@ -157,7 +160,7 @@ export default defineConfig({
       {
         // The MAIN-world provider is injected by the ISOLATED relay.
         resources: ['injected.js'],
-        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*'],
+        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*'],
       },
     ],
   },

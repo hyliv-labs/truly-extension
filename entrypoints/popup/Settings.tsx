@@ -57,7 +57,7 @@ export function Settings({
     }
   };
 
-  const open = (['lighter', 'uniswap', 'compound'] as const).flatMap((venue) => {
+  const open = (Object.keys(VENUES) as (keyof typeof VENUES)[]).flatMap((venue) => {
     const trade = status.openVenues?.[venue];
     return trade ? [{ venue, trade }] : [];
   });
@@ -125,7 +125,7 @@ export function Settings({
           }
         >
           <b>{working === 'scan' ? 'Looking…' : 'Find funds'}</b>
-          <span>Every address this wallet created. Includes Lighter and Compound, not only USDC sitting on Arbitrum.</span>
+          <span>Every address this wallet created. Includes Lighter, Compound and Hyperliquid, not only USDC sitting on Arbitrum.</span>
         </button>
         {found && found.length === 0 && <p className="gx-note">Nothing held on these addresses.</p>}
         {found?.map((row) => (

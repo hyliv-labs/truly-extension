@@ -2,7 +2,7 @@
 
 import type { Address } from 'viem';
 import type { ApprovalRecord } from './approvals';
-import type { ActiveTrade } from './trade';
+import type { ActiveTrade, VenueBook, VenueId } from './trade';
 import type { RecoveryState } from './recovery';
 import type { TradeStatus } from './orchestrator';
 import type { PerpMarket } from './lighter-markets';
@@ -12,6 +12,7 @@ import type { Direction, TradeQuote } from './trade-plan';
 import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
 import type { CompoundAccountView } from './compound';
+import type { HyperliquidAccountView } from './hyperliquid';
 import type { UniswapAccountView } from './uniswap';
 import type { IntentsAsset, IntentsDirection, IntentsPreview, IntentsView } from './intents';
 
@@ -37,9 +38,9 @@ export type Request =
   // Connect a waiting site (Lighter) to a fresh owner address, now, without
   // funding it first. Funding attaches to this same trade afterwards.
   | { kind: 'connectToSite'; origin: string }
-  | { kind: 'endTrade'; venue?: 'lighter' | 'uniswap' | 'compound' }
+  | { kind: 'endTrade'; venue?: VenueId }
   /** Retire a trade that is NOT finished, accepting that funds may remain. */
-  | { kind: 'abandonTrade'; venue?: 'lighter' | 'uniswap' | 'compound' }
+  | { kind: 'abandonTrade'; venue?: VenueId }
   // Content-script relay (E5)
   | {
       kind: 'provider';
@@ -95,6 +96,10 @@ export type Request =
   | { kind: 'fundCompound'; amountUnits: string }
   /** Shield whatever that address still holds, once the Compound position is empty. */
   | { kind: 'shieldCompound' }
+  /** Unshield USDC onto a fresh address and deposit it to Hyperliquid through its Arbitrum bridge. */
+  | { kind: 'fundHyperliquid'; amountUnits: string }
+  /** Withdraw from Hyperliquid to that address, then shield the USDC back into Railgun. */
+  | { kind: 'shieldHyperliquid' }
   /** Public USDC sitting on this Ghosty's funding address. */
   | { kind: 'fundingWallet' }
   /** Shield that USDC into this Ghosty's Railgun balance. */
@@ -126,7 +131,7 @@ export type Request =
   // Orchestrator (E8)
   | { kind: 'tradeStatus' }
   | { kind: 'scanStranded' }
-  /** Every derived address that still holds something on Arbitrum, Lighter, or Compound. */
+  /** Every derived address that still holds something on Arbitrum, Lighter, Compound, or Hyperliquid. */
   | { kind: 'scanWalletFunds' }
   // MetaMask recovery, run as a background job (E-recovery)
   | { kind: 'metamaskRecoverStart'; password: string; version: 'v1' | 'v2' }
@@ -158,8 +163,8 @@ export interface VaultStatus {
   unlocked: boolean;
   ownerIndex: number;
   activeTrade: ActiveTrade | null;
-  /** Every venue that still has an address. Lighter, Uniswap and Compound can all be open. */
-  openVenues: { lighter?: ActiveTrade; uniswap?: ActiveTrade; compound?: ActiveTrade; intents?: ActiveTrade };
+  /** Every venue that still has an address. Lighter, Uniswap, Compound and Hyperliquid can all be open. */
+  openVenues: VenueBook;
 }
 
 export type Response<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -186,7 +191,7 @@ export interface ResultMap {
     index: number | null;
     label: string;
     address: string;
-    holdings: { place: 'Arbitrum' | 'Lighter' | 'Compound'; symbol: string; amount: string }[];
+    holdings: { place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid'; symbol: string; amount: string }[];
   }[];
   metamaskRecoverStart: null;
   metamaskRecoverStatus: RecoveryState;
@@ -237,6 +242,8 @@ export interface ResultMap {
   shieldUniswap: UniswapAccountView;
   fundCompound: CompoundAccountView;
   shieldCompound: CompoundAccountView;
+  fundHyperliquid: HyperliquidAccountView;
+  shieldHyperliquid: HyperliquidAccountView;
   fundingWallet: { address: Address; usdcUnits: string; ethWei: string };
   shieldFundingWallet: { txHash: string; amountUnits: string };
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
