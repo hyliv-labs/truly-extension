@@ -2,8 +2,7 @@
  * The Ghosty deposit flow: home, add funds, connect, go ghost, progress, ready.
  *
  * It drives the same worker calls as TradeForm, UniswapSwap and
- * CompoundSupply; only the screens are new. Everything after "ready"
- * (bringing funds back, failures past funding) still uses those panels.
+ * CompoundSupply; only the screens are new. Bringing funds back is Return.tsx.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -81,8 +80,11 @@ export function GhostHome({
   balanceLoading,
   sync,
   venue,
+  activities,
+  onActivity,
   onGoGhost,
   onAddFunds,
+  onBringBack,
   onRetry,
   onAdvanced,
 }: {
@@ -91,8 +93,11 @@ export function GhostHome({
   balanceLoading: boolean;
   sync: RailgunSyncStatus | null;
   venue: Venue | null;
+  activities: { venue: Venue; amountUnits: string }[];
+  onActivity: (venue: Venue) => void;
   onGoGhost: () => void;
   onAddFunds: () => void;
+  onBringBack: () => void;
   onRetry: () => void;
   onAdvanced: () => void;
 }) {
@@ -109,7 +114,7 @@ export function GhostHome({
         <GxBrand />
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {venue && <SiteChip venue={venue} live />}
-          <button type="button" className="gx-icon" aria-label="Advanced" onClick={onAdvanced}>
+          <button type="button" className="gx-icon" aria-label="Settings" onClick={onAdvanced}>
             <Icon d={GEAR} size={15} />
           </button>
         </span>
@@ -146,8 +151,21 @@ export function GhostHome({
         )}
       </div>
 
+      {activities.map((activity) => (
+        <button key={activity.venue} type="button" className="gx-activity" onClick={() => onActivity(activity.venue)}>
+          <img src={venueLogo(activity.venue)} alt="" />
+          <span>
+            <b>On {VENUES[activity.venue].name}</b>
+            <small>Ready. Open it, or bring it back.</small>
+          </span>
+          <em>{fmt(activity.amountUnits)}</em>
+        </button>
+      ))}
+
       <div className="gx-hint-row">
-        {empty ? (
+        {activities.length > 0 ? (
+          <span>Each app has its own account. You can fund another without bringing one back.</span>
+        ) : empty ? (
           <>
             <Mascot size={34} />
             <span>Add USDC to start going ghost.</span>
@@ -160,15 +178,15 @@ export function GhostHome({
       </div>
 
       <div className="gx-actions">
-        <button type="button" className={`gx-act${empty ? ' primary' : ''}`} onClick={onAddFunds}>
+        <button type="button" className={`gx-act${empty && activities.length === 0 ? ' primary' : ''}`} onClick={onAddFunds}>
           <Icon d={PLUS} />
           Add funds
         </button>
-        <button type="button" className={`gx-act${empty ? '' : ' primary'}`} disabled={!ready || empty} onClick={onGoGhost}>
+        <button type="button" className={`gx-act${activities.length === 0 && !empty ? ' primary' : ''}`} disabled={activities.length === 0 && (!ready || empty)} onClick={onGoGhost}>
           <Icon d={GHOST} />
           Go ghost
         </button>
-        <button type="button" className="gx-act" disabled title="Available once an app is funded">
+        <button type="button" className={`gx-act${activities.length === 1 ? ' primary' : ''}`} disabled={activities.length !== 1} title={activities.length === 1 ? undefined : activities.length > 1 ? 'Open an app above, then bring that one back' : 'Available once an app is funded'} onClick={onBringBack}>
           <Icon d={UP} />
           Bring back
         </button>
@@ -179,23 +197,191 @@ export function GhostHome({
 
 /* ------------------------------------------------------------- Add funds */
 
-export function AddFunds({ onBack }: { onBack: () => void }) {
+const RAILGUN_FEE_BPS = 25n;
+const shortAddress = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+
+export function AddFunds({ onBack, onDone }: { onBack: () => void; onDone: () => Promise<void> }) {
+  const [wallet, setWallet] = useState<{ address: string; usdcUnits: bigint; ethWei: bigint } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [amount, setAmount] = useState('');
+  const [phase, setPhase] = useState<'form' | 'moving' | 'done' | 'failed'>('form');
+  const [error, setError] = useState<string | null>(null);
+  const [shieldedUnits, setShieldedUnits] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const view = await send({ kind: 'fundingWallet' }, SLOW_TIMEOUT_MS);
+      setWallet({ address: view.address, usdcUnits: BigInt(view.usdcUnits), ethWei: BigInt(view.ethWei) });
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const units = toUnits(amount);
+  const available = wallet?.usdcUnits ?? 0n;
+  const tooSmall = units !== null && units < 1_000_000n;
+  const tooBig = units !== null && units > available;
+  const invalid = amount.trim() !== '' && units === null;
+  const lowEth = wallet !== null && wallet.ethWei < 50_000_000_000_000n;
+  const canShield = phase !== 'moving' && units !== null && !tooSmall && !tooBig;
+  const received = units === null ? null : (units * (10_000n - RAILGUN_FEE_BPS)) / 10_000n;
+
+  const copyAddress = async () => {
+    if (!wallet) return;
+    await navigator.clipboard.writeText(wallet.address);
+    setCopied(true);
+  };
+
+  const shield = async () => {
+    if (!canShield || units === null) return;
+    setPhase('moving');
+    setError(null);
+    try {
+      const shielded = await send({ kind: 'shieldFundingWallet', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
+      setShieldedUnits(shielded.amountUnits);
+      setPhase('done');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase('failed');
+    }
+  };
+
+  if (phase === 'moving' || phase === 'failed') {
+    return (
+      <GxScreen>
+        <div className="gx-top">
+          <GxBack onClick={onBack} label="Add funds" disabled={phase === 'moving'} />
+        </div>
+        <div className="gx-hero">
+          <Mascot size={84} className="gx-mascot" />
+          <h1 className="gx-title">{phase === 'failed' ? 'That didn’t go through' : 'Shielding USDC…'}</h1>
+        </div>
+        <ol className="gx-steps">
+          <li className={phase === 'failed' ? 'bad' : 'now'}>
+            <i />
+            Paying from this address
+          </li>
+          <li className="todo">
+            <i />
+            In your private balance
+          </li>
+        </ol>
+        {phase === 'failed' ? (
+          <>
+            <p className="gx-note bad">{error}</p>
+            <button type="button" className="gx-btn primary" onClick={() => void shield()}>
+              Try again
+            </button>
+          </>
+        ) : (
+          <p className="gx-note">About a minute. You can close this.</p>
+        )}
+      </GxScreen>
+    );
+  }
+
+  if (phase === 'done') {
+    return (
+      <GxScreen>
+        <div className="gx-top">
+          <GxBrand />
+        </div>
+        <div className="gx-hero">
+          <span className="gx-done">
+            <Mascot size={96} className="gx-mascot" />
+            <i><Icon d="m5 12 5 5 9-10" size={16} /></i>
+          </span>
+          <h1 className="gx-title">In your private balance</h1>
+          <p className="gx-sub">
+            {shieldedUnits ? `${fmt(shieldedUnits)} USDC left this address.` : 'The USDC is shielded.'} Railgun takes a 0.25% fee on the way in.
+          </p>
+        </div>
+        <button type="button" className="gx-btn primary" onClick={() => void onDone()}>
+          Done
+        </button>
+      </GxScreen>
+    );
+  }
+
   return (
     <GxScreen>
       <div className="gx-top">
         <GxBack onClick={onBack} label="Add funds" />
       </div>
       <div className="gx-hero">
-        <Mascot size={84} className="gx-mascot" />
+        <Mascot size={72} className="gx-mascot" />
         <h1 className="gx-title">Shield USDC to start</h1>
-        <p className="gx-sub">
-          Send USDC on Arbitrum into Railgun from any Railgun wallet, using this Ghosty&apos;s recovery phrase. It shows up
-          here as your private balance.
-        </p>
+        <p className="gx-sub">Send USDC on Arbitrum to this Ghosty address. Shield moves it into your private balance.</p>
       </div>
-      <button type="button" className="gx-btn primary" disabled>
-        Shield from your wallet · soon
+      <div className="gx-card gx-receive">
+        <code>{wallet ? shortAddress(wallet.address) : 'Reading…'}</code>
+        <button type="button" className="gx-link" disabled={!wallet} onClick={() => void copyAddress()}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <label className="gx-big-amount">
+        <input
+          inputMode="decimal"
+          placeholder="0.00"
+          aria-label="Amount in USDC"
+          value={amount}
+          autoFocus
+          onChange={(e) => setAmount(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void shield();
+          }}
+        />
+        <span>USDC</span>
+      </label>
+      <p className={`gx-note${invalid || tooSmall || tooBig || loadError ? ' bad' : ''}`}>
+        {loadError
+          ? loadError
+          : invalid
+            ? 'Up to 6 decimals.'
+            : tooSmall
+              ? 'At least 1.00 USDC.'
+              : tooBig
+                ? 'More than this address holds.'
+                : wallet
+                  ? `${fmt(available)} USDC on this address`
+                  : 'Reading this address…'}
+      </p>
+      <div className="gx-presets">
+        <button type="button" onClick={() => setAmount('10')} disabled={!wallet}>10</button>
+        <button type="button" onClick={() => setAmount('25')} disabled={!wallet}>25</button>
+        <button type="button" onClick={() => setAmount(fmt(available))} disabled={!wallet || available === 0n}>Max</button>
+      </div>
+      <div className="gx-spacer" />
+      {lowEth && <p className="gx-note">This address also needs a little ETH for gas.</p>}
+      <div className="gx-card gx-facts">
+        <div>
+          <span>Private balance receives</span>
+          <span>{received === null ? '—' : `${fmt(received)} USDC`}</span>
+        </div>
+        <div>
+          <span>Fee</span>
+          <span>0.25%</span>
+        </div>
+        <div>
+          <span>Ready in</span>
+          <span>About a minute</span>
+        </div>
+      </div>
+      {error && <p className="gx-error">{error}</p>}
+      <button type="button" className="gx-btn primary" disabled={!canShield} onClick={() => void shield()}>
+        {units !== null && !invalid ? `Shield ${fmt(units)} USDC` : 'Shield from your wallet'}
       </button>
+      {loadError && (
+        <button type="button" className="gx-btn quiet" onClick={() => void load()}>
+          Try again
+        </button>
+      )}
     </GxScreen>
   );
 }
@@ -247,13 +433,18 @@ export function ConnectScreen({
 export function GoGhost({
   venue: fixedVenue,
   spendableUnits,
+  activeVenues,
   onBack,
   onStarted,
+  onResume,
 }: {
   venue: Venue | null;
   spendableUnits: bigint;
+  /** Venues that already have a funded address. Another app can still be funded. */
+  activeVenues?: Venue[];
   onBack: () => void;
-  onStarted: () => Promise<void>;
+  onStarted: (venue: Venue) => Promise<void>;
+  onResume?: () => void;
 }) {
   const [venue, setVenue] = useState<Venue>(fixedVenue ?? 'lighter');
   const [amount, setAmount] = useState('');
@@ -273,12 +464,18 @@ export function GoGhost({
   const tooSmall = units !== null && units < min;
   const tooBig = units !== null && units > spendableUnits;
   const invalid = amount.trim() !== '' && units === null;
-  const canGo = units !== null && !tooSmall && !tooBig && !working;
+  const openVenues = activeVenues ?? [];
+  const resumeHere = openVenues.includes(venue);
+  const canGo = resumeHere || (units !== null && !tooSmall && !tooBig && !working);
   const readyIn = venue === 'lighter' ? (fast === false ? '15 to 20 minutes' : 'About a minute') : 'About a minute';
 
   const preset = (u: bigint) => setAmount(fmt(u < 0n ? 0n : u));
 
   const go = async () => {
+    if (resumeHere) {
+      onResume?.();
+      return;
+    }
     if (!canGo || units === null) return;
     setWorking(true);
     setError(null);
@@ -296,10 +493,10 @@ export function GoGhost({
       } else {
         await send({ kind: 'fundCompound', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       }
-      await onStarted();
+      await onStarted(venue);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      await onStarted().catch(() => undefined);
+      await onStarted(venue).catch(() => undefined);
     } finally {
       setWorking(false);
     }
@@ -324,6 +521,10 @@ export function GoGhost({
         </div>
       )}
 
+      {resumeHere ? (
+        <p className="gx-note">This {VENUES[venue].name} account is already funded. The other apps can stay open.</p>
+      ) : (
+        <>
       <label className="gx-big-amount">
         <input
           inputMode="decimal"
@@ -353,9 +554,11 @@ export function GoGhost({
         <button type="button" onClick={() => preset(25_000_000n)} disabled={working}>25</button>
         <button type="button" onClick={() => preset(spendableUnits)} disabled={working}>Max</button>
       </div>}
+        </>
+      )}
 
       <div className="gx-spacer" />
-      <div className="gx-card gx-facts">
+      {!resumeHere && <div className="gx-card gx-facts">
         <div>
           <span>{VENUES[venue].name} sees</span>
           <span>A new account{units !== null && !invalid ? `, ${fmt(units)} USDC` : ''}</span>
@@ -370,10 +573,18 @@ export function GoGhost({
           <span>Ready in</span>
           <span>{readyIn}</span>
         </div>
-      </div>
+      </div>}
       {error && <p className="gx-error">{error}</p>}
       <button type="button" className="gx-btn primary" disabled={!canGo} onClick={() => void go()}>
-        {working ? (quote || venue !== 'lighter' ? 'Starting…' : 'Checking…') : quote ? `Confirm ${fmt(units ?? 0n)} USDC` : 'Go ghost'}
+        {resumeHere
+          ? `Back to ${VENUES[venue].name}`
+          : working
+              ? quote || venue !== 'lighter'
+                ? 'Starting…'
+                : 'Checking…'
+              : quote
+                ? `Confirm ${fmt(units ?? 0n)} USDC`
+                : 'Go ghost'}
       </button>
     </GxScreen>
   );
@@ -383,19 +594,16 @@ export function GoGhost({
 
 type Stage = 'paying' | 'crediting' | 'ready' | 'failed';
 
-/** Where a funding attempt stands, for any venue. Null: not in the deposit phase. */
-export function depositStage(status: VaultStatus | null): { venue: Venue; stage: Stage } | null {
-  const t = status?.activeTrade;
-  if (!t) return null;
-  if (t.uniswap || t.compound) {
-    const view = t.uniswap ?? t.compound!;
-    const venue: Venue = t.uniswap ? 'uniswap' : 'compound';
+function stageOf(venue: Venue, trade: NonNullable<VaultStatus['activeTrade']>): { venue: Venue; stage: Stage } | null {
+  if (venue === 'uniswap' || venue === 'compound') {
+    const view = venue === 'uniswap' ? trade.uniswap : trade.compound;
+    if (!view) return null;
     if (view.status === 'funding') return { venue, stage: 'paying' };
     if (view.status === 'funded') return { venue, stage: 'ready' };
     if (view.status === 'failed' && !view.unshieldTx) return { venue, stage: 'failed' };
     return null;
   }
-  const s = t.session?.state;
+  const s = trade.session?.state;
   if (!s) return null;
   if (s === 'funding') return { venue: 'lighter', stage: 'paying' };
   if (s === 'awaiting-deposit' || s === 'registering-key') return { venue: 'lighter', stage: 'crediting' };
@@ -404,17 +612,42 @@ export function depositStage(status: VaultStatus | null): { venue: Venue; stage:
   return null;
 }
 
+/** In-progress funding first, then a ready account. Null when nothing is open. */
+export function depositStage(status: VaultStatus | null): { venue: Venue; stage: Stage } | null {
+  const stages = openStages(status);
+  return stages.find((item) => item.stage !== 'ready') ?? stages[0] ?? null;
+}
+
+export function openStages(status: VaultStatus | null): { venue: Venue; stage: Stage; amountUnits: string }[] {
+  if (!status) return [];
+  const book = status.openVenues ?? {};
+  const rows: { venue: Venue; stage: Stage; amountUnits: string }[] = [];
+  for (const venue of ['lighter', 'uniswap', 'compound'] as const) {
+    const trade = book[venue] ?? (status.activeTrade && (status.activeTrade.venue ?? 'lighter') === venue ? status.activeTrade : null);
+    if (!trade) continue;
+    const stage = stageOf(venue, trade);
+    if (!stage) continue;
+    const amountUnits = venue === 'lighter' ? trade.session?.marginUnits ?? '0' : (venue === 'uniswap' ? trade.uniswap?.amountIn : trade.compound?.amountIn) ?? '0';
+    rows.push({ ...stage, amountUnits });
+  }
+  return rows;
+}
+
 export function GhostProgress({
   status,
   venue,
   stage,
   onChanged,
+  onBringBack,
+  onHome,
   onManage,
 }: {
   status: VaultStatus;
   venue: Venue;
   stage: Stage;
   onChanged: () => Promise<void>;
+  onBringBack: () => void;
+  onHome?: () => void;
   onManage: () => void;
 }) {
   const [view, setView] = useState<SessionView | null>(null);
@@ -459,7 +692,18 @@ export function GhostProgress({
 
   const top = (
     <div className="gx-top">
-      <GxBrand />
+      {stage === 'ready' && onHome ? (
+        <span className="gx-brand-row">
+          <button type="button" className="gx-back" aria-label="Dashboard" onClick={onHome}>
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </button>
+          <GxBrand onClick={onHome} />
+        </span>
+      ) : (
+        <GxBrand />
+      )}
       <SiteChip venue={venue} live={stage === 'ready'} />
     </div>
   );
@@ -482,8 +726,8 @@ export function GhostProgress({
         <button type="button" className="gx-btn primary" onClick={() => void chrome.tabs.create({ url: VENUES[venue].url })}>
           Open {name}
         </button>
-        <button type="button" className="gx-btn quiet" onClick={onManage}>
-          Bring funds back later
+        <button type="button" className="gx-btn quiet" onClick={onBringBack}>
+          Bring funds back
         </button>
       </GxScreen>
     );

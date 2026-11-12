@@ -36,9 +36,9 @@ export type Request =
   // Connect a waiting site (Lighter) to a fresh owner address, now, without
   // funding it first. Funding attaches to this same trade afterwards.
   | { kind: 'connectToSite'; origin: string }
-  | { kind: 'endTrade' }
+  | { kind: 'endTrade'; venue?: 'lighter' | 'uniswap' | 'compound' }
   /** Retire a trade that is NOT finished, accepting that funds may remain. */
-  | { kind: 'abandonTrade' }
+  | { kind: 'abandonTrade'; venue?: 'lighter' | 'uniswap' | 'compound' }
   // Content-script relay (E5)
   | {
       kind: 'provider';
@@ -94,11 +94,17 @@ export type Request =
   | { kind: 'fundCompound'; amountUnits: string }
   /** Shield whatever that address still holds, once the Compound position is empty. */
   | { kind: 'shieldCompound' }
+  /** Public USDC sitting on this Ghosty's funding address. */
+  | { kind: 'fundingWallet' }
+  /** Shield that USDC into this Ghosty's Railgun balance. */
+  | { kind: 'shieldFundingWallet'; amountUnits: string }
   /** Starts the WASM signer in the worker and signs a throwaway order offline. */
   | { kind: 'lighterSignerSelfTest' }
   // Orchestrator (E8)
   | { kind: 'tradeStatus' }
   | { kind: 'scanStranded' }
+  /** Every derived address that still holds something on Arbitrum, Lighter, or Compound. */
+  | { kind: 'scanWalletFunds' }
   // MetaMask recovery, run as a background job (E-recovery)
   | { kind: 'metamaskRecoverStart'; password: string; version: 'v1' | 'v2' }
   | { kind: 'metamaskRecoverStatus' }
@@ -129,6 +135,8 @@ export interface VaultStatus {
   unlocked: boolean;
   ownerIndex: number;
   activeTrade: ActiveTrade | null;
+  /** Every venue that still has an address. Lighter, Uniswap and Compound can all be open. */
+  openVenues: { lighter?: ActiveTrade; uniswap?: ActiveTrade; compound?: ActiveTrade };
 }
 
 export type Response<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -151,6 +159,12 @@ export interface ResultMap {
   anonRpcSelfTest: SelfTestResult;
   tradeStatus: TradeStatus | null;
   scanStranded: { index: number; address: string; balance: string }[];
+  scanWalletFunds: {
+    index: number | null;
+    label: string;
+    address: string;
+    holdings: { place: 'Arbitrum' | 'Lighter' | 'Compound'; symbol: string; amount: string }[];
+  }[];
   metamaskRecoverStart: null;
   metamaskRecoverStatus: RecoveryState;
   metamaskRecoverClear: null;
@@ -200,6 +214,8 @@ export interface ResultMap {
   shieldUniswap: UniswapAccountView;
   fundCompound: CompoundAccountView;
   shieldCompound: CompoundAccountView;
+  fundingWallet: { address: Address; usdcUnits: string; ethWei: string };
+  shieldFundingWallet: { txHash: string; amountUnits: string };
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };
 }
 

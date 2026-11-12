@@ -8,7 +8,7 @@
  */
 
 import type { Address } from 'viem';
-import { currentOwner, retireOwner } from './vault';
+import { currentOwner, getOwnerIndex, retireOwner } from './vault';
 import { skipUsedOwners } from './fresh-owner';
 import { configProblems } from './config';
 import { clearLighterSiteData } from './site-cleanup';
@@ -17,6 +17,40 @@ import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
+
+export type VenueId = 'lighter' | 'uniswap' | 'compound';
+
+export function venueFromOrigin(origin: string): VenueId | null {
+  let host = origin;
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    host = origin;
+  }
+  if (host === 'uniswap.org' || host.endsWith('.uniswap.org')) return 'uniswap';
+  if (host === 'lighter.xyz' || host.endsWith('.lighter.xyz')) return 'lighter';
+  if (
+    host === 'compound.xyz' ||
+    host.endsWith('.compound.xyz') ||
+    host === 'compound.finance' ||
+    host.endsWith('.compound.finance')
+  ) {
+    return 'compound';
+  }
+  return null;
+}
+
+export async function tradeForOrigin(origin: string): Promise<ActiveTrade | null> {
+  const venue = venueFromOrigin(origin);
+  if (!venue) return getActiveTrade();
+  return getVenueTrade(venue);
+}
+
+export interface VenueBook {
+  lighter?: ActiveTrade;
+  uniswap?: ActiveTrade;
+  compound?: ActiveTrade;
+}
 const LOCAL_TRADE_HISTORY = 'truly:tradeHistory';
 const HISTORY_LIMIT = 50;
 
@@ -117,16 +151,69 @@ function serialized<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Merge fields into the active trade. Refuses if no trade is active. */
-export function updateActiveTrade(
-  patch: Partial<Omit<ActiveTrade, 'ownerIndex' | 'ownerAddress' | 'startedAt'>>,
-): Promise<ActiveTrade> {
-  return serialized(async () => {
-    const trade = await getActiveTrade();
-    if (!trade) throw new Error('no active trade');
+type TradePatch = Partial<Omit<ActiveTrade, 'ownerIndex' | 'ownerAddress' | 'startedAt'>>;
 
+function venueOf(trade: ActiveTrade): VenueId {
+  return trade.venue === 'uniswap' || trade.venue === 'compound' ? trade.venue : 'lighter';
+}
+
+function isTrade(value: unknown): value is ActiveTrade {
+  return Boolean(value && typeof value === 'object' && 'ownerAddress' in value);
+}
+
+/** One record per venue. An older install stored a single trade; that still reads. */
+async function readBook(): Promise<VenueBook> {
+  const stored = await chrome.storage.local.get(LOCAL_ACTIVE_TRADE);
+  const raw = stored[LOCAL_ACTIVE_TRADE];
+  if (!raw) return {};
+  if (isTrade(raw)) return { [venueOf(raw)]: raw };
+  const book = raw as VenueBook;
+  return { lighter: book.lighter, uniswap: book.uniswap, compound: book.compound };
+}
+
+async function writeBook(book: VenueBook): Promise<void> {
+  if (!book.lighter && !book.uniswap && !book.compound) {
+    await chrome.storage.local.remove(LOCAL_ACTIVE_TRADE);
+    return;
+  }
+  await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: book });
+}
+
+function focused(book: VenueBook): ActiveTrade | null {
+  if (book.lighter) return book.lighter;
+  const rest = [book.uniswap, book.compound].filter((trade): trade is ActiveTrade => Boolean(trade));
+  return rest.length === 1 ? rest[0] ?? null : null;
+}
+
+function place(book: VenueBook, previous: VenueId, trade: ActiveTrade): void {
+  const next = venueOf(trade);
+  if (next !== previous) delete book[previous];
+  book[next] = trade;
+}
+
+/** Merge fields into the active trade. Refuses if no trade is active. */
+export function updateActiveTrade(patch: TradePatch): Promise<ActiveTrade> {
+  return serialized(async () => {
+    const book = await readBook();
+    const trade = focused(book);
+    if (!trade) throw new Error('no active trade');
     const next = { ...trade, ...patch };
-    await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: next });
+    place(book, venueOf(trade), next);
+    await writeBook(book);
+    return next;
+  });
+}
+
+/** Merge fields into the venue account that owns this index. */
+export function updateOwnedTrade(ownerIndex: number, patch: TradePatch): Promise<ActiveTrade> {
+  return serialized(async () => {
+    const book = await readBook();
+    const venue = (['lighter', 'uniswap', 'compound'] as const).find((id) => book[id]?.ownerIndex === ownerIndex);
+    const trade = venue ? book[venue] : undefined;
+    if (!trade || !venue) throw new Error('no active trade');
+    const next = { ...trade, ...patch };
+    place(book, venue, next);
+    await writeBook(book);
     return next;
   });
 }
@@ -142,7 +229,10 @@ export function updateSession(
       throw new Error('this trade session is no longer active');
     }
     const session: TradeSession = { ...trade.session, ...patch(trade.session), updatedAt: Date.now() };
-    await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: { ...trade, session } });
+    const book = await readBook();
+    const venue = venueOf(trade);
+    book[venue] = { ...trade, session };
+    await writeBook(book);
     return session;
   });
 }
@@ -161,8 +251,26 @@ async function archive(trade: ActiveTrade): Promise<void> {
 }
 
 export async function getActiveTrade(): Promise<ActiveTrade | null> {
-  const stored = await chrome.storage.local.get(LOCAL_ACTIVE_TRADE);
-  return (stored[LOCAL_ACTIVE_TRADE] as ActiveTrade | undefined) ?? null;
+  return focused(await readBook());
+}
+
+export async function listOpenVenues(): Promise<VenueBook> {
+  return readBook();
+}
+
+export async function getVenueTrade(venue: VenueId): Promise<ActiveTrade | null> {
+  return (await readBook())[venue] ?? null;
+}
+
+export async function findTradeByOwner(ownerIndex: number): Promise<ActiveTrade | null> {
+  const book = await readBook();
+  return book.lighter?.ownerIndex === ownerIndex
+    ? book.lighter
+    : book.uniswap?.ownerIndex === ownerIndex
+      ? book.uniswap
+      : book.compound?.ownerIndex === ownerIndex
+        ? book.compound
+        : null;
 }
 
 /**
@@ -173,31 +281,49 @@ export async function startTrade(): Promise<ActiveTrade> {
   if (await getActiveTrade()) {
     throw new Error('a trade is already active');
   }
+  return startVenue('lighter');
+}
 
-  // E2: no money moves while reads cannot be anonymised. Starting a trade is
-  // the first step of the money path, so the gate belongs here rather than at
-  // each later call — by then an address has already been exposed.
-  const problems = configProblems();
-  if (problems.length > 0) {
-    throw new Error(problems.map((p) => p.reason).join(' '));
-  }
+/**
+ * Open one venue without closing the others. Each venue keeps its own owner,
+ * so Lighter, Uniswap and Compound can all be funded at once.
+ */
+export function startVenue(venue: VenueId): Promise<ActiveTrade> {
+  return serialized(async () => {
+    const book = await readBook();
+    const existing = book[venue];
+    if (existing) return existing;
 
-  // Before, not only after: after-only trusts that the previous cleanup ran,
-  // and the first trade after an install or a crash has no previous at all.
-  await clearLighterSiteData();
+    const problems = configProblems();
+    if (problems.length > 0) {
+      throw new Error(problems.map((p) => p.reason).join(' '));
+    }
+    if (venue === 'lighter') await clearLighterSiteData();
 
-  // A restored vault starts the index at 0 again; never reissue an address
-  // that already has on-chain history. See fresh-owner.ts.
-  await skipUsedOwners();
-  const owner = await currentOwner();
-  const trade: ActiveTrade = {
-    ownerIndex: owner.index,
-    ownerAddress: owner.address,
-    startedAt: Date.now(),
-  };
-
-  await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: trade });
-  return trade;
+    await skipUsedOwners();
+    const held = new Set(
+      (['lighter', 'uniswap', 'compound'] as const)
+        .map((id) => book[id]?.ownerIndex)
+        .filter((index): index is number => index !== undefined),
+    );
+    for (let guard = 0; held.has(await getOwnerIndex()); guard += 1) {
+      if (guard > 30) throw new Error('Could not allocate a fresh address.');
+      await retireOwner(await getOwnerIndex());
+    }
+    const owner = await currentOwner();
+    const trade: ActiveTrade = {
+      ownerIndex: owner.index,
+      ownerAddress: owner.address,
+      startedAt: Date.now(),
+      venue,
+      // Uniswap and Compound receive on the owner. Lighter's deposit address
+      // is issued later and is not this owner.
+      ...(venue === 'lighter' ? {} : { intentAddress: owner.address }),
+    };
+    book[venue] = trade;
+    await writeBook(book);
+    return trade;
+  });
 }
 
 /**
@@ -217,12 +343,11 @@ export async function clearPendingReshield(): Promise<void> {
  * Only for a receipt that says the operation reverted — nothing was deposited,
  * so the deposit index is still free and a retry is the correct next step.
  */
-export async function discardReshield(): Promise<void> {
-  const trade = await getActiveTrade();
+export async function discardReshield(ownerIndex?: number): Promise<void> {
+  const trade = ownerIndex === undefined ? await getActiveTrade() : await findTradeByOwner(ownerIndex);
   if (!trade?.reshield || trade.reshield.status === 'confirmed') return;
 
-  const { reshield: _omit, ...rest } = trade;
-  await chrome.storage.local.set({ [LOCAL_ACTIVE_TRADE]: rest });
+  await updateOwnedTrade(trade.ownerIndex, { reshield: undefined });
 }
 
 /**
@@ -233,16 +358,20 @@ export async function discardReshield(): Promise<void> {
 export async function endTrade(): Promise<void> {
   const trade = await getActiveTrade();
   if (!trade) return;
+  await endVenue(venueOf(trade));
+}
 
-  // Burn first: if this throws, the trade stays active and retryable. The
-  // reverse order could drop the record and leave the index reusable.
-  await retireOwner(trade.ownerIndex);
-  // Best effort, before the record goes: the history is for the user, and
-  // failing to write it must not keep a retired owner active.
-  await archive(trade).catch(() => {});
-  await chrome.storage.local.remove(LOCAL_ACTIVE_TRADE);
+/** Retire one venue. The others stay funded on their own addresses. */
+export function endVenue(venue: VenueId): Promise<void> {
+  return serialized(async () => {
+    const book = await readBook();
+    const trade = book[venue];
+    if (!trade) return;
 
-  // Best effort: the trade is already closed and the index burned, so a
-  // cleanup failure must not resurrect it. The next startTrade cleans up again.
-  await clearLighterSiteData().catch(() => {});
+    await retireOwner(trade.ownerIndex);
+    await archive(trade).catch(() => {});
+    delete book[venue];
+    await writeBook(book);
+    if (venue === 'lighter') await clearLighterSiteData().catch(() => {});
+  });
 }

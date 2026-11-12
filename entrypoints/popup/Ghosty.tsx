@@ -2,12 +2,18 @@ import { useState, type ReactNode } from 'react';
 
 const ghostUrl = chrome.runtime.getURL('brand/ghost.png');
 
-export function GxBrand() {
-  return (
-    <span className="gx-brand">
+export function GxBrand({ onClick }: { onClick?: () => void }) {
+  const mark = (
+    <>
       <img src={ghostUrl} alt="" />
       Ghosty
-    </span>
+    </>
+  );
+  if (!onClick) return <span className="gx-brand">{mark}</span>;
+  return (
+    <button type="button" className="gx-brand" onClick={onClick}>
+      {mark}
+    </button>
   );
 }
 
@@ -105,6 +111,6 @@ export function Strength({ password }: { password: string }) {
   );
 }
 
-export function GxScreen({ children }: { children: ReactNode }) {
-  return <section className="gx">{children}</section>;
+export function GxScreen({ children, className }: { children: ReactNode; className?: string }) {
+  return <section className={className ? `gx ${className}` : 'gx'}>{children}</section>;
 }

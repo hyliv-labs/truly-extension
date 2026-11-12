@@ -15,7 +15,7 @@ import { compoundExitBlocker } from './compound-position';
 import { ARBITRUM_CHAIN_ID, USDC_ADDRESS } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
-import { endTrade, getActiveTrade, startTrade, updateActiveTrade, type ActiveTrade } from './trade';
+import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
 import { arbitrumGasLimit } from './tx-gas';
 import { RAILGUN_RETURN_TOKENS, WETH_ADDRESS } from './uniswap';
 import { ownerAt } from './vault';
@@ -49,16 +49,7 @@ export async function shieldCompoundAccount(): Promise<CompoundAccountView> {
 
 async function fund(amountIn: bigint): Promise<CompoundAccountView> {
   if (amountIn < MIN_USDC) throw new Error('Fund at least 1 USDC.');
-  const existing = await getActiveTrade();
-  if (existing?.venue === 'uniswap') {
-    throw new Error('A Uniswap address is open. Shield it back or abandon it before funding Compound.');
-  }
-  if (existing?.session || existing?.venue === 'lighter') {
-    throw new Error('A Lighter account is open. Finish or abandon it before funding Compound.');
-  }
-  if (existing?.intentAddress && existing.intentAddress.toLowerCase() !== existing.ownerAddress.toLowerCase()) {
-    throw new Error('This address is a Lighter deposit. Abandon it before funding Compound.');
-  }
+  const existing = await getVenueTrade('compound');
   if (existing?.compound?.status === 'funded') return existing.compound;
   if (existing?.compound?.status === 'shielding') throw new Error('Shield back is already running.');
   if (existing?.compound?.status === 'failed' && existing.compound.unshieldTx) {
@@ -66,8 +57,8 @@ async function fund(amountIn: bigint): Promise<CompoundAccountView> {
   }
   if (existing?.compound?.status === 'done') return existing.compound;
 
-  const trade = existing ?? (await startTrade());
-  await updateActiveTrade({
+  const trade = existing ?? (await startVenue('compound'));
+  await updateOwnedTrade(trade.ownerIndex, {
     venue: 'compound',
     intentAddress: trade.ownerAddress,
     compound: view(trade, {
@@ -106,7 +97,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<CompoundAccountView>
       detail: 'Building the Railgun unshield proof. This takes a minute or two.',
       unshieldTx,
     });
-    const funded = await unshieldRailgunForTrade(amountIn);
+    const funded = await unshieldRailgunForTrade(amountIn, 'compound');
     unshieldTx = funded.txHash;
   }
 
@@ -122,7 +113,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<CompoundAccountView>
     unshieldTx,
     detail: 'USDC is on this address. Supply it on Compound. Withdraw it there before shielding. Truly will not supply or withdraw.',
   });
-  await updateActiveTrade({ compound: ready });
+  await updateOwnedTrade(trade.ownerIndex, { compound: ready });
   return ready;
 }
 
@@ -167,7 +158,7 @@ async function shield(): Promise<CompoundAccountView> {
       });
       try {
         await clearConfirmedShield();
-        const result = await shieldOwnerToken(row.token, row.amount);
+        const result = await shieldOwnerToken(row.token, row.amount, 'compound');
         shielded.push({ ...line(row), txHash: result.txHash, amount: result.amountUnits.toString() });
         await clearConfirmedShield();
       } catch (error) {
@@ -195,7 +186,7 @@ async function shield(): Promise<CompoundAccountView> {
         detail: 'Some tokens are still on this address. Shield back tries them again. Nothing already shielded is sent twice.',
         error: left.find((row) => row.token !== 'ETH')?.reason,
       });
-      await updateActiveTrade({ compound: failed });
+      await updateOwnedTrade(trade.ownerIndex, { compound: failed });
       return failed;
     }
 
@@ -210,8 +201,8 @@ async function shield(): Promise<CompoundAccountView> {
           ? 'Shielded back into Railgun. This address is not reused.'
           : 'Nothing was left to shield. This address is not reused.',
     });
-    await updateActiveTrade({ compound: done });
-    await endTrade();
+    await updateOwnedTrade(trade.ownerIndex, { compound: done });
+    await endVenue('compound');
     return done;
   } catch (error) {
     return fail(BigInt(amountIn), error);
@@ -298,18 +289,18 @@ async function readSymbol(token: Address, fallback: string): Promise<string> {
 }
 
 async function clearConfirmedShield(): Promise<void> {
-  const trade = await getActiveTrade();
-  if (trade?.reshield?.status === 'confirmed') await updateActiveTrade({ reshield: undefined });
+  const trade = await getVenueTrade('compound');
+  if (trade?.reshield?.status === 'confirmed') await updateOwnedTrade(trade.ownerIndex, { reshield: undefined });
 }
 
 async function requireCompoundTrade(): Promise<ActiveTrade> {
-  const trade = await getActiveTrade();
+  const trade = await getVenueTrade('compound');
   if (!trade || trade.venue !== 'compound') throw new Error('No Compound address is open.');
   return trade;
 }
 
 async function remember(trade: ActiveTrade, patch: CompoundAccountView): Promise<void> {
-  await updateActiveTrade({ compound: view(trade, patch) });
+  await updateOwnedTrade(trade.ownerIndex, { compound: view(trade, patch) });
 }
 
 function view(trade: ActiveTrade, patch: CompoundAccountView): CompoundAccountView {
@@ -318,9 +309,9 @@ function view(trade: ActiveTrade, patch: CompoundAccountView): CompoundAccountVi
 
 async function fail(amountIn: bigint, error: unknown): Promise<never> {
   const message = error instanceof Error ? error.message : String(error);
-  const trade = await getActiveTrade();
+  const trade = await getVenueTrade('compound');
   if (trade) {
-    await updateActiveTrade({
+    await updateOwnedTrade(trade.ownerIndex, {
       compound: {
         status: 'failed',
         amountIn: amountIn.toString(),

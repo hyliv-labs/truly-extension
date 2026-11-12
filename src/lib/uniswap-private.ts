@@ -14,7 +14,7 @@ import { publicClient } from './chain';
 import { ARBITRUM_CHAIN_ID, USDC_ADDRESS } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
-import { endTrade, getActiveTrade, startTrade, updateActiveTrade, type ActiveTrade } from './trade';
+import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
 import { ownerAt } from './vault';
 import {
   RAILGUN_RETURN_TOKENS,
@@ -52,16 +52,7 @@ export async function shieldUniswapAccount(): Promise<UniswapAccountView> {
 
 async function fund(amountIn: bigint): Promise<UniswapAccountView> {
   if (amountIn < MIN_USDC) throw new Error('Fund at least 1 USDC.');
-  const existing = await getActiveTrade();
-  if (existing?.venue === 'compound') {
-    throw new Error('A Compound address is open. Shield it back or abandon it before funding Uniswap.');
-  }
-  if (existing?.session || existing?.venue === 'lighter') {
-    throw new Error('A Lighter account is open. Finish or abandon it before funding Uniswap.');
-  }
-  if (existing?.intentAddress && existing.intentAddress.toLowerCase() !== existing.ownerAddress.toLowerCase()) {
-    throw new Error('This address is a Lighter deposit. Abandon it before funding Uniswap.');
-  }
+  const existing = await getVenueTrade('uniswap');
   if (existing?.uniswap?.status === 'funded') return existing.uniswap;
   if (existing?.uniswap?.status === 'shielding') throw new Error('Shield back is already running.');
   if (existing?.uniswap?.status === 'failed' && existing.uniswap.unshieldTx) {
@@ -69,8 +60,8 @@ async function fund(amountIn: bigint): Promise<UniswapAccountView> {
   }
   if (existing?.uniswap?.status === 'done') return existing.uniswap;
 
-  const trade = existing ?? (await startTrade());
-  await updateActiveTrade({
+  const trade = existing ?? (await startVenue('uniswap'));
+  await updateOwnedTrade(trade.ownerIndex, {
     venue: 'uniswap',
     intentAddress: trade.ownerAddress,
     uniswap: view(trade, {
@@ -109,7 +100,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<UniswapAccountView> 
       detail: 'Building the Railgun unshield proof. This takes a minute or two.',
       unshieldTx,
     });
-    const funded = await unshieldRailgunForTrade(amountIn);
+    const funded = await unshieldRailgunForTrade(amountIn, 'uniswap');
     unshieldTx = funded.txHash;
   }
 
@@ -125,7 +116,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<UniswapAccountView> 
     unshieldTx,
     detail: 'USDC is on this address. Open Uniswap, connect Truly, and swap there. Truly will not send a swap.',
   });
-  await updateActiveTrade({ uniswap: ready });
+  await updateOwnedTrade(trade.ownerIndex, { uniswap: ready });
   return ready;
 }
 
@@ -161,7 +152,7 @@ async function shield(): Promise<UniswapAccountView> {
       });
       try {
         await clearConfirmedShield();
-        const result = await shieldOwnerToken(row.token, row.amount);
+        const result = await shieldOwnerToken(row.token, row.amount, 'uniswap');
         shielded.push({ ...line(row), txHash: result.txHash, amount: result.amountUnits.toString() });
         await clearConfirmedShield();
       } catch (error) {
@@ -189,7 +180,7 @@ async function shield(): Promise<UniswapAccountView> {
         detail: 'Some tokens are still on this address. Shield back tries them again. Nothing already shielded is sent twice.',
         error: left.find((row) => row.token !== 'ETH')?.reason,
       });
-      await updateActiveTrade({ uniswap: failed });
+      await updateOwnedTrade(trade.ownerIndex, { uniswap: failed });
       return failed;
     }
 
@@ -204,8 +195,8 @@ async function shield(): Promise<UniswapAccountView> {
           ? 'Shielded back into Railgun. This address is not reused.'
           : 'Nothing was left to shield. This address is not reused.',
     });
-    await updateActiveTrade({ uniswap: done });
-    await endTrade();
+    await updateOwnedTrade(trade.ownerIndex, { uniswap: done });
+    await endVenue('uniswap');
     return done;
   } catch (error) {
     return fail(BigInt(amountIn), error);
@@ -290,18 +281,18 @@ async function readSymbol(token: Address, fallback: string): Promise<string> {
 }
 
 async function clearConfirmedShield(): Promise<void> {
-  const trade = await getActiveTrade();
-  if (trade?.reshield?.status === 'confirmed') await updateActiveTrade({ reshield: undefined });
+  const trade = await getVenueTrade('uniswap');
+  if (trade?.reshield?.status === 'confirmed') await updateOwnedTrade(trade.ownerIndex, { reshield: undefined });
 }
 
 async function requireUniswapTrade(): Promise<ActiveTrade> {
-  const trade = await getActiveTrade();
+  const trade = await getVenueTrade('uniswap');
   if (!trade || trade.venue !== 'uniswap') throw new Error('No Uniswap address is open.');
   return trade;
 }
 
 async function remember(trade: ActiveTrade, patch: UniswapAccountView): Promise<void> {
-  await updateActiveTrade({ uniswap: view(trade, patch) });
+  await updateOwnedTrade(trade.ownerIndex, { uniswap: view(trade, patch) });
 }
 
 function view(trade: ActiveTrade, patch: UniswapAccountView): UniswapAccountView {
@@ -310,9 +301,9 @@ function view(trade: ActiveTrade, patch: UniswapAccountView): UniswapAccountView
 
 async function fail(amountIn: bigint, error: unknown): Promise<never> {
   const message = error instanceof Error ? error.message : String(error);
-  const trade = await getActiveTrade();
+  const trade = await getVenueTrade('uniswap');
   if (trade) {
-    await updateActiveTrade({
+    await updateOwnedTrade(trade.ownerIndex, {
       uniswap: {
         status: 'failed',
         amountIn: amountIn.toString(),

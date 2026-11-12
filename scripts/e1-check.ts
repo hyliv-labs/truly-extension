@@ -2,7 +2,9 @@
 // Run with Node's type stripping; no chrome APIs are touched here.
 
 import {
+  deriveFundingWallet,
   deriveOwner,
+  FUNDING_WALLET_PATH,
   newMnemonic,
   isValidMnemonic,
   ownerPath,
@@ -26,6 +28,9 @@ else pass('fixture phrase validates');
 if (ownerPath(0) !== "m/44'/60'/7702'/0/0") fail(`path wrong: ${ownerPath(0)}`);
 else pass('derivation path shape');
 
+if (FUNDING_WALLET_PATH !== "m/44'/60'/7702'/1/0") fail(`funding path wrong: ${FUNDING_WALLET_PATH}`);
+else pass('funding wallet path is not a trade owner');
+
 // THE COLLISION GUARD.
 //
 // The Privacy Pools SDK hashes the private keys at m/44'/60'/0'/0/0 and
@@ -46,6 +51,18 @@ else pass('derivation path shape');
     }
     if (owner.privateKey === masterSecretPreimage) {
       fail(`owner #${i} IS the masterSecret preimage`);
+      collided = true;
+    }
+  }
+  const funding = await deriveFundingWallet(PHRASE);
+  if (funding.privateKey === masterNullifierPreimage || funding.privateKey === masterSecretPreimage) {
+    fail('funding wallet IS an SDK master-key preimage');
+    collided = true;
+  }
+  for (let i = 0; i < 25; i++) {
+    const owner = await deriveOwner(PHRASE, i);
+    if (owner.address === funding.address) {
+      fail(`funding wallet reuses trade owner #${i}`);
       collided = true;
     }
   }
