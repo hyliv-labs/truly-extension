@@ -12,8 +12,7 @@ import { erc20Abi, formatUnits, multicall3Abi, type Address } from 'viem';
 import { publicClient } from './chain';
 import { COMPOUND_MARKETS } from './compound';
 import { getAccountIndex } from './lighter';
-import { readHyperliquid } from './hyperliquid-api';
-import { totalUsdc, type HyperliquidAccount } from './hyperliquid';
+import { readHyperliquidBalance } from './hyperliquid-api';
 import { readTradingAccount } from './lighter-trading';
 import { ownerUsdcBalance } from './reshield';
 import { RAILGUN_RETURN_TOKENS } from './uniswap';
@@ -145,10 +144,12 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
     }),
   );
 
-  // One read per address. A failed read shows nothing rather than failing the scan.
-  const hyperliquid: (HyperliquidAccount | null)[] = await Promise.all(
-    rows.map((row) => readHyperliquid(row.address).catch(() => null)),
-  );
+  // Two light reads per address, a few addresses at a time, to stay under
+  // Hyperliquid's per-IP limit. A failed read is shown, never read as empty.
+  const hyperliquid: Awaited<ReturnType<typeof readHyperliquidBalance>>[] = [];
+  for (let start = 0; start < rows.length; start += 5) {
+    hyperliquid.push(...(await Promise.all(rows.slice(start, start + 5).map((row) => readHyperliquidBalance(row.address)))));
+  }
 
   return rows.flatMap((row, rowIndex) => {
     const holdings: WalletHolding[] = [];
@@ -179,11 +180,13 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
       });
     }
     const hl = hyperliquid[rowIndex];
-    if (hl && (totalUsdc(hl) > 0n || hl.openPositions.length > 0 || hl.spotOther.length > 0)) {
+    if (hl === null) {
+      holdings.push({ place: 'Hyperliquid', symbol: 'not read, scan again', amount: '?' });
+    } else if (hl && (hl.usdc > 0n || hl.positions > 0 || hl.tokens.length > 0)) {
       holdings.push({
         place: 'Hyperliquid',
-        symbol: hl.openPositions.length > 0 ? 'USDC · position open' : hl.spotOther.length > 0 ? `USDC · ${hl.spotOther.map((t) => t.coin).join(', ')}` : 'USDC',
-        amount: showAmount(totalUsdc(hl) < 0n ? 0n : totalUsdc(hl), 6),
+        symbol: hl.positions > 0 ? 'USDC · position open' : hl.tokens.length > 0 ? `USDC · ${hl.tokens.join(', ')}` : 'USDC',
+        amount: showAmount(hl.usdc < 0n ? 0n : hl.usdc, 6),
       });
     }
     return holdings.length > 0 ? [{ ...row, holdings }] : [];

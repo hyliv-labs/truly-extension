@@ -192,6 +192,10 @@ export function GhostReturn({
         }
       }
       await onChanged();
+      // Hyperliquid: part came back and part is still there. Say so on this screen.
+      if (venue === 'hyperliquid' && outcome && typeof outcome === 'object' && (outcome as { status?: string }).status === 'funded') {
+        setError((outcome as { detail?: string }).detail ?? null);
+      }
       if (outcome && typeof outcome === 'object' && 'status' in outcome && (outcome as { status?: string }).status === 'done') {
         const view = outcome as { shielded?: TokenLine[]; left?: TokenLine[] };
         const lines = { shielded: view.shielded ?? [], left: view.left ?? [] };

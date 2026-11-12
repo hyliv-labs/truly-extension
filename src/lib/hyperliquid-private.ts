@@ -34,12 +34,13 @@ import {
   usdcDecimalFromUnits,
   usdcUnitsFromDecimal,
   withdrawAction,
+  withdrawnSince,
   withdrawalArrived,
   withdrawTypedData,
   type HyperliquidAccountView,
   type HyperliquidTokenLine,
 } from './hyperliquid';
-import { postHyperliquid, readHyperliquid } from './hyperliquid-api';
+import { postHyperliquid, readHyperliquid, readLedger } from './hyperliquid-api';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
 import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
@@ -54,6 +55,8 @@ const CREDIT_WAIT_MS = 3 * 60_000;
 /** A withdrawal lands on Arbitrum in about 3 to 5 minutes. */
 const ARRIVAL_WAIT_MS = 8 * 60_000;
 const POLL_MS = 5_000;
+/** Below this the paymaster's 1 USDC permit ceiling would eat it; it is reported as left instead. */
+const MIN_SHIELD_UNITS = 1_000_000n;
 
 let funding: Promise<HyperliquidAccountView> | null = null;
 let shielding: Promise<HyperliquidAccountView> | null = null;
@@ -84,6 +87,11 @@ async function fund(amountIn: bigint): Promise<HyperliquidAccountView> {
   const before = existing?.hyperliquid;
   if (before?.status === 'funded' || before?.status === 'done') return before;
   if (before?.status === 'shielding') throw new Error('Bring back is already running.');
+  // Once Hyperliquid credited the deposit, or Bring back started, funding is
+  // over for this address. Running it again could sign a second deposit.
+  if (before && (before.creditedAt || before.withdrawal || before.failedIn === 'shielding')) {
+    throw new Error('This Hyperliquid address is already funded. Bring it back, or abandon it.');
+  }
   if (before && before.amountIn !== amountIn.toString() && (before.unshieldTx || before.depositTx)) {
     throw new Error('This address was already funded with a different amount. Bring it back or abandon it first.');
   }
@@ -144,6 +152,12 @@ async function depositToBridge(amountIn: bigint): Promise<void> {
 
   let raw = view.depositRaw as Hex | undefined;
   let hash = view.depositTx as Hex | undefined;
+  // A recorded transfer is never signed again, even with its bytes gone: wait on that hash.
+  if (!raw && hash) {
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    if (receipt.status !== 'success') throw new Error('The transfer to Hyperliquid’s bridge reverted. The USDC is still on the address. Abandon this address and scan old addresses to recover it.');
+    return;
+  }
   if (!raw || !hash) {
     if (await bridgePaused()) throw new Error('Hyperliquid’s bridge is paused right now. Nothing was sent to it; the USDC is still on the address. Try again later.');
     await ensureUnshieldGas(trade.ownerIndex, trade.ownerAddress, BRIDGE_GAS_WEI);
@@ -204,6 +218,7 @@ async function waitForCredit(amountIn: bigint): Promise<HyperliquidAccountView> 
       const ready: HyperliquidAccountView = {
         ...latest.hyperliquid!,
         status: 'funded',
+        creditedAt: Date.now(),
         step: undefined,
         depositRaw: undefined,
         error: undefined,
@@ -267,17 +282,43 @@ async function startWithdrawal(trade: ActiveTrade): Promise<void> {
     if (totalUsdc(account) > HYPERLIQUID_WITHDRAW_FEE_UNITS) {
       throw new Error('Hyperliquid shows a balance but nothing withdrawable yet. Wait a moment and try again. Nothing was withdrawn.');
     }
-    // Nothing left on Hyperliquid worth the 1 USDC fee. Shield what is on the address.
+    // Nothing worth the fee is left on Hyperliquid. Either the user already
+    // withdrew from Hyperliquid's own site (to this same address, still
+    // arriving), or the account is empty. The ledger says which; without it
+    // nothing is retired, because USDC landing on a retired address is lost track of.
+    const withdrawn = withdrawnSince(await readLedger(trade.ownerAddress, trade.startedAt));
     const latest = await requireTrade();
     await remember(latest, {
       ...latest.hyperliquid!,
-      withdrawal: { nonce: 0, amount: '0', arbitrumBefore: '0', acceptedAt: Date.now() },
-      detail: 'Nothing left on Hyperliquid to withdraw. Shielding what is on the address.',
+      // Waits for every withdrawal already made to land: arrival is amount minus the fee.
+      withdrawal: {
+        nonce: 0,
+        amount: usdcDecimalFromUnits(withdrawn > 0n ? withdrawn + HYPERLIQUID_WITHDRAW_FEE_UNITS : 0n),
+        arbitrumBefore: '0',
+        acceptedAt: Date.now(),
+      },
+      step: withdrawn > 0n ? 'arriving' : 'shielding',
+      detail:
+        withdrawn > 0n
+          ? `You already withdrew ${usdcDecimalFromUnits(withdrawn)} USDC on Hyperliquid. Waiting for it on Arbitrum, then shielding it.`
+          : 'Nothing is left on Hyperliquid and nothing was withdrawn from it. Shielding whatever is on the address.',
     });
     return;
   }
 
-  const amount = usdcDecimalFromUnits(account.withdrawable);
+  try {
+    await signAndSend(trade, account.withdrawable);
+  } catch (error) {
+    // If Hyperliquid charges the 1 USDC on top of the amount, the whole
+    // balance is refused as too much. Nothing was withdrawn; ask for 1 less, once.
+    if (!(error instanceof WithdrawRefused) || !/insufficient|not enough|exceed|too (large|much)/i.test(error.reason)) throw error;
+    if (account.withdrawable - HYPERLIQUID_WITHDRAW_FEE_UNITS <= HYPERLIQUID_WITHDRAW_FEE_UNITS) throw error;
+    await signAndSend(await requireTrade(), account.withdrawable - HYPERLIQUID_WITHDRAW_FEE_UNITS);
+  }
+}
+
+async function signAndSend(trade: ActiveTrade, units: bigint): Promise<void> {
+  const amount = usdcDecimalFromUnits(units);
   const nonce = Date.now();
   const action = withdrawAction(trade.ownerAddress, amount, nonce);
   const owner = await ownerAt(trade.ownerIndex);
@@ -293,6 +334,12 @@ async function startWithdrawal(trade: ActiveTrade): Promise<void> {
   await sendWithdrawal(await requireTrade());
 }
 
+class WithdrawRefused extends Error {
+  constructor(readonly reason: string) {
+    super(`Hyperliquid refused the withdrawal: ${reason}. Nothing was withdrawn.`);
+  }
+}
+
 /** Send the saved, signed withdrawal. The same nonce every time, so it can only be processed once. */
 async function sendWithdrawal(trade: ActiveTrade): Promise<void> {
   const view = trade.hyperliquid!;
@@ -300,16 +347,16 @@ async function sendWithdrawal(trade: ActiveTrade): Promise<void> {
   if (!saved?.signature) throw new Error('The withdrawal was not signed. Try again.');
   const action = withdrawAction(trade.ownerAddress, saved.amount, saved.nonce);
 
-  // A lost response is the case to fear: maybe it was processed. If the
-  // withdrawable balance already dropped by the amount, it was.
-  const account = await readHyperliquid(trade.ownerAddress).catch(() => null);
-  const already = account !== null && account.withdrawable + 1_000_000n < usdcUnitsFromDecimal(saved.amount);
+  // A lost response is the case to fear: maybe it was processed. The ledger
+  // lists every withdrawal; one at or after this nonce's time means it was.
+  const ledger = await readLedger(trade.ownerAddress, saved.nonce - 60_000).catch(() => null);
+  const already = ledger !== null && withdrawnSince(ledger, saved.nonce - 5_000) > 0n;
 
   const answer = already ? 'duplicate' : readExchangeAnswer(await postHyperliquid('/exchange', exchangeBody(action, saved.signature)));
   if (typeof answer === 'object') {
     // Hyperliquid refused it outright, so nothing was withdrawn. Forget it, so the next try signs a fresh one.
     await remember(trade, { ...view, withdrawal: undefined, step: 'withdrawing' });
-    throw new Error(`Hyperliquid refused the withdrawal: ${answer.error}. Nothing was withdrawn.`);
+    throw new WithdrawRefused(answer.error);
   }
   await remember(trade, {
     ...view,
@@ -346,23 +393,47 @@ async function shieldBack(): Promise<HyperliquidAccountView> {
   await remember(trade, { ...view, step: 'shielding', detail: 'Shielding the USDC back into Railgun.' });
 
   const shielded: HyperliquidTokenLine[] = [...(view.shielded ?? [])];
-  const left: HyperliquidTokenLine[] = [];
+  // A confirmed shield record belongs to this round until its line is saved.
+  // Saving the line and clearing the record happen in one write, so a crash
+  // between them repeats the same result rather than shielding twice.
   const usdc = await usdcOn(trade.ownerAddress);
-  if (usdc > 0n && !shielded.some((row) => row.token.toLowerCase() === USDC_ADDRESS.toLowerCase())) {
+  if (trade.reshield?.status === 'confirmed' || usdc >= MIN_SHIELD_UNITS) {
     const result = await shieldOwnerUsdcToRailgun('hyperliquid');
     shielded.push({ token: USDC_ADDRESS, symbol: 'USDC', amount: result.amountUnits.toString(), txHash: result.txHash });
+    await updateOwnedTrade(trade.ownerIndex, { reshield: undefined, hyperliquid: { ...view, shielded, ownerAddress: trade.ownerAddress } });
   }
+
+  // Never retire an address that still has money on Hyperliquid: a
+  // withdrawal from the site, or one we mistook for ours, would leave it there.
+  const account = await readHyperliquid(trade.ownerAddress);
+  if (totalUsdc(account) > HYPERLIQUID_WITHDRAW_FEE_UNITS || account.openPositions.length > 0 || account.spotOther.length > 0) {
+    const latest = await requireTrade();
+    const still: HyperliquidAccountView = {
+      ...latest.hyperliquid!,
+      status: 'funded',
+      step: undefined,
+      withdrawal: undefined,
+      shielded,
+      error: undefined,
+      detail: `${shielded.length > 0 ? 'What arrived is shielded. ' : ''}${usdcDecimalFromUnits(totalUsdc(account) > 0n ? totalUsdc(account) : 0n)} USDC is still on Hyperliquid. Bring it back again to withdraw the rest.`,
+    };
+    await remember(latest, still);
+    return still;
+  }
+
+  const left: HyperliquidTokenLine[] = [];
   const after = await usdcOn(trade.ownerAddress);
   if (after > 0n) {
-    left.push({ token: USDC_ADDRESS, symbol: 'USDC', amount: after.toString(), reason: 'Kept to pay the shield’s gas through the paymaster.' });
+    left.push({ token: USDC_ADDRESS, symbol: 'USDC', amount: after.toString(), reason: 'Too little to shield, or kept to pay the shield’s gas through the paymaster.' });
   }
   const eth = await publicClient.getBalance({ address: trade.ownerAddress });
   if (eth > 1_000_000_000_000n) {
     left.push({ token: 'ETH', symbol: 'ETH', amount: eth.toString(), reason: 'Kept for gas. Native ETH is not shielded.' });
   }
 
+  const latest = await requireTrade();
   const done: HyperliquidAccountView = {
-    ...view,
+    ...latest.hyperliquid!,
     status: 'done',
     step: undefined,
     shielded,
@@ -370,7 +441,7 @@ async function shieldBack(): Promise<HyperliquidAccountView> {
     error: undefined,
     detail: shielded.length > 0 ? 'Shielded back into Railgun. This address is not reused.' : 'Nothing was left to shield. This address is not reused.',
   };
-  await remember(trade, done);
+  await remember(latest, done);
   await endVenue('hyperliquid');
   return done;
 }

@@ -730,7 +730,8 @@ export function GhostProgress({
   const poll = useCallback(async () => {
     try {
       if (lighter) setView(await send({ kind: stage === 'ready' ? 'tradeSession' : 'advanceTrade' }, SLOW_TIMEOUT_MS));
-      if (venue === 'hyperliquid' && stage === 'crediting' && !resuming.current && amountUnits) {
+      const cutOff = stage === 'crediting' || (stage === 'paying' && t.hyperliquid?.step === 'bridging' && Boolean(t.hyperliquid.depositTx));
+      if (venue === 'hyperliquid' && cutOff && !resuming.current && amountUnits) {
         resuming.current = true;
         void send({ kind: 'fundHyperliquid', amountUnits }, SLOW_TIMEOUT_MS)
           .catch(() => undefined)
@@ -742,7 +743,7 @@ export function GhostProgress({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [lighter, venue, stage, amountUnits, onChanged]);
+  }, [lighter, venue, stage, amountUnits, onChanged, t.hyperliquid?.step, t.hyperliquid?.depositTx]);
 
   useEffect(() => {
     if (stage === 'ready' && !lighter) return;
@@ -798,8 +799,8 @@ export function GhostProgress({
           <p className="gx-sub">
             {VENUES[venue].ready} as usual. {name} sees a private account{amountUnits ? ` with ${fmt(amountUnits)} USDC` : ''}.
             {venue === 'hyperliquid'
-              ? ' Connect, pick Ghosty in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
-              : venue !== 'lighter' && ' Pick Arbitrum, then Ghosty in its wallet list.'}
+              ? ' Connect, pick Truly in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
+              : venue !== 'lighter' && ' Pick Arbitrum, then Truly in its wallet list.'}
           </p>
         </div>
         <button type="button" className="gx-btn primary" onClick={() => void chrome.tabs.create({ url: VENUES[venue].url })}>

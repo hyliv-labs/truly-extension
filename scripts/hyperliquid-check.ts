@@ -23,6 +23,7 @@ import {
   usdcUnitsFromDecimal,
   withdrawAction,
   withdrawalArrived,
+  withdrawnSince,
   withdrawTypedData,
 } from '../src/lib/hyperliquid.ts';
 import { venueFromOrigin } from '../src/lib/trade.ts';
@@ -154,6 +155,16 @@ expect('credited within a 1 USDC allowance', depositCredited(0n, 9_200_000n, 10_
 expect('not credited before it shows', depositCredited(0n, 0n, 10_000_000n), false);
 expect('arrived once amount minus the fee landed', withdrawalArrived(0n, 9_000_000n, 10_000_000n), true);
 expect('not arrived before it lands', withdrawalArrived(0n, 0n, 10_000_000n), false);
+
+// --- The ledger. Row shape read live 2026-11-12: usdc is what reached Arbitrum, fee listed apart.
+const ledger = [
+  { time: 1000, delta: { type: 'deposit', usdc: '10.0' } },
+  { time: 2000, delta: { type: 'withdraw', usdc: '4.5', fee: '1.0' } },
+  { time: 3000, delta: { type: 'withdraw', usdc: '2.0', fee: '1.0' } },
+];
+expect('withdrawals since a time, deposits ignored', withdrawnSince(ledger, 0), 6_500_000n);
+expect('withdrawals before the time are ignored', withdrawnSince(ledger, 2500), 2_000_000n);
+expect('no withdrawals reads as zero', withdrawnSince([], 0), 0n);
 
 // --- What /exchange answered.
 expect('ok is accepted', readExchangeAnswer({ status: 'ok', response: { type: 'default' } }), 'accepted');

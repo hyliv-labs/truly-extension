@@ -99,6 +99,8 @@ export interface HyperliquidAccountView {
   readonly depositRaw?: string;
   /** Hyperliquid's USDC total for the address before the deposit, in units. */
   readonly creditBefore?: string;
+  /** Set once Hyperliquid showed the deposit. From then on funding never runs again. */
+  readonly creditedAt?: number;
   readonly withdrawal?: HyperliquidWithdrawal;
   /** Which half a 'failed' status belongs to: Try again on Go ghost, or on Bring back. */
   readonly failedIn?: 'funding' | 'shielding';
@@ -305,6 +307,23 @@ export function hyperliquidExitBlocker(account: HyperliquidAccount): string | nu
     return `Sell ${account.spotOther.map((row) => `${row.total} ${row.coin}`).join(', ')} for USDC on Hyperliquid first. Only USDC comes back to Arbitrum. Nothing was withdrawn.`;
   }
   return null;
+}
+
+/** One row of userNonFundingLedgerUpdates. Only withdrawals are read. */
+export interface LedgerRow {
+  readonly time: number;
+  readonly delta: { readonly type: string; readonly usdc?: string; readonly fee?: string };
+}
+
+/**
+ * USDC withdrawn to Arbitrum at or after `since`, as it arrives there. Read
+ * live (2026-11-12): a withdraw row's `usdc` equals the amount the bridge paid
+ * out on Arbitrum, with the 1 USDC `fee` listed separately.
+ */
+export function withdrawnSince(rows: readonly LedgerRow[], since = 0): bigint {
+  return rows
+    .filter((row) => row.delta?.type === 'withdraw' && row.time >= since)
+    .reduce((sum, row) => sum + usdcUnitsFromDecimal(row.delta.usdc ?? '0'), 0n);
 }
 
 /**
