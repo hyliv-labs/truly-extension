@@ -67,6 +67,9 @@ Everything NEAR-related was written in the window. Diff:
 [`pre-hackathon...near-intents`](https://github.com/hyliv-labs/truly-extension/compare/pre-hackathon...near-intents).
 The extension itself (Railgun funding of fresh owners, Lighter/Uniswap/Compound
 venues) existed before and is the baseline.
+Hyperliquid as a fourth venue was also added in the window (12 Nov). It is
+not a NEAR integration and is not part of what is submitted for judging; a
+Bring in can fund it the same way it funds any venue.
 
 | File | What it does |
 | --- | --- |
@@ -169,6 +172,50 @@ Privacy Pools ──relayer──▶ fresh owner address ──▶ Lighter accou
 6. Re-shield into Privacy Pools, with gas paid in USDC via EIP-7702 and
    Circle's Paymaster — the owner never needs ETH
 7. Retire the key and clear Lighter's site data
+
+## Hyperliquid
+
+Hyperliquid is a venue like Lighter, Uniswap and Compound: its own fresh
+address, funded from Railgun, brought back into Railgun, never reused.
+
+```
+Railgun ──unshield──▶ fresh owner ──USDC transfer──▶ Bridge2 ──▶ Hyperliquid account
+   ▲                                                                    │
+   └── shield (ETH gas, or USDC via paymaster) ◀── Arbitrum ◀── withdraw3 ┘
+```
+
+- **Go ghost** unshields onto the fresh owner, which sends the USDC to
+  Hyperliquid's Arbitrum bridge. The bridge credits whoever sent the USDC,
+  so the unshield never goes to the bridge directly (the sender would be the
+  Railgun contract). The signed transfer is saved before it is broadcast and a
+  retry resends those bytes, so a crash never deposits twice. Minimum 6 USDC:
+  Hyperliquid loses deposits under 5 and keeps 1 on the way back.
+- **Trade** on app.hyperliquid.xyz with Ghosty as the wallet. Enable trading
+  asks Ghosty to sign Hyperliquid's ApproveAgent; after that the site's own
+  agent key signs orders, so there is no prompt per order. Hyperliquid's
+  site data is cleared between Hyperliquid addresses.
+- **Bring back** refuses while a position, an open order or a non-USDC spot
+  token remains (Ghosty never trades for you). Otherwise the owner signs a
+  `withdraw3` to itself, saved with its nonce before it is sent so a retry can
+  only resend the same withdrawal. The USDC reaches Arbitrum in 3 to 5
+  minutes and is shielded into Railgun; the owner is retired.
+- Unified-account mode is handled (the spot balance is the account).
+- The recovery scan reads every derived address's Hyperliquid account too.
+
+Verified: the `withdraw3` and `ApproveAgent` signatures match Hyperliquid's
+own Python SDK byte for byte (`scripts/hyperliquid-check.ts`); the live
+`/info` reads parse; on app.hyperliquid.xyz the page sees Ghosty over EIP-6963,
+connects a fresh owner, and Enable trading's typed data is shown, approved and
+recovers to that owner. viem refuses Hyperliquid's type names (they contain a
+`:`), so these are hashed by `src/lib/typed-data.ts` with viem's own encoder
+minus that one check.
+
+Not yet run with money: a bridge deposit, a trade, a withdrawal. Stated limits:
+Hyperliquid's docs call Bridge2 the legacy bridge and prefer CCTP, though its
+site still deposits Arbitrum USDC through Bridge2; a withdrawal can be refused
+when the bridge is short of liquidity, in which case nothing leaves Hyperliquid
+and Bring back says so. The extension calls Hyperliquid's API directly, as
+the site does, so Hyperliquid sees the same IP as the site.
 
 ## CROPS
 
