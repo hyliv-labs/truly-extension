@@ -8,10 +8,12 @@
  * going on its own alarm when this panel is closed.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { send, SLOW_TIMEOUT_MS } from '@truly/lib/messages';
 import type { IntentsAsset, IntentsDirection, IntentsPreview, IntentsView } from '@truly/lib/intents';
 import { formatUnits, parseUnits } from '@truly/lib/near-intents';
+import { zip321Uri } from '@truly/lib/zcash';
+import { encode as encodeQr } from 'uqr';
 import { Mascot } from './Mascot';
 import { GxBack, GxScreen } from './Ghosty';
 import './intents.css';
@@ -195,8 +197,13 @@ export function IntentsMove({
       {asset?.blockchain === 'zec' && (
         <p className="gx-note">
           {direction === 'exit'
-            ? 'Zcash: give a transparent t1… address from Zashi. Zashi shields it on arrival.'
-            : 'Zcash: pay from your shielded balance in Zashi. The refund address must be a transparent t1… one.'}
+            ? 'Zcash: paste the address from any wallet (Zashi, Zingo, YWallet, Ledger, an exchange). A unified u1… address works if it has a transparent part; ZEC lands there and your wallet can shield it.'
+            : 'Zcash: pay from any wallet, best from a shielded balance (Zashi, Zingo, YWallet). For the refund, paste your address from that wallet; a unified u1… address works if it has a transparent part.'}
+        </p>
+      )}
+      {preview?.addressFromUnified && (
+        <p className="gx-note">
+          {direction === 'exit' ? 'Delivering to' : 'Refunds go to'} <span className="gx-mono">{short(preview.address)}</span>, the transparent part of your unified address.
         </p>
       )}
       {asset?.blockchain === 'aleo' && (
@@ -217,6 +224,9 @@ export function IntentsMove({
                 <div><span>Railgun fee</span><span>{formatUnits(preview.railgunFeeUnits, 6)} USDC</span></div>
               )}
               <div><span>Into NEAR Intents</span><span>{preview.amountInFormatted} {direction === 'exit' ? 'USDC' : asset?.symbol}</span></div>
+              {preview.minAmountInFormatted && (
+                <div><span>Still swaps from</span><span>{preview.minAmountInFormatted} {asset?.symbol}</span></div>
+              )}
               <div><span>{direction === 'exit' ? 'You receive' : 'Shielded'}</span><span className="ix-strong">{preview.amountOutFormatted} {direction === 'exit' ? asset?.symbol : 'USDC'}</span></div>
               <div><span>At least</span><span>{preview.minAmountOutFormatted}</span></div>
               <div><span>Time</span><span>~{Math.max(1, Math.round(preview.timeEstimate / 60))} min</span></div>
@@ -281,6 +291,7 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
   const [working, setWorking] = useState(false);
   const [txHash, setTxHash] = useState('');
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -322,6 +333,7 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
 
   const finished = view.stage === 'done' || view.stage === 'refunded';
   const entryWaiting = view.direction === 'entry' && view.stage === 'awaiting-deposit';
+  const partlyPaid = entryWaiting && !!view.depositedAmount;
   const entryExpired =
     view.direction === 'entry' && view.stage === 'failed' && (!view.swapStatus || view.swapStatus === 'PENDING_DEPOSIT') && !view.userDepositTx;
   const originSymbol = view.originLabel.split(' on ')[0];
@@ -340,9 +352,15 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
 
       {entryWaiting && (
         <div className="gx-card ix-deposit">
-          <span className="ix-label">Send exactly</span>
+          <span className="ix-label">{view.minAmountIn ? 'Send' : 'Send exactly'}</span>
           <b className="gx-mono">{formatUnits(view.amountIn, view.originDecimals)} {originSymbol}</b>
+          {view.minAmountIn && (
+            <span className="ix-label">
+              Anything from {formatUnits(view.minAmountIn, view.originDecimals)} {originSymbol} up swaps. If your wallet or exchange takes its fee out of the amount, that is fine; a second payment to the same address adds up.
+            </span>
+          )}
           <span className="ix-label">to this one-time address</span>
+          <DepositQr view={view} />
           <code className="ix-addr">{view.depositAddress}</code>
           {view.depositMemo && (
             <>
@@ -362,6 +380,25 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
           >
             {copied ? 'Copied' : 'Copy address'}
           </button>
+          {zcashLink(view) && (
+            <button
+              type="button"
+              className="gx-chip"
+              onClick={() =>
+                void navigator.clipboard.writeText(zcashLink(view)!).then(() => {
+                  setLinkCopied(true);
+                  setTimeout(() => setLinkCopied(false), 1500);
+                })
+              }
+            >
+              {linkCopied ? 'Copied' : 'Copy payment link'}
+            </button>
+          )}
+          {view.originAsset === ZEC_ASSET && (
+            <span className="ix-label">
+              Zashi, Zingo, YWallet, Edge: scan the code, the amount fills in. Paying from a shielded balance keeps your wallet private. An exchange withdrawal or a transparent balance works too, but links that account to this deposit.
+            </span>
+          )}
           <span className="ix-label">Valid until {new Date(view.inactiveAt).toLocaleString()}. Refunds go to {short(view.refundTo)}.</span>
           <div className="ix-key">
             <label className="gx-field">
@@ -413,7 +450,7 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
           Retry
         </button>
       ) : null}
-      {!finished && (entryWaiting || entryExpired || (view.stage === 'failed' && !view.unshieldTx && view.direction === 'exit')) && (
+      {!finished && ((entryWaiting && !partlyPaid) || entryExpired || (view.stage === 'failed' && !view.unshieldTx && view.direction === 'exit')) && (
         <button
           type="button"
           className="gx-btn quiet"
@@ -434,6 +471,46 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
         </button>
       )}
     </GxScreen>
+  );
+}
+
+const ZEC_ASSET = 'nep141:zec.omft.near';
+
+/** ZIP-321 link for a Zcash deposit, so any Zcash wallet fills in address and amount. */
+function zcashLink(view: IntentsView): string | null {
+  if (view.originAsset !== ZEC_ASSET) return null;
+  try {
+    return zip321Uri(view.depositAddress, BigInt(view.amountIn));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * QR for the deposit: a ZIP-321 payment request for Zcash (address and
+ * amount), the bare address for every other chain (each wallet reads that).
+ * Drawn as SVG rects from the module matrix; no HTML is injected.
+ */
+function DepositQr({ view }: { view: IntentsView }) {
+  const qr = useMemo(() => {
+    try {
+      return encodeQr(zcashLink(view) ?? view.depositAddress, { ecc: 'M', border: 2 });
+    } catch {
+      return null;
+    }
+  }, [view.depositAddress, view.amountIn, view.originAsset]);
+  if (!qr) return null;
+  const cells: ReactElement[] = [];
+  qr.data.forEach((row, y) =>
+    row.forEach((dark, x) => {
+      if (dark) cells.push(<rect key={`${x}-${y}`} x={x} y={y} width={1.02} height={1.02} />);
+    }),
+  );
+  return (
+    <svg className="ix-qr" viewBox={`0 0 ${qr.size} ${qr.size}`} role="img" aria-label="Deposit QR code" shapeRendering="crispEdges">
+      <rect width={qr.size} height={qr.size} fill="#fff" />
+      <g fill="#000">{cells}</g>
+    </svg>
   );
 }
 
