@@ -760,7 +760,8 @@ export async function ensureUnshieldGas(ownerIndex: number, owner: Address, need
   }
 
   throw new Error(
-    `This owner needs ${formatEther(topUp)} more ETH on Arbitrum One for the Railgun unshield gas. Send it to ${owner}, then retry funding (an unshield already signed is resent on its own). Nothing left the pool.`,
+    `This fresh address needs ${formatEther(topUp)} more ETH on Arbitrum One for the Railgun unshield gas, and no earlier Ghosty address has enough to top it up. Nothing left the pool. ` +
+      `Sending ETH from your own wallet to ${owner} works but links that wallet to this account; sending it to an earlier Ghosty address keeps it private. Then retry (an unshield already signed is resent on its own).`,
   );
 }
 
