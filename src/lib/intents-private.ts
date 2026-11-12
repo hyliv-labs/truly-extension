@@ -147,7 +147,8 @@ export interface EntryInput {
   readonly slippageBps?: number;
 }
 
-const PREVIEW_OWNER = '0x000000000000000000000000000000000000dEaD';
+/** Stand-in for the fresh owner in a dry quote. 1Click rejects the 0x…dEaD burn address as invalid. */
+const PREVIEW_OWNER = '0x2222222222222222222222222222222222222222';
 
 /**
  * A dry quote: no deposit address, nothing reserved. It also validates the
@@ -467,7 +468,16 @@ async function runExit(): Promise<void> {
     const now = await getActiveTrade();
     // A broadcast may be in flight: stay here so the tick resumes it.
     if (now?.withdrawal?.status === 'pending') await patch({ detail: message });
-    else await patch({ stage: 'failed', error: message, detail: message });
+    else if (/more ETH on Arbitrum/i.test(message)) {
+      // ensureUnshieldGas found no earlier owner able to pay. Its advice
+      // ("send it to the owner") would put the user's own wallet next to
+      // this exit, so say that plainly.
+      const gas =
+        `No earlier Ghosty address has the ~0.0001 ETH this unshield needs for gas. Nothing left Railgun. ` +
+        `Sending ETH from your own wallet to ${trade.ownerAddress} works but links that wallet to this exit; ` +
+        `funding an earlier Ghosty address instead keeps it private. Then Retry.`;
+      await patch({ stage: 'failed', error: gas, detail: gas });
+    } else await patch({ stage: 'failed', error: message, detail: message });
   }
 }
 
