@@ -22,6 +22,13 @@ cross-chain layer, in both directions:
   transparent deposit address) or an Aleo wallet (private-to-public transfer).
   The USDC lands at a fresh owner on Arbitrum, and Ghosty shields it into
   Railgun.
+- **Zcash from any wallet.** The deposit card shows a ZIP-321 QR
+  (`zcash:<address>?amount=…`) that Zashi, Zingo, YWallet and Edge scan with
+  the amount filled in. A unified address (`u1…`) pasted from any wallet is
+  reduced to its transparent receiver, which 1Click accepts, and the panel shows
+  which `t1…` that is. Entries are quoted FLEX_INPUT, so an exchange that takes
+  its withdrawal fee out of the amount, or a second payment to make up a short
+  one, still swaps.
 
 So value moves between Railgun, Zcash, Aleo and 30+ public chains with no
 public address of the user's in between.
@@ -59,8 +66,9 @@ venues) existed before and is the baseline.
 | --- | --- |
 | `src/lib/near-intents.ts` | 1Click client; checks every quote against the request (recipient, refund address, assets, amount, signature, expiry) before money moves; exact Railgun fee math |
 | `src/lib/intents-private.ts` | Exit and entry state machines: quote, unshield to the deposit address, poll status, shield back; resumable after a worker restart |
-| `src/lib/intents.ts` | The saved view the panel renders |
-| `entrypoints/popup/Intents.tsx` | Send out / Bring in screens with a live dry quote |
+| `src/lib/intents.ts` | The saved view the panel renders; what each 1Click status means, including a short deposit |
+| `src/lib/zcash.ts` | Zcash addresses from any wallet: t1/t3/tex1 checks, unified-address decoding (F4Jumble, ZIP-316) to the transparent receiver, ZIP-321 payment links; tested against the official ZIP-316 vectors |
+| `entrypoints/popup/Intents.tsx` | Send out / Bring in screens with a live dry quote; deposit QR and payment link |
 | `scripts/near-intents-check.ts`, `scripts/near-intents-live-check.ts` | Offline checks and live dry quotes |
 
 ### Design notes
@@ -70,6 +78,12 @@ venues) existed before and is the baseline.
   amount that will actually arrive and unshields the matching gross, so the
   deposit equals `amountIn` to the unit. Rounding the other way would put one
   extra unit on the address and trigger a refund with a fee.
+- **Flexible entries.** A person paying from their own wallet cannot always
+  hit an amount to the unit (exchange fees, "send max"). Entries ask for
+  FLEX_INPUT: 1Click swaps any total from 1% under the quote upward, and adds up
+  several payments to the same address. If the total is short, the panel shows
+  how much more to send. Confidential mode does not offer FLEX_INPUT, so there
+  the entry stays EXACT_INPUT and the panel says a short deposit is refunded.
 - **Quote checks.** A quote whose echoed recipient, refund address, assets or
   amount differ from the request is refused. So is one without a signature, a
   deposit address, or with an inactive address.
@@ -92,9 +106,12 @@ venues) existed before and is the baseline.
   entered at runtime in the panel; none is bundled.
 - 1Click is called directly, not over anon-rpc, so 1Click sees the user's IP
   next to the quote.
-- Zcash routes use **transparent** addresses (1Click does not support shielded
-  ZEC addresses). The privacy comes from paying from, or receiving into, a
-  Zashi wallet that shields. Aleo deliveries arrive as a public balance.
+- Zcash routes use **transparent** addresses: 1Click refuses unified and
+  Sapling addresses (checked live). Ghosty uses the transparent receiver of a
+  pasted unified address and says so; a unified address with no transparent
+  part, or a `zs1…`, is refused with where the wallet shows its `t1…`. The
+  privacy comes from paying from a shielded balance, or receiving into a
+  wallet that shields. Aleo deliveries arrive as a public balance.
 - Exact amounts and timing can correlate deposit and delivery; round amounts
   and waiting help.
 - Bring in uses Circle's paymaster when the fresh owner has no ETH; up to
