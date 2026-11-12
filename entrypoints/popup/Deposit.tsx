@@ -5,7 +5,7 @@
  * CompoundSupply; only the screens are new. Bringing funds back is Return.tsx.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { send, SLOW_TIMEOUT_MS, type VaultStatus } from '@truly/lib/messages';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
@@ -88,6 +88,7 @@ export function GhostHome({
   onRetry,
   onAdvanced,
   onAnyChain,
+  notice,
 }: {
   balance: ShieldedBalance | null;
   balanceError: string | null;
@@ -103,11 +104,14 @@ export function GhostHome({
   onAdvanced: () => void;
   /** NEAR Intents: send out to, or bring in from, any chain. */
   onAnyChain?: () => void;
+  /** Shown above the actions, e.g. a NEAR Intents move that finished while the panel was closed. */
+  notice?: ReactNode;
 }) {
   const [revealed, setRevealed] = useState(false);
   const ready = balance !== null && railgunReady(balance.railgun);
   const spendable = ready ? BigInt((balance!.railgun as { spendableUnits: string }).spendableUnits) : 0n;
-  const empty = ready && spendable === 0n;
+  const pending = ready ? BigInt((balance!.railgun as { pendingUnits?: string }).pendingUnits ?? '0') : 0n;
+  const empty = ready && spendable === 0n && pending === 0n;
   const syncing = !ready && balanceLoading;
   const pct = sync ? Math.round(Math.min(1, Math.max(0, sync.progress)) * 100) : null;
 
@@ -152,6 +156,9 @@ export function GhostHome({
             <button type="button" className="gx-link" onClick={onRetry}>Try again</button>
           </div>
         )}
+        {ready && pending > 0n && (
+          <small className="gx-pending">{revealed ? `${fmt(pending)} USDC` : 'More'} still landing in Railgun. Spendable in a few minutes.</small>
+        )}
       </div>
 
       {activities.map((activity) => (
@@ -179,6 +186,8 @@ export function GhostHome({
           <span>Open an app, or pick one when you tap Go ghost.</span>
         )}
       </div>
+
+      {notice}
 
       <div className="gx-actions">
         <button type="button" className={`gx-act${empty && activities.length === 0 ? ' primary' : ''}`} onClick={onAddFunds}>
@@ -210,7 +219,16 @@ export function GhostHome({
 const RAILGUN_FEE_BPS = 25n;
 const shortAddress = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
-export function AddFunds({ onBack, onDone }: { onBack: () => void; onDone: () => Promise<void> }) {
+export function AddFunds({
+  onBack,
+  onDone,
+  onPrivate,
+}: {
+  onBack: () => void;
+  onDone: () => Promise<void>;
+  /** NEAR Intents Bring in: from a shielded wallet or any other chain, with no public address of the user's. */
+  onPrivate?: () => void;
+}) {
   const [wallet, setWallet] = useState<{ address: string; usdcUnits: bigint; ethWei: bigint } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
@@ -392,6 +410,12 @@ export function AddFunds({ onBack, onDone }: { onBack: () => void; onDone: () =>
           Try again
         </button>
       )}
+      {onPrivate && (
+        <button type="button" className="gx-option" onClick={onPrivate}>
+          <b>Privately, from any wallet or chain</b>
+          <span>Zcash (Zashi, Zingo, YWallet…), Aleo, Solana, Bitcoin and 30+ chains through NEAR Intents. No public address of yours is involved.</span>
+        </button>
+      )}
     </GxScreen>
   );
 }
@@ -447,9 +471,15 @@ export function GoGhost({
   onBack,
   onStarted,
   onResume,
+  pendingUnits = 0n,
+  onBringIn,
 }: {
   venue: Venue | null;
   spendableUnits: bigint;
+  /** Shielded but not spendable yet (a fresh shield still landing in Railgun's tree). */
+  pendingUnits?: bigint;
+  /** Too little to fund this app: bring more in through NEAR Intents. */
+  onBringIn?: () => void;
   /** Venues that already have a funded address. Another app can still be funded. */
   activeVenues?: Venue[];
   onBack: () => void;
@@ -556,9 +586,17 @@ export function GoGhost({
           : tooSmall
             ? `At least ${fmt(min)} USDC on ${VENUES[venue].name}.`
             : tooBig
-              ? 'More than your private balance.'
-              : `${fmt(spendableUnits)} available privately`}
+              ? pendingUnits > 0n && units !== null && units <= spendableUnits + pendingUnits
+                ? `More than is spendable yet: ${fmt(pendingUnits)} USDC is still landing in Railgun. Try again in a few minutes.`
+                : 'More than your private balance.'
+              : `${fmt(spendableUnits)} available privately${pendingUnits > 0n ? `, ${fmt(pendingUnits)} still landing` : ''}`}
       </p>
+      {onBringIn && spendableUnits + pendingUnits < min && (
+        <button type="button" className="gx-option" onClick={onBringIn}>
+          <b>Not enough for {VENUES[venue].name} yet</b>
+          <span>Bring funds in privately from Zcash, Aleo, Solana or any chain. They land in your private balance, then fund this app.</span>
+        </button>
+      )}
       {!quote && <div className="gx-presets">
         <button type="button" onClick={() => preset(10_000_000n)} disabled={working}>10</button>
         <button type="button" onClick={() => preset(25_000_000n)} disabled={working}>25</button>

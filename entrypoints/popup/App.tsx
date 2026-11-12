@@ -11,8 +11,8 @@ import { PhraseScreen } from './PhraseScreen';
 import { AddFunds, ConnectScreen, GhostHome, GhostProgress, GoGhost, openStages, venueFromSite, type Venue } from './Deposit';
 import { GhostMore, GhostReturn, returnPhase } from './Return';
 import { Settings } from './Settings';
-import { IntentsMove, IntentsProgress } from './Intents';
-import { dappVenue } from '@truly/lib/intents';
+import { IntentsDoneCard, IntentsMove, IntentsProgress } from './Intents';
+import { dappVenue, type IntentsDirection, type IntentsView } from '@truly/lib/intents';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
@@ -77,6 +77,10 @@ export function App() {
   const [intentsOpen, setIntentsOpen] = useState(false);
   /** The user went home while a move runs (a BTC or ZEC entry can take a while). */
   const [intentsHidden, setIntentsHidden] = useState(false);
+  /** The tab the Any chain form opens on when another screen sent the user there. */
+  const [intentsDirection, setIntentsDirection] = useState<IntentsDirection | undefined>(undefined);
+  /** A NEAR Intents move that finished (possibly with the panel closed) and was not dismissed yet. */
+  const [lastIntents, setLastIntents] = useState<IntentsView | null>(null);
   const [focus, setFocus] = useState<Venue | null>(null);
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
@@ -186,6 +190,24 @@ export function App() {
     };
   }, [refresh]);
 
+  // finish() retires the NEAR Intents slot, so a move that ended while the
+  // panel was closed leaves only its saved last view. Read it (no 1Click call
+  // is made when no move is running) so home can show the outcome.
+  const intentsRunning = Boolean(status?.openVenues?.intents?.intents);
+  useEffect(() => {
+    if (!status?.unlocked || intentsRunning) {
+      setLastIntents(null);
+      return;
+    }
+    let live = true;
+    void send({ kind: 'intentsAdvance' }, 30_000)
+      .then((view) => live && setLastIntents(view && (view.stage === 'done' || view.stage === 'refunded') ? view : null))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [status, intentsRunning]);
+
   useEffect(() => {
     if (!status?.unlocked) {
       setMore(false);
@@ -263,6 +285,27 @@ export function App() {
     const spendable = shielded && railgunReady(shielded.railgun) ? BigInt(shielded.railgun.spendableUnits) : 0n;
     const venue = focus ?? venueFromSite(connectOrigin);
     const intentsActive = Boolean(status.openVenues?.intents?.intents);
+    const pendingShielded = shielded && railgunReady(shielded.railgun) ? BigInt(shielded.railgun.pendingUnits ?? '0') : 0n;
+
+    // One journey: shielded funds in from any chain -> fund an app -> back -> out.
+    const openIntents = (direction?: IntentsDirection) => {
+      setIntentsDirection(direction);
+      setScreen('intents');
+    };
+    const tradeWithIt = () => {
+      setLastIntents(null);
+      setIntentsOpen(false);
+      setIntentsHidden(false);
+      setFocus(null);
+      setAtHome(true);
+      setScreen('go');
+      // The new shield has to be read before Go ghost can spend it.
+      void refreshShielded();
+    };
+    const dismissLast = () => {
+      setLastIntents(null);
+      void send({ kind: 'intentsDismiss' }).catch(() => undefined);
+    };
 
     if ((intentsActive && !intentsHidden && !settingsOpen) || intentsOpen) {
       return (
@@ -275,9 +318,12 @@ export function App() {
             onClose={() => {
               setIntentsOpen(false);
               setIntentsHidden(false);
+              setLastIntents(null);
               setScreen('home');
               void refresh();
+              void refreshShielded();
             }}
+            onTrade={tradeWithIt}
           />
         </main>
       );
@@ -324,6 +370,16 @@ export function App() {
               if (status.openVenues?.[returnVenue] ?? status.activeTrade) await send({ kind: 'endTrade', venue: returnVenue });
               setBringBack(false);
               setSettled(null);
+              await refresh();
+            }}
+            onSendOut={async () => {
+              if (status.openVenues?.[returnVenue] ?? status.activeTrade) await send({ kind: 'endTrade', venue: returnVenue });
+              setBringBack(false);
+              setSettled(null);
+              setFocus(null);
+              setAtHome(true);
+              openIntents('exit');
+              void refreshShielded();
               await refresh();
             }}
           />
@@ -378,6 +434,8 @@ export function App() {
             <GoGhost
               venue={venue}
               spendableUnits={spendable}
+              pendingUnits={pendingShielded}
+              onBringIn={() => openIntents('entry')}
               activeVenues={ready.map((item) => item.venue)}
               onBack={() => setScreen('home')}
               onResume={() => {
@@ -394,8 +452,13 @@ export function App() {
             />
           ) : screen === 'intents' ? (
             <IntentsMove
+              key={intentsDirection ?? 'auto'}
               spendableUnits={spendable}
-              onBack={() => setScreen('home')}
+              initialDirection={intentsDirection}
+              onBack={() => {
+                setIntentsDirection(undefined);
+                setScreen('home');
+              }}
               onStarted={() => {
                 setIntentsOpen(true);
                 setIntentsHidden(false);
@@ -406,6 +469,7 @@ export function App() {
           ) : screen === 'add' ? (
             <AddFunds
               onBack={() => setScreen('home')}
+              onPrivate={() => openIntents('entry')}
               onDone={async () => {
                 await refreshShielded();
                 setScreen('home');
@@ -425,7 +489,12 @@ export function App() {
               }}
               onGoGhost={() => setScreen('go')}
               onAddFunds={() => setScreen('add')}
-              onAnyChain={() => (intentsActive ? setIntentsHidden(false) : setScreen('intents'))}
+              onAnyChain={() => (intentsActive ? setIntentsHidden(false) : openIntents(undefined))}
+              notice={
+                lastIntents ? (
+                  <IntentsDoneCard view={lastIntents} onOpen={() => setIntentsOpen(true)} onTrade={() => { dismissLast(); tradeWithIt(); }} onDismiss={dismissLast} />
+                ) : undefined
+              }
               onBringBack={() => {
                 if (ready[0]) setFocus(ready[0].venue);
                 setBringBack(true);

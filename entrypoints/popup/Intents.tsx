@@ -28,15 +28,18 @@ function errorText(error: unknown): string {
 
 export function IntentsMove({
   spendableUnits,
+  initialDirection,
   onBack,
   onStarted,
 }: {
   spendableUnits: bigint;
+  /** The tab to open on, when another screen sent the user here for one direction. */
+  initialDirection?: IntentsDirection;
   onBack: () => void;
   onStarted: () => void;
 }) {
   // Nothing shielded yet: Bring in is the only thing that can work.
-  const [direction, setDirection] = useState<IntentsDirection>(spendableUnits > 0n ? 'exit' : 'entry');
+  const [direction, setDirection] = useState<IntentsDirection>(initialDirection ?? (spendableUnits > 0n ? 'exit' : 'entry'));
   const [assets, setAssets] = useState<IntentsAsset[] | null>(null);
   const [assetId, setAssetId] = useState('');
   const [amount, setAmount] = useState('');
@@ -285,7 +288,16 @@ function stepsFor(view: IntentsView): Step[] {
   }));
 }
 
-export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHome?: () => void }) {
+export function IntentsProgress({
+  onClose,
+  onHome,
+  onTrade,
+}: {
+  onClose: () => void;
+  onHome?: () => void;
+  /** After a Bring in lands: go fund an app with it. */
+  onTrade?: () => void;
+}) {
   const [view, setView] = useState<IntentsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -441,7 +453,16 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
 
       {(error || (view.error && view.error !== view.detail)) && <p className="gx-error">{error ?? view.error}</p>}
 
-      {finished ? (
+      {finished && view.direction === 'entry' && view.stage === 'done' && onTrade ? (
+        <>
+          <button type="button" className="gx-btn primary" onClick={() => void send({ kind: 'intentsDismiss' }).finally(onTrade)}>
+            Trade with it
+          </button>
+          <button type="button" className="gx-btn quiet" onClick={() => void send({ kind: 'intentsDismiss' }).finally(onClose)}>
+            Done
+          </button>
+        </>
+      ) : finished ? (
         <button type="button" className="gx-btn primary" onClick={() => void send({ kind: 'intentsDismiss' }).finally(onClose)}>
           Done
         </button>
@@ -471,6 +492,41 @@ export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHo
         </button>
       )}
     </GxScreen>
+  );
+}
+
+/**
+ * A NEAR Intents move that finished while the panel was closed. finish()
+ * retires the slot, so nothing else would show the outcome; this card does,
+ * until the user dismisses it.
+ */
+export function IntentsDoneCard({ view, onOpen, onTrade, onDismiss }: { view: IntentsView; onOpen: () => void; onTrade?: () => void; onDismiss: () => void }) {
+  const landed = view.direction === 'entry' && view.stage === 'done';
+  const title =
+    view.direction === 'entry'
+      ? view.stage === 'done'
+        ? 'Bring in finished'
+        : 'Bring in refunded'
+      : view.stage === 'done'
+        ? `Sent out as ${view.destinationLabel}`
+        : 'Send out refunded and shielded back';
+  return (
+    <div className="gx-card ix-donecard">
+      <button type="button" className="ix-donecard-main" onClick={onOpen}>
+        <b>{title}</b>
+        <small>{view.detail}</small>
+      </button>
+      <span className="ix-donecard-actions">
+        {landed && onTrade && (
+          <button type="button" className="gx-link" onClick={onTrade}>
+            Trade with it
+          </button>
+        )}
+        <button type="button" className="gx-link" onClick={onDismiss}>
+          Dismiss
+        </button>
+      </span>
+    </div>
   );
 }
 

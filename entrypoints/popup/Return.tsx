@@ -94,6 +94,7 @@ export function GhostReturn({
   onMore,
   onFinished,
   onSettled,
+  onSendOut,
 }: {
   status: VaultStatus;
   venue: Venue;
@@ -103,6 +104,8 @@ export function GhostReturn({
   onMore: () => void;
   onFinished: () => Promise<void>;
   onSettled: (lines: { shielded: TokenLine[]; left: TokenLine[] }) => void;
+  /** After it is shielded again: finish, then send it out to another chain through NEAR Intents. */
+  onSendOut?: () => Promise<void>;
 }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -233,6 +236,21 @@ export function GhostReturn({
         >
           {working ? 'Finishing…' : 'Done'}
         </button>
+        {onSendOut && (
+          <button
+            type="button"
+            className="gx-btn quiet"
+            disabled={working}
+            onClick={() => {
+              setWorking(true);
+              void onSendOut()
+                .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => setWorking(false));
+            }}
+          >
+            Send out to another chain
+          </button>
+        )}
       </GxScreen>
     );
   }
