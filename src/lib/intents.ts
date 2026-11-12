@@ -78,6 +78,15 @@ export interface IntentsView {
 /** Stages the extension still has work to do in, or is waiting on 1Click. */
 export const LIVE_INTENTS_STAGES: readonly IntentsStage[] = ['unshielding', 'awaiting-deposit', 'swapping', 'shielding'];
 
+/**
+ * A trade's venue as a dapp venue. The NEAR Intents slot is never a dapp
+ * venue (no site connects to it), and screens built for Lighter, Uniswap and
+ * Compound never see it, so it maps to undefined.
+ */
+export function dappVenue<V extends string>(venue: V | 'intents' | undefined): Exclude<V, 'intents'> | undefined {
+  return venue === 'intents' || venue === undefined ? undefined : (venue as Exclude<V, 'intents'>);
+}
+
 /** The slice of the active trade these rules read. Structural, so this file needs no chrome. */
 export interface IntentsTradeLike {
   readonly venue?: string;

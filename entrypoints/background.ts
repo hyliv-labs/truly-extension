@@ -26,7 +26,7 @@ import {
   unlock,
   requireUnlockedMnemonic,
 } from '@truly/lib/vault';
-import { endTrade, getActiveTrade, startTrade, updateActiveTrade } from '@truly/lib/trade';
+import { endTrade, endVenue, getActiveTrade, getVenueTrade, listOpenVenues, startTrade, startVenue, tradeForOrigin, type VenueId } from '@truly/lib/trade';
 import {
   broadcastProviderEvent,
   grantConnectConsent,
@@ -47,7 +47,7 @@ import {
 } from '@truly/lib/wallet-seed';
 import type { Address, Hex } from 'viem';
 import { canRetire, getTradeStatus } from '@truly/lib/orchestrator';
-import { scanForStrandedFunds } from '@truly/lib/recovery-scan';
+import { scanForStrandedFunds, scanWalletFunds } from '@truly/lib/recovery-scan';
 import {
   clearRecoveryState,
   getRecoveryState,
@@ -73,6 +73,7 @@ import {
   startIntentsEntry,
   startIntentsExit,
 } from '@truly/lib/intents-private';
+import { dappVenue } from '@truly/lib/intents';
 import { fetchMarkets } from '@truly/lib/lighter-markets';
 import { generateApiKey, signMarketOrder } from '@truly/lib/lighter-signer';
 import {
@@ -89,7 +90,7 @@ import {
   shieldFundedAccount,
 } from '@truly/lib/trade-session';
 import { forgetShieldedBalance, loadShieldedBalance } from '@truly/lib/shielded-balance';
-import { railgunSyncStatus } from '@truly/lib/railgun-client';
+import { fundingWalletBalances, railgunSyncStatus, shieldFundingWallet } from '@truly/lib/railgun-client';
 import { ACTIVE_SESSION_STATES } from '@truly/lib/session-types';
 import type { TradeRequest } from '@truly/lib/trade-plan';
 import type { TradeRequestWire } from '@truly/lib/messages';
@@ -224,6 +225,7 @@ async function handle(
         unlocked: await isUnlocked(),
         ownerIndex: await getOwnerIndex(),
         activeTrade: await getActiveTrade(),
+        openVenues: await listOpenVenues(),
       };
 
     case 'createVault': {
@@ -258,39 +260,35 @@ async function handle(
     }
 
     case 'endTrade': {
-      // Retiring burns the owner index. Doing that mid-deposit or
-      // mid-withdrawal leaves funds at an address the UI no longer shows —
-      // recoverable only via the scan, and only if the user thinks to run it.
-      const { ok, reason } = await canRetire();
-      if (!ok) {
-        throw new Error(
-          `${reason ?? 'This trade is not finished.'} Use Abandon if you intend to retire it anyway.`,
-        );
+      const venue = message.venue ?? dappVenue((await getActiveTrade())?.venue) ?? 'lighter';
+      if (venue === 'lighter') {
+        const { ok, reason } = await canRetire();
+        if (!ok) {
+          throw new Error(
+            `${reason ?? 'This trade is not finished.'} Use Abandon if you intend to retire it anyway.`,
+          );
+        }
       }
-      await endTrade();
-      await chrome.alarms.clear(DEPOSIT_ALARM);
-      await chrome.alarms.clear(SESSION_ALARM);
-      await announceTradeEnded();
+      await endVenue(venue);
+      if (!(await listOpenVenues()).lighter) {
+        await chrome.alarms.clear(DEPOSIT_ALARM);
+        await chrome.alarms.clear(SESSION_ALARM);
+      }
+      await announceVenueEnded(venue);
       return null;
     }
 
-    case 'abandonTrade': {
-      // Deliberate escape hatch: the user has been warned and chosen to
-      // retire an unfinished trade. The seed still reaches the funds.
-      // Except a NEAR Intents move with money already in 1Click's hands: a
-      // retired owner would never see the refund or the delivery shielded.
-      const blocked = intentsAbandonBlocker(await getActiveTrade());
-      if (blocked) throw new Error(blocked);
-      await endTrade();
-      // Stop watching immediately rather than letting the next tick discover
-      // there is no trade: that tick would be a network call tying this owner
-      // to a moment after the trade closed.
-      await chrome.alarms.clear(DEPOSIT_ALARM);
-      await chrome.alarms.clear(SESSION_ALARM);
-      await chrome.alarms.clear(INTENTS_ALARM);
-      await announceTradeEnded();
+    case 'abandonTrade':
+      {
+        const venue = message.venue ?? dappVenue((await getActiveTrade())?.venue) ?? 'lighter';
+        await endVenue(venue);
+        if (!(await listOpenVenues()).lighter) {
+          await chrome.alarms.clear(DEPOSIT_ALARM);
+          await chrome.alarms.clear(SESSION_ALARM);
+        }
+        await announceVenueEnded(venue);
+      }
       return null;
-    }
 
     case 'provider': {
       // Trust the sender's own URL over anything the page claims: a page cannot
@@ -326,6 +324,9 @@ async function handle(
         balance: f.balance.toString(),
       }));
     }
+
+    case 'scanWalletFunds':
+      return scanWalletFunds();
 
     case 'metamaskRecoverStart':
       // Returns immediately; the job outlives the popup.
@@ -377,43 +378,8 @@ async function handle(
       // the held eth_requestAccounts, and it must find the consent already
       // recorded or it falls back to opening a second approval window.
       await grantConnectConsent(message.origin);
-      const active = await getActiveTrade();
-      if (active?.venue === 'intents') {
-        throw new Error('This address is in a NEAR Intents move. Let it finish before connecting a site.');
-      }
-      const trade = active ?? (await startTrade());
-      const host = new URL(message.origin).hostname;
-      const uniswap = host === 'uniswap.org' || host.endsWith('.uniswap.org');
-      const lighter = host === 'lighter.xyz' || host.endsWith('.lighter.xyz');
-      const compound =
-        host === 'compound.xyz' ||
-        host.endsWith('.compound.xyz') ||
-        host === 'compound.finance' ||
-        host.endsWith('.compound.finance');
-      if (uniswap && (trade.venue === 'lighter' || trade.venue === 'compound' || trade.session)) {
-        throw new Error(
-          trade.venue === 'compound'
-            ? 'This address is for Compound. Shield it back or abandon it before connecting Uniswap.'
-            : 'This address is for Lighter. Finish or abandon it before connecting Uniswap.',
-        );
-      }
-      if (compound && (trade.venue === 'lighter' || trade.venue === 'uniswap' || trade.session)) {
-        throw new Error(
-          trade.venue === 'uniswap'
-            ? 'This address is for Uniswap. Shield it back or abandon it before connecting Compound.'
-            : 'This address is for Lighter. Finish or abandon it before connecting Compound.',
-        );
-      }
-      if (lighter && (trade.venue === 'uniswap' || trade.venue === 'compound')) {
-        throw new Error(
-          trade.venue === 'compound'
-            ? 'This address is for Compound. Shield it back or abandon it before connecting Lighter.'
-            : 'This address is for Uniswap. Shield it back or abandon it before connecting Lighter.',
-        );
-      }
-      if (uniswap) await updateActiveTrade({ venue: 'uniswap', intentAddress: trade.ownerAddress });
-      if (compound) await updateActiveTrade({ venue: 'compound', intentAddress: trade.ownerAddress });
-      if (lighter && !trade.venue) await updateActiveTrade({ venue: 'lighter' });
+      const venue = venueOfMessage(message.origin);
+      const trade = (await tradeForOrigin(message.origin)) ?? (await startVenue(venue));
       await touchAutoLock();
       return { ownerAddress: trade.ownerAddress };
     }
@@ -514,7 +480,7 @@ async function handle(
     case 'openTrade': {
       const session = await openTradeSession(toTradeRequest(message.trade));
       await touchAutoLock();
-      await broadcastProviderEvent('accountsChanged', [[(await getActiveTrade())!.ownerAddress]]);
+      await broadcastProviderEvent('accountsChanged', [[(await getActiveTrade())!.ownerAddress]], ['https://*.lighter.xyz/*']);
       await armSessionTick();
       // Funding moves money and takes minutes; the record, not this reply,
       // is what the popup follows.
@@ -566,7 +532,7 @@ async function handle(
     case 'shieldUniswap': {
       await touchAutoLock();
       const shielded = await shieldUniswapAccount();
-      if (shielded.status === 'done') await announceTradeEnded();
+      if (shielded.status === 'done') await announceVenueEnded('uniswap');
       return shielded;
     }
 
@@ -578,8 +544,20 @@ async function handle(
     case 'shieldCompound': {
       await touchAutoLock();
       const shielded = await shieldCompoundAccount();
-      if (shielded.status === 'done') await announceTradeEnded();
+      if (shielded.status === 'done') await announceVenueEnded('compound');
       return shielded;
+    }
+
+    case 'fundingWallet': {
+      await touchAutoLock();
+      const view = await fundingWalletBalances();
+      return { address: view.address, usdcUnits: view.usdcUnits.toString(), ethWei: view.ethWei.toString() };
+    }
+
+    case 'shieldFundingWallet': {
+      await touchAutoLock();
+      const shielded = await shieldFundingWallet(BigInt(message.amountUnits));
+      return { txHash: shielded.txHash, amountUnits: shielded.amountUnits.toString() };
     }
 
     case 'intentsAssets':
@@ -623,6 +601,17 @@ async function handle(
       const view = await retryIntents();
       await armIntentsTick();
       return view;
+    }
+
+    case 'intentsAbandon': {
+      // Refused while money is with 1Click: a retired owner would never see
+      // the refund or the delivery shielded. No site was ever connected to
+      // this owner, so there is nothing to announce.
+      const blocked = intentsAbandonBlocker(await getVenueTrade('intents'));
+      if (blocked) throw new Error(blocked);
+      await endVenue('intents');
+      await chrome.alarms.clear(INTENTS_ALARM);
+      return null;
     }
 
     case 'intentsDismiss':
@@ -696,8 +685,6 @@ async function touchAutoLock(): Promise<void> {
 async function resumeDepositWatch(): Promise<void> {
   const trade = await getActiveTrade();
   if (!trade?.intentAddress || trade.accountIndex !== undefined) return;
-  // A NEAR Intents deposit address is not a Lighter deposit; its own alarm watches it.
-  if (trade.venue === 'intents') return;
   // A market-trade session polls the deposit itself, on its own alarm.
   if (trade.session) return;
 
@@ -781,7 +768,7 @@ async function tickSession(): Promise<void> {
 
 /** Tick while a NEAR Intents move waits on 1Click or on a chain. */
 async function armIntentsTick(): Promise<void> {
-  if (intentsNeedsTick(await getActiveTrade())) {
+  if (intentsNeedsTick(await getVenueTrade('intents'))) {
     await chrome.alarms.create(INTENTS_ALARM, { periodInMinutes: 0.5 });
   } else {
     await chrome.alarms.clear(INTENTS_ALARM);
@@ -799,11 +786,30 @@ async function tickIntents(): Promise<void> {
 }
 
 /** Lighter should drop the owner the moment the trade is no longer active. */
-async function announceTradeEnded(): Promise<void> {
-  await broadcastProviderEvent('accountsChanged', [[]]);
-  await broadcastProviderEvent('disconnect', [
-    { code: 4900, message: 'Truly trade ended.' },
-  ]);
+function venueOfMessage(origin: string): VenueId {
+  let host = origin;
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    host = origin;
+  }
+  if (host === 'uniswap.org' || host.endsWith('.uniswap.org')) return 'uniswap';
+  if (host === 'compound.xyz' || host.endsWith('.compound.xyz') || host === 'compound.finance' || host.endsWith('.compound.finance')) {
+    return 'compound';
+  }
+  return 'lighter';
+}
+
+function venueTabs(venue: VenueId): string[] {
+  if (venue === 'uniswap') return ['https://*.uniswap.org/*'];
+  if (venue === 'compound') return ['https://*.compound.xyz/*', 'https://*.compound.finance/*'];
+  return ['https://*.lighter.xyz/*'];
+}
+
+async function announceVenueEnded(venue: VenueId): Promise<void> {
+  const urls = venueTabs(venue);
+  await broadcastProviderEvent('accountsChanged', [[]], urls);
+  await broadcastProviderEvent('disconnect', [{ code: 4900, message: 'Truly trade ended.' }], urls);
 }
 
 function errorMessage(error: unknown): string {

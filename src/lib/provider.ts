@@ -16,7 +16,7 @@
 
 import { encodeFunctionData, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { getActiveTrade, type ActiveTrade } from './trade';
+import { findTradeByOwner, tradeForOrigin, type ActiveTrade } from './trade';
 import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
@@ -73,7 +73,7 @@ export async function handleProviderRequest(
   const existing = await getInFlight(id);
   if (existing) return continueInFlight(existing);
 
-  const trade = await getActiveTrade();
+  const trade = await tradeForOrigin(origin);
   if (!trade) {
     // Throwing here is what Lighter renders as "Connection cancelled", and
     // the request is already dead by the time the user starts a trade.
@@ -84,9 +84,6 @@ export async function handleProviderRequest(
     }
     return refuseWithoutTrade(method);
   }
-  // A NEAR Intents owner is never a dapp account. Showing it to a site would
-  // tie that site's session to the cross-chain move.
-  if (trade.venue === 'intents') return refuseWithoutTrade(method);
 
   switch (method) {
     case 'eth_chainId':
@@ -139,10 +136,11 @@ export async function handleProviderRequest(
 export async function broadcastProviderEvent(
   event: 'accountsChanged' | 'disconnect',
   args: unknown[],
+  urls: string[] = SITE_TABS,
 ): Promise<void> {
   let tabs: chrome.tabs.Tab[] = [];
   try {
-    tabs = await chrome.tabs.query({ url: SITE_TABS });
+    tabs = await chrome.tabs.query({ url: urls });
   } catch {
     return;
   }
@@ -190,6 +188,7 @@ async function refuseWithoutTrade(method: string): Promise<unknown> {
 }
 
 type TradeWaiter = {
+  origin: string;
   resolve: (trade: ActiveTrade) => void;
   reject: (error: Error) => void;
 };
@@ -251,7 +250,7 @@ async function connectWhenTradeStarts(input: {
   // click is not the thing that waits for the circuit.
   void publicClient.getChainId().catch(() => undefined);
   await openTrulyWindow(input.origin);
-  const trade = await waitForActiveTrade();
+  const trade = await waitForOriginTrade(input.origin);
 
   // The user pressed "Connect" in the Truly window for THIS site. That
   // click is the consent, so asking again in a second approval window would
@@ -274,13 +273,13 @@ async function connectWhenTradeStarts(input: {
   });
 }
 
-function waitForActiveTrade(): Promise<ActiveTrade> {
+function waitForOriginTrade(origin: string): Promise<ActiveTrade> {
   return new Promise((resolve, reject) => {
-    const waiter: TradeWaiter = { resolve, reject };
+    const waiter: TradeWaiter = { origin, resolve, reject };
     tradeWaiters.push(waiter);
     watchTrades();
-    void getActiveTrade().then((trade) => {
-      if (!trade || trade.venue === 'intents' || !tradeWaiters.includes(waiter)) return;
+    void tradeForOrigin(origin).then((trade) => {
+      if (!trade || !tradeWaiters.includes(waiter)) return;
       settleWaiter(waiter, trade);
     });
   });
@@ -300,10 +299,11 @@ function unwatchTrades(): void {
 
 function onTradeStorage(_changes: { [key: string]: chrome.storage.StorageChange }, area: string): void {
   if (area !== 'local' || tradeWaiters.length === 0) return;
-  void getActiveTrade().then((trade) => {
-    if (!trade || trade.venue === 'intents') return;
-    for (const waiter of [...tradeWaiters]) settleWaiter(waiter, trade);
-  });
+  for (const waiter of [...tradeWaiters]) {
+    void tradeForOrigin(waiter.origin).then((trade) => {
+      if (trade) settleWaiter(waiter, trade);
+    });
+  }
 }
 
 function settleWaiter(waiter: TradeWaiter, trade: ActiveTrade): void {
@@ -409,7 +409,7 @@ async function perform(record: InFlightRequest): Promise<unknown> {
   const latest = (await getInFlight(record.requestId)) ?? record;
   if (latest.status === 'completed') return latest.result;
 
-  const trade = await getActiveTrade();
+  const trade = await findTradeByOwner(latest.ownerIndex);
   if (!trade || trade.ownerIndex !== latest.ownerIndex) {
     throw rpcError(4100, 'The trade ended before this request was signed.');
   }
@@ -786,9 +786,15 @@ async function openTrulyWindow(origin?: string): Promise<void> {
     if (connectWindowId === windowId) connectWindowId = undefined;
     // A trade may have started in the same moment the window closed.
     // Rejecting then would cancel a connect that is about to succeed.
-    void getActiveTrade().then((trade) => {
-      if (trade) return;
-      failTradeWaiters(rpcError(4001, 'User rejected the request.'));
+    void Promise.all(tradeWaiters.map(async (waiter) => ({ waiter, trade: await tradeForOrigin(waiter.origin) }))).then((rows) => {
+      for (const row of rows) {
+        if (row.trade) continue;
+        const index = tradeWaiters.indexOf(row.waiter);
+        if (index === -1) continue;
+        tradeWaiters.splice(index, 1);
+        row.waiter.reject(rpcError(4001, 'User rejected the request.'));
+      }
+      if (tradeWaiters.length === 0) unwatchTrades();
     });
   };
   chrome.windows.onRemoved.addListener(onClosed);

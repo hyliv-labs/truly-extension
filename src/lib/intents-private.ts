@@ -50,7 +50,10 @@ import {
 } from './intents';
 import { loadShieldedBalance, railgunReady, readShieldedBalance } from './shielded-balance';
 import { shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
-import { endTrade, getActiveTrade, startTrade, updateActiveTrade, type ActiveTrade } from './trade';
+import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
+
+/** The NEAR Intents slot of the venue book. Other venues stay open on their own owners. */
+const getIntentsTrade = () => getVenueTrade('intents');
 
 const PARTNER_KEY = 'truly:oneClickPartnerKey';
 const LAST_VIEW = 'truly:intentsLast';
@@ -223,22 +226,16 @@ function checkEntrySize(origin: OneClickToken, units: bigint): void {
 // --- Start ---------------------------------------------------------------------------
 
 /**
- * A NEAR Intents move always starts on a brand-new owner. An existing trade
- * is refused, even one with no venue yet: a trade started from the panel or a
- * site connect has already had its owner announced to connected sites, and
- * reusing it would tie that site to the cross-chain move.
+ * One NEAR Intents move at a time. It always gets its own brand-new owner from
+ * the venue book (startVenue), never the owner of a Lighter, Uniswap or
+ * Compound account, so a site that saw those owners learns nothing here.
  */
-async function refuseOtherVenues(): Promise<null> {
-  const existing = await getActiveTrade();
-  if (!existing) return null;
-  if (existing.venue === 'intents' && existing.intents) {
-    throw new Error('A NEAR Intents move is already running. Finish or abandon it first.');
-  }
-  if (existing.session || existing.venue === 'lighter') throw new Error('A Lighter account is open. Finish or abandon it first.');
-  if (existing.venue === 'uniswap' || existing.venue === 'compound') {
-    throw new Error(`A ${existing.venue === 'uniswap' ? 'Uniswap' : 'Compound'} address is open. Shield it back or abandon it first.`);
-  }
-  throw new Error('Another address is open (connected to a site or started earlier). Abandon it first, so this move gets a fresh one.');
+async function refuseSecondMove(): Promise<void> {
+  const existing = await getIntentsTrade();
+  if (existing?.intents) throw new Error('A NEAR Intents move is already running. Finish or abandon it first.');
+  // A slot left with no move recorded (a start that died mid-quote) is
+  // released, so the next start allocates a fresh owner again.
+  if (existing) await endVenue('intents');
 }
 
 export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
@@ -248,13 +245,13 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
   if (spendable !== null && spendable <= gross) {
     throw new Error('That is the whole shielded balance. Leave a little behind: the proof needs a change note.');
   }
-  const existing = await refuseOtherVenues();
+  await refuseSecondMove();
   const destination = await asset(input.assetId);
   const feeBps = await railgunFeeBps();
   const net = railgunNetForGross(gross, feeBps);
   const { api, confidential } = await client();
 
-  const trade = existing ?? (await startTrade('intents'));
+  const trade = await startVenue('intents');
   let quoted: Awaited<ReturnType<typeof getQuote>>;
   try {
     quoted = await getQuote(api, {
@@ -270,7 +267,7 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
       confidential,
     });
   } catch (error) {
-    if (!existing) await endTrade().catch(() => undefined);
+    await endVenue('intents').catch(() => undefined);
     throw error;
   }
 
@@ -294,7 +291,7 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
   };
   // Saved BEFORE any proof or broadcast: from here on the deposit address is
   // the only place this money may go.
-  await updateActiveTrade({ venue: 'intents', intentAddress: view.depositAddress as Address, intents: view });
+  await updateOwnedTrade(trade.ownerIndex, { venue: 'intents', intentAddress: view.depositAddress as Address, intents: view });
   kickExit();
   return view;
 }
@@ -303,10 +300,10 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
   const origin = await asset(input.assetId);
   if (input.assetId === ARB_USDC_ASSET) throw new Error('That is already Arbitrum USDC. Use Add funds instead.');
   checkEntrySize(origin, BigInt(input.amountUnits));
-  const existing = await refuseOtherVenues();
+  await refuseSecondMove();
   const { api, confidential } = await client();
 
-  const trade = existing ?? (await startTrade('intents'));
+  const trade = await startVenue('intents');
   let quoted: Awaited<ReturnType<typeof getQuote>>;
   try {
     quoted = await getQuote(api, {
@@ -321,7 +318,7 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
       confidential,
     });
   } catch (error) {
-    if (!existing) await endTrade().catch(() => undefined);
+    await endVenue('intents').catch(() => undefined);
     throw error;
   }
 
@@ -343,7 +340,7 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
     updatedAt: Date.now(),
   };
   // intentAddress is the owner: that is where the USDC lands on Arbitrum.
-  await updateActiveTrade({ venue: 'intents', intentAddress: trade.ownerAddress, intents: view });
+  await updateOwnedTrade(trade.ownerIndex, { venue: 'intents', intentAddress: trade.ownerAddress, intents: view });
   return view;
 }
 
@@ -367,7 +364,7 @@ function quoteFields(response: QuoteResponse) {
 
 /** One step of whatever the move is waiting on. Safe to call often. */
 export async function advanceIntents(): Promise<IntentsView | null> {
-  const trade = await getActiveTrade();
+  const trade = await getIntentsTrade();
   if (!trade || trade.venue !== 'intents' || !trade.intents) return lastIntentsView();
   const view = trade.intents;
   switch (view.stage) {
@@ -454,7 +451,7 @@ async function runExit(): Promise<void> {
   const view = trade.intents!;
   try {
     await patch({ detail: trade.withdrawal ? 'The unshield is on its way. Waiting for it to confirm.' : 'Building the Railgun unshield proof. This takes a minute or two.' });
-    const result = await unshieldRailgunForTrade(BigInt(view.amountIn), BigInt(view.grossUnits!));
+    const result = await unshieldRailgunForTrade(BigInt(view.amountIn), 'intents', BigInt(view.grossUnits!));
     await patch({
       stage: 'swapping',
       unshieldTx: result.txHash,
@@ -465,7 +462,7 @@ async function runExit(): Promise<void> {
     await api.submitDeposit(view.depositAddress, result.txHash).catch(() => undefined);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const now = await getActiveTrade();
+    const now = await getIntentsTrade();
     // A broadcast may be in flight: stay here so the tick resumes it.
     if (now?.withdrawal?.status === 'pending') await patch({ detail: message });
     else if (/more ETH on Arbitrum/i.test(message)) {
@@ -497,7 +494,7 @@ async function runShield(): Promise<void> {
       await patch({ detail: 'Waiting for the USDC to arrive at the fresh address on Arbitrum.' });
       return;
     }
-    const shielded = await shieldOwnerUsdcToRailgun();
+    const shielded = await shieldOwnerUsdcToRailgun('intents');
     const amount = formatUnits(shielded.amountUnits, 6);
     await finish({
       shieldTx: shielded.txHash,
@@ -528,12 +525,12 @@ export async function retryIntents(): Promise<IntentsView> {
     if (Date.parse(view.refundAfter) - Date.now() < REQUOTE_MARGIN_MS) await requoteExit(trade, view);
     await patch({ stage: 'unshielding', error: undefined });
     kickExit();
-    return (await getActiveTrade())!.intents!;
+    return (await getIntentsTrade())!.intents!;
   }
   if (view.direction === 'exit' && trade.withdrawal?.status === 'pending') {
     await patch({ stage: 'unshielding', error: undefined });
     kickExit();
-    return (await getActiveTrade())!.intents!;
+    return (await getIntentsTrade())!.intents!;
   }
   if (view.swapStatus === 'SUCCESS' || view.swapStatus === 'REFUNDED' || view.swapStatus === 'FAILED' || view.shieldTx) {
     const next = await patch({ stage: 'shielding', error: undefined, detail: 'Checking the fresh address for USDC to shield back.' });
@@ -558,7 +555,7 @@ async function requoteExit(trade: ActiveTrade, view: IntentsView): Promise<void>
     confidential,
   });
   const fields = quoteFields(quoted.response);
-  await updateActiveTrade({ intentAddress: fields.depositAddress as Address });
+  await updateOwnedTrade(trade.ownerIndex, { intentAddress: fields.depositAddress as Address });
   await patch({ ...fields, confidential });
 }
 
@@ -574,7 +571,7 @@ export async function dismissLastIntents(): Promise<void> {
 // --- Record helpers ------------------------------------------------------------------------
 
 async function requireIntentsTrade(): Promise<ActiveTrade> {
-  const trade = await getActiveTrade();
+  const trade = await getIntentsTrade();
   if (!trade || trade.venue !== 'intents' || !trade.intents) throw new Error('No NEAR Intents move is open.');
   return trade;
 }
@@ -582,7 +579,7 @@ async function requireIntentsTrade(): Promise<ActiveTrade> {
 async function patch(fields: Partial<IntentsView>): Promise<IntentsView> {
   const trade = await requireIntentsTrade();
   const next: IntentsView = { ...trade.intents!, ...fields, updatedAt: Date.now() };
-  await updateActiveTrade({ intents: next });
+  await updateOwnedTrade(trade.ownerIndex, { intents: next });
   return next;
 }
 
@@ -590,7 +587,7 @@ async function patch(fields: Partial<IntentsView>): Promise<IntentsView> {
 async function finish(fields: Partial<IntentsView>): Promise<IntentsView> {
   const next = await patch(fields);
   await chrome.storage.local.set({ [LAST_VIEW]: next });
-  await endTrade();
+  await endVenue('intents');
   // The home screen and the exit form read the cached snapshot. Rescan, so a
   // just-shielded entry is spendable and a finished exit is gone from it.
   void loadShieldedBalance(true).catch(() => undefined);

@@ -8,9 +8,11 @@ import { LockScreen } from './LockScreen';
 import { Logo } from './Mascot';
 import { Onboarding } from './Onboarding';
 import { PhraseScreen } from './PhraseScreen';
-import { AddFunds, ConnectScreen, GhostHome, GhostProgress, GoGhost, depositStage, venueFromSite } from './Deposit';
-import { GxBack } from './Ghosty';
+import { AddFunds, ConnectScreen, GhostHome, GhostProgress, GoGhost, openStages, venueFromSite, type Venue } from './Deposit';
+import { GhostMore, GhostReturn, returnPhase } from './Return';
+import { Settings } from './Settings';
 import { IntentsMove, IntentsProgress } from './Intents';
+import { dappVenue } from '@truly/lib/intents';
 import { SessionPanel, TradeForm } from './TradePanel';
 import {
   send,
@@ -22,17 +24,14 @@ import {
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 
-type AnyVenue = 'lighter' | 'uniswap' | 'compound' | 'intents' | undefined;
-
-function addressLabel(venue: AnyVenue): string {
-  if (venue === 'intents') return 'NEAR Intents address';
+function addressLabel(venue: 'lighter' | 'uniswap' | 'compound' | undefined): string {
   if (venue === 'uniswap') return 'Uniswap address';
   if (venue === 'compound') return 'Compound address';
   return 'Lighter address';
 }
 
-function onSite(venue: AnyVenue): boolean {
-  return venue === 'uniswap' || venue === 'compound' || venue === 'intents';
+function onSite(venue: 'lighter' | 'uniswap' | 'compound' | undefined): boolean {
+  return venue === 'uniswap' || venue === 'compound';
 }
 
 export function App() {
@@ -67,11 +66,18 @@ export function App() {
     }
   });
   const [connected, setConnected] = useState(false);
-  // The Ghosty flow covers home to 'ready'; 'legacy' shows the full panels.
-  const [legacy, setLegacy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bringBack, setBringBack] = useState(false);
+  const [more, setMore] = useState(false);
+  /** The funded screen can be left. Home then shows that account and the actions. */
+  const [atHome, setAtHome] = useState(false);
+  const [settled, setSettled] = useState<{ venue: 'lighter' | 'uniswap' | 'compound'; shielded: { token: string; symbol: string; amount: string; reason?: string }[]; left: { token: string; symbol: string; amount: string; reason?: string }[] } | null>(null);
   const [screen, setScreen] = useState<'home' | 'go' | 'add' | 'intents'>('home');
   /** Kept on after a NEAR Intents move ends, so its result stays on screen until Done. */
   const [intentsOpen, setIntentsOpen] = useState(false);
+  /** The user went home while a move runs (a BTC or ZEC entry can take a while). */
+  const [intentsHidden, setIntentsHidden] = useState(false);
+  const [focus, setFocus] = useState<Venue | null>(null);
   const [shielded, setShielded] = useState<ShieldedBalance | null>(null);
   const [shieldedError, setShieldedError] = useState<string | null>(null);
   const [shieldedLoading, setShieldedLoading] = useState(false);
@@ -182,6 +188,9 @@ export function App() {
 
   useEffect(() => {
     if (!status?.unlocked) {
+      setMore(false);
+      setSettingsOpen(false);
+      setBringBack(false);
       setShielded(null);
       setShieldedError(null);
       setShieldedLoading(false);
@@ -242,19 +251,30 @@ export function App() {
     );
   }
 
-  if (status?.unlocked && !legacy) {
-    const trade = status.activeTrade;
-    const stage = depositStage(status);
-    const notStarted = !trade || (!trade.session && !trade.uniswap && !trade.compound && !trade.intents);
+  if (status?.unlocked) {
+    const stages = openStages(status);
+    const pending = stages.find((item) => item.stage !== 'ready') ?? null;
+    const ready = stages.filter((item) => item.stage === 'ready');
+    const stage = pending ?? (focus ? stages.find((item) => item.venue === focus) ?? null : atHome ? null : ready[0] ?? null);
+    const back = returnPhase(status);
+    const focused = stage ? status.openVenues?.[stage.venue] ?? status.activeTrade : status.activeTrade;
+    const focusedStatus = { ...status, activeTrade: focused };
+    const notStarted = stages.length === 0;
     const spendable = shielded && railgunReady(shielded.railgun) ? BigInt(shielded.railgun.spendableUnits) : 0n;
-    const venue = (trade?.venue === 'intents' ? null : trade?.venue) ?? venueFromSite(connectOrigin);
+    const venue = focus ?? venueFromSite(connectOrigin);
+    const intentsActive = Boolean(status.openVenues?.intents?.intents);
 
-    if (trade?.venue === 'intents' || intentsOpen) {
+    if ((intentsActive && !intentsHidden && !settingsOpen) || intentsOpen) {
       return (
         <main className="popup-gx">
           <IntentsProgress
+            onHome={() => {
+              setIntentsOpen(false);
+              setIntentsHidden(true);
+            }}
             onClose={() => {
               setIntentsOpen(false);
+              setIntentsHidden(false);
               setScreen('home');
               void refresh();
             }}
@@ -263,7 +283,56 @@ export function App() {
       );
     }
 
-    if (connectOrigin && connectFullOrigin && !connected && !trade) {
+    if (settingsOpen) {
+      return (
+        <main className="popup-gx">
+          <Settings
+            status={status}
+            nextAddress={owner}
+            anon={anon}
+            onBack={() => setSettingsOpen(false)}
+            onChanged={refresh}
+          />
+        </main>
+      );
+    }
+
+    if (more) {
+      return (
+        <main className="popup-gx">
+          <GhostMore status={focusedStatus} busy={busy} onBack={() => setMore(false)} onChanged={refresh} />
+        </main>
+      );
+    }
+
+    const returnVenue = back?.venue ?? settled?.venue ?? (bringBack ? (focus ?? ready[0]?.venue ?? stage?.venue) : null);
+    if (returnVenue && (back || bringBack || settled)) {
+      return (
+        <main className="popup-gx">
+          <GhostReturn
+            status={{ ...status, activeTrade: status.openVenues?.[returnVenue] ?? status.activeTrade }}
+            venue={returnVenue}
+            phase={back?.phase ?? (settled ? 'done' : 'confirm')}
+            onBack={() => {
+              setBringBack(false);
+              setSettled(null);
+            }}
+            onChanged={refresh}
+            onMore={() => setMore(true)}
+            onSettled={(lines) => setSettled({ venue: returnVenue, ...lines })}
+            onFinished={async () => {
+              if (status.openVenues?.[returnVenue] ?? status.activeTrade) await send({ kind: 'endTrade', venue: returnVenue });
+              setBringBack(false);
+              setSettled(null);
+              await refresh();
+            }}
+          />
+        </main>
+      );
+    }
+
+    const connectVenue = venueFromSite(connectOrigin);
+    if (connectOrigin && connectFullOrigin && !connected && !(connectVenue && status.openVenues?.[connectVenue])) {
       return (
         <main className="popup-gx">
           <ConnectScreen
@@ -283,37 +352,63 @@ export function App() {
       );
     }
 
-    if (stage) {
+    if (stage && (stage.stage !== 'ready' || !atHome)) {
       return (
         <main className="popup-gx">
-          <GhostProgress status={status} venue={stage.venue} stage={stage.stage} onChanged={refresh} onManage={() => setLegacy(true)} />
+          <GhostProgress
+            status={focusedStatus}
+            venue={stage.venue}
+            stage={stage.stage}
+            onChanged={refresh}
+            onBringBack={() => {
+              setFocus(stage.venue);
+              setBringBack(true);
+            }}
+            onHome={stage.stage === 'ready' ? () => { setFocus(null); setAtHome(true); setScreen('home'); } : undefined}
+            onManage={() => setMore(true)}
+          />
         </main>
       );
     }
 
-    if (notStarted) {
+    if (notStarted || atHome || screen !== 'home') {
       return (
         <main className="popup-gx">
           {screen === 'go' ? (
             <GoGhost
               venue={venue}
               spendableUnits={spendable}
+              activeVenues={ready.map((item) => item.venue)}
               onBack={() => setScreen('home')}
-              onStarted={async () => {
+              onResume={() => {
+                setFocus(venue);
+                setAtHome(false);
+                setScreen('home');
+              }}
+              onStarted={async (next) => {
+                setFocus(next);
+                setAtHome(false);
                 await refresh();
                 setScreen('home');
               }}
             />
-          ) : screen === 'add' ? (
-            <AddFunds onBack={() => setScreen('home')} />
           ) : screen === 'intents' ? (
             <IntentsMove
               spendableUnits={spendable}
               onBack={() => setScreen('home')}
               onStarted={() => {
                 setIntentsOpen(true);
+                setIntentsHidden(false);
                 setScreen('home');
                 void refresh();
+              }}
+            />
+          ) : screen === 'add' ? (
+            <AddFunds
+              onBack={() => setScreen('home')}
+              onDone={async () => {
+                await refreshShielded();
+                setScreen('home');
               }}
             />
           ) : (
@@ -322,12 +417,21 @@ export function App() {
               balanceError={shieldedError}
               balanceLoading={shieldedLoading}
               sync={sync}
-              venue={venue}
+              venue={ready.length > 0 ? null : venue}
+              activities={ready}
+              onActivity={(next) => {
+                setFocus(next);
+                setAtHome(false);
+              }}
               onGoGhost={() => setScreen('go')}
               onAddFunds={() => setScreen('add')}
-              onAnyChain={() => setScreen('intents')}
+              onAnyChain={() => (intentsActive ? setIntentsHidden(false) : setScreen('intents'))}
+              onBringBack={() => {
+                if (ready[0]) setFocus(ready[0].venue);
+                setBringBack(true);
+              }}
               onRetry={() => void refreshShielded()}
-              onAdvanced={() => setLegacy(true)}
+              onAdvanced={() => setSettingsOpen(true)}
             />
           )}
         </main>
@@ -337,11 +441,6 @@ export function App() {
 
   return (
     <main className="popup">
-      {legacy && (
-        <div className="gx-legacy-bar">
-          <GxBack onClick={() => setLegacy(false)} label="Ghosty" />
-        </div>
-      )}
       <header>
         <h1>
           <Logo />
@@ -428,7 +527,7 @@ export function App() {
               busy={busy}
               connecting={connectOrigin !== null}
               site={connectOrigin}
-              activeVenue={status.activeTrade?.venue === 'intents' ? null : (status.activeTrade?.venue ?? null)}
+              activeVenue={dappVenue(status.activeTrade?.venue) ?? null}
               connectedAddress={status.activeTrade ? owner : null}
               onOpened={refresh}
               balance={shielded}
@@ -441,7 +540,7 @@ export function App() {
 
           <p className="who">
             <span className="field-label">
-              {addressLabel(status.activeTrade?.venue)} #{status.ownerIndex}
+              {addressLabel(dappVenue(status.activeTrade?.venue))} #{status.ownerIndex}
             </span>
             <code>{owner ?? '…'}</code>
           </p>
@@ -452,7 +551,7 @@ export function App() {
           )}
 
 
-          {status.activeTrade && !status.activeTrade.session && !onSite(status.activeTrade.venue) && (
+          {status.activeTrade && !status.activeTrade.session && !onSite(dappVenue(status.activeTrade.venue)) && (
             <>
               <p className="field-label">Trade active — Lighter can connect to this address.</p>
               {/* Lighter's login is Dynamic. Its six-wallet 'RECOMMENDED' list
@@ -469,7 +568,7 @@ export function App() {
 
           {/* A market-trade session reports its own progress; the exit phases
               (withdraw from Lighter, re-shield) apply again once it is closed. */}
-          {phase && !onSite(status.activeTrade?.venue) && (!status.activeTrade?.session || ['closed', 'exited', 'withdraw-failed'].includes(status.activeTrade.session.state)) && (
+          {phase && !onSite(dappVenue(status.activeTrade?.venue)) && (!status.activeTrade?.session || ['closed', 'exited', 'withdraw-failed'].includes(status.activeTrade.session.state)) && (
             <div className="phase">
               <strong>{phase.phase.replace(/-/g, ' ')}</strong>
               <p>{phase.detail}</p>
@@ -491,7 +590,7 @@ export function App() {
               {/* No separate 'Get deposit address' button here any more: the
                   Deposit form above fetches it as its first step, and two
                   actions for one job read as two different jobs. */}
-              {!status.activeTrade.session && status.activeTrade.intentAddress && !onSite(status.activeTrade.venue) && (
+              {!status.activeTrade.session && status.activeTrade.intentAddress && !onSite(dappVenue(status.activeTrade.venue)) && (
                 <>
                   <label className="field-label">
                     Deposit address (the unshield sends here)
@@ -537,7 +636,7 @@ export function App() {
 
           {status.activeTrade ? (
             <>
-              {(!onSite(status.activeTrade.venue) || !status.activeTrade.withdrawal) && (
+              {(!onSite(dappVenue(status.activeTrade.venue)) || !status.activeTrade.withdrawal) && (
                 <button
                   className="secondary"
                   disabled={busy}
@@ -551,7 +650,7 @@ export function App() {
                 disabled={busy}
                 onClick={() => {
                   const abandon = window.confirm(
-                    onSite(status.activeTrade?.venue)
+                    onSite(dappVenue(status.activeTrade?.venue))
                       ? 'Abandon this address? It is burned and will not be reused. Tokens still on it stay there. Shield back first if they should return to Railgun.'
                       : 'Abandon this trade? Its owner address is burned and will not be reused. Funds still on Lighter or at that address stay there until you scan for them.',
                   );

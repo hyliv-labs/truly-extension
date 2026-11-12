@@ -25,7 +25,7 @@ import type { Address } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getAccountIndex } from './lighter';
 import { ownerAt } from './vault';
-import { getActiveTrade, startTrade, updateActiveTrade, updateSession, type ActiveTrade } from './trade';
+import { getActiveTrade, getVenueTrade, startVenue, updateActiveTrade, updateSession, type ActiveTrade } from './trade';
 import { prepareDeposit, checkDeposit } from './deposit';
 import { resolvePendingWithdrawal, unshieldForTrade } from './unshield';
 import { settleRailgunFunding, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade, verifyRailgunFunding } from './railgun-client';
@@ -172,15 +172,7 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
   // to that trade. Starting a fresh one instead would send the deposit to a
   // different address from the one Lighter is connected to -- the money and
   // the connection would end up on two separate accounts.
-  const existing = await getActiveTrade();
-  if (existing?.venue === 'uniswap' || existing?.venue === 'compound') {
-    throw new SessionError(
-      'trade-active',
-      existing.venue === 'compound'
-        ? 'This address is for Compound. Shield it back or abandon it before a Lighter deposit.'
-        : 'This address is for Uniswap. Shield it back or abandon it before a Lighter deposit.',
-    );
-  }
+  const existing = await getVenueTrade('lighter');
   if (existing?.session) {
     throw new SessionError('trade-active', 'A trade is already active. Finish or abandon it first.');
   }
@@ -198,7 +190,7 @@ export async function openTradeSession(request: TradeRequest): Promise<TradeSess
   // runFunding scans again and refuses if the notes have moved.
   const quote = await quoteTrade(request);
 
-  const trade = existing ?? (await startTrade());
+  const trade = existing ?? (await startVenue('lighter'));
   // What is on Lighter BEFORE this deposit. A reused owner can already have
   // an account with collateral; without a baseline that counts as credited.
   const priorAccount = await getAccountIndex(trade.ownerAddress as Address);

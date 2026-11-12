@@ -76,23 +76,33 @@ export interface OwnerKey {
   readonly privateKey: Hex;
 }
 
+/**
+ * Where Add funds receives public USDC before shielding it.
+ *
+ * Change index 1 under the same account as trade owners, so this address is
+ * not a trade owner (`…/0/n`) and not a Privacy Pools master-key path
+ * (`m/44'/60'/0'` or `…/1'`).
+ */
+export const FUNDING_WALLET_PATH = "m/44'/60'/7702'/1/0";
+
+async function deriveAt(mnemonic: string, path: string): Promise<{ address: Address; privateKey: Hex }> {
+  const seed = await mnemonicToSeed(mnemonic.trim());
+  const node = HDKey.fromMasterSeed(seed).derive(path);
+  if (!node.privateKey) throw new Error(`no private key at ${path}`);
+  const privateKey = `0x${toHex(node.privateKey)}` as Hex;
+  return { address: privateKeyToAccount(privateKey).address, privateKey };
+}
+
 export async function deriveOwner(
   mnemonic: string,
   index: number,
 ): Promise<OwnerKey> {
-  const seed = await mnemonicToSeed(mnemonic.trim());
-  const node = HDKey.fromMasterSeed(seed).derive(ownerPath(index));
+  return { index, ...(await deriveAt(mnemonic, ownerPath(index))) };
+}
 
-  if (!node.privateKey) {
-    throw new Error(`no private key at ${ownerPath(index)}`);
-  }
-
-  const privateKey = `0x${toHex(node.privateKey)}` as Hex;
-  return {
-    index,
-    address: privateKeyToAccount(privateKey).address,
-    privateKey,
-  };
+/** The stable address Add funds shields from. Not a trade owner. */
+export async function deriveFundingWallet(mnemonic: string): Promise<{ address: Address; privateKey: Hex }> {
+  return deriveAt(mnemonic, FUNDING_WALLET_PATH);
 }
 
 /** Address only — for display and recovery scans, where the key isn't needed. */

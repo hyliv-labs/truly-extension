@@ -275,7 +275,7 @@ function stepsFor(view: IntentsView): Step[] {
   }));
 }
 
-export function IntentsProgress({ onClose }: { onClose: () => void }) {
+export function IntentsProgress({ onClose, onHome }: { onClose: () => void; onHome?: () => void }) {
   const [view, setView] = useState<IntentsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -420,12 +420,17 @@ export function IntentsProgress({ onClose }: { onClose: () => void }) {
           disabled={working}
           onClick={() =>
             void act(async () => {
-              await send({ kind: 'abandonTrade' });
+              await send({ kind: 'intentsAbandon' });
               onClose();
             })
           }
         >
           {entryWaiting ? 'Cancel · only if you have not paid' : 'Abandon'}
+        </button>
+      )}
+      {!finished && onHome && (
+        <button type="button" className="gx-link ix-mode" onClick={onHome}>
+          Home · this keeps running
         </button>
       )}
     </GxScreen>

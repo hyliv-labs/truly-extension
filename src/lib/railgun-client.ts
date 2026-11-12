@@ -45,8 +45,8 @@ import { publicClient } from './chain';
 import { DEFAULT_PERMIT_AMOUNT, encodePaymasterData, signPaymasterPermit } from './permit';
 import { RAILGUN_PROXY_ARBITRUM, railgunGrossForNet, railgunShieldAfterGasReserve } from './railgun';
 import { readUserOperationReceipt } from './reshield';
-import { discardReshield, getActiveTrade, updateActiveTrade, type ActiveTrade } from './trade';
-import { ownerAt, requireUnlockedMnemonic } from './vault';
+import { discardReshield, findTradeByOwner, getActiveTrade, getVenueTrade, updateActiveTrade, updateOwnedTrade, type ActiveTrade, type BookSlot } from './trade';
+import { fundingWallet, ownerAt, requireUnlockedMnemonic } from './vault';
 import type { PopulatedRailgunTx, RailgunBalanceSnapshot } from './railgun-run';
 import type { RailgunSyncStatus } from './railgun-sync-status';
 
@@ -79,8 +79,8 @@ export async function railgunUsdcBalances(): Promise<RailgunUsdcBalances> {
  * address. Refuses to build a second proof while a previous one may have
  * been broadcast.
  */
-export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?: bigint): Promise<RailgunUnshieldResult> {
-  const trade = await getActiveTrade();
+export async function unshieldRailgunForTrade(netUnits: bigint, venue?: BookSlot, exactGrossUnits?: bigint): Promise<RailgunUnshieldResult> {
+  const trade = venue ? await getVenueTrade(venue) : await getActiveTrade();
   if (!trade) throw new Error('No trade is active.');
   if (!trade.intentAddress) {
     throw new Error(
@@ -95,7 +95,7 @@ export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?
   }
   // A 'confirmed' record from before the receipt-status check may be a
   // revert. Verified first; a reverted one is cleared and a new unshield built.
-  if (trade.withdrawal?.status === 'confirmed' && trade.withdrawal.txHash && (await verifyRailgunFunding()) !== 'reverted') {
+  if (trade.withdrawal?.status === 'confirmed' && trade.withdrawal.txHash && (await verifyRailgunFunding(trade.ownerIndex)) !== 'reverted') {
     return {
       txHash: trade.withdrawal.txHash as Hash,
       amountUnits: BigInt(trade.withdrawal.amount),
@@ -134,7 +134,7 @@ export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?
   // node refuses an unaffordable broadcast, and a pending record of refused
   // bytes is retried every tick and never lands.
   await ensureUnshieldGas(trade.ownerIndex, owner.address, maxCostWei(signed.raw));
-  await updateActiveTrade({
+  await updateOwnedTrade(trade.ownerIndex, {
     withdrawal: {
       status: 'pending',
       txHash: signed.hash,
@@ -151,10 +151,10 @@ export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?
   // confirmed and the panel went on to wait for a deposit that never left.
   const receipt = await publicClient.waitForTransactionReceipt({ hash: signed.hash });
   if (receipt.status !== 'success') {
-    await updateActiveTrade({ withdrawal: undefined });
+    await updateOwnedTrade(trade.ownerIndex, { withdrawal: undefined });
     throw new Error(`The Railgun unshield reverted on chain (tx ${signed.hash}). Nothing left the pool. Retry builds a new proof.`);
   }
-  await updateActiveTrade({
+  await updateOwnedTrade(trade.ownerIndex, {
     withdrawal: {
       receiptOk: true,
       status: 'confirmed',
@@ -176,35 +176,35 @@ export async function unshieldRailgunForTrade(netUnits: bigint, exactGrossUnits?
  * status (written by the code that did not look at it). 'reverted' clears
  * the record: nothing left the pool, and the funding can be retried.
  */
-export async function verifyRailgunFunding(): Promise<'ok' | 'reverted' | 'unknown' | 'none'> {
-  const trade = await getActiveTrade();
+export async function verifyRailgunFunding(ownerIndex?: number): Promise<'ok' | 'reverted' | 'unknown' | 'none'> {
+  const trade = ownerIndex === undefined ? await getActiveTrade() : await findTradeByOwner(ownerIndex);
   const withdrawal = trade?.withdrawal;
   if (withdrawal?.status !== 'confirmed' || withdrawal.label !== 'railgun' || withdrawal.receiptOk) return 'none';
   if (!withdrawal.txHash) return 'unknown';
   const receipt = await publicClient.getTransactionReceipt({ hash: withdrawal.txHash as Hash }).catch(() => null);
-  if (!receipt) return 'unknown';
+  if (!receipt || !trade) return 'unknown';
   if (receipt.status === 'success') {
-    await updateActiveTrade({ withdrawal: { ...withdrawal, receiptOk: true } });
+    await updateOwnedTrade(trade.ownerIndex, { withdrawal: { ...withdrawal, receiptOk: true } });
     return 'ok';
   }
-  await updateActiveTrade({ withdrawal: undefined });
+  await updateOwnedTrade(trade.ownerIndex, { withdrawal: undefined });
   return 'reverted';
 }
 
-export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 'reverted' | 'none'> {
-  const trade = await getActiveTrade();
+export async function settleRailgunFunding(ownerIndex?: number): Promise<'landed' | 'pending' | 'reverted' | 'none'> {
+  const trade = ownerIndex === undefined ? await getActiveTrade() : await findTradeByOwner(ownerIndex);
   if (trade?.withdrawal?.status !== 'pending' || trade.withdrawal.label !== 'railgun') return 'none';
   const hash = trade.withdrawal.txHash as Hash | undefined;
   if (!hash) return 'pending';
   const receipt = await publicClient.getTransactionReceipt({ hash }).catch(() => null);
   if (receipt?.status === 'success') {
-    await updateActiveTrade({
+    await updateOwnedTrade(trade.ownerIndex, {
       withdrawal: { ...trade.withdrawal, status: 'confirmed', confirmedAt: Date.now(), receiptOk: true },
     });
     return 'landed';
   }
   if (receipt?.status === 'reverted') {
-    await updateActiveTrade({ withdrawal: undefined });
+    await updateOwnedTrade(trade.ownerIndex, { withdrawal: undefined });
     return 'reverted';
   }
   if (trade.withdrawal.raw) {
@@ -217,7 +217,7 @@ export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 're
     const owner = await ownerAt(trade.ownerIndex);
     const raw = await raiseGasIfNeeded(owner.privateKey, trade.withdrawal.raw as Hex);
     if (raw !== trade.withdrawal.raw) {
-      await updateActiveTrade({
+      await updateOwnedTrade(trade.ownerIndex, {
         withdrawal: { ...trade.withdrawal, raw, txHash: keccak256(raw) },
       });
     }
@@ -234,8 +234,8 @@ export async function settleRailgunFunding(): Promise<'landed' | 'pending' | 're
  * rebuilt. An older ETH-paid shield (one that stored raw bytes) is resent
  * as those bytes.
  */
-export async function shieldOwnerUsdcToRailgun(): Promise<{ txHash: Hash; amountUnits: bigint }> {
-  const trade = await getActiveTrade();
+export async function shieldOwnerUsdcToRailgun(venue?: BookSlot): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  const trade = venue ? await getVenueTrade(venue) : ((await getVenueTrade('lighter')) ?? (await getActiveTrade()));
   if (!trade) throw new Error('No active trade to shield.');
   if (trade.reshield?.status === 'confirmed' && trade.reshield.userOpHash) {
     return { txHash: trade.reshield.userOpHash as Hash, amountUnits: BigInt(trade.reshield.deposited) };
@@ -255,7 +255,7 @@ export async function shieldOwnerUsdcToRailgun(): Promise<{ txHash: Hash; amount
   // The paymaster route below keeps a 1 USDC permit ceiling behind (measured:
   // ~0.95 USDC left at the owner for a few cents of gas), so it is only the
   // fallback for an owner with no ETH.
-  const viaEth = await shieldPayingEth(owner.privateKey, owner.address, balance, mnemonic, shieldPrivateKey);
+  const viaEth = await shieldPayingEth(owner.privateKey, owner.address, balance, mnemonic, shieldPrivateKey, USDC_ADDRESS, trade.ownerIndex);
   if (viaEth) return viaEth;
 
   const amount = railgunShieldAfterGasReserve(balance, DEFAULT_PERMIT_AMOUNT);
@@ -274,8 +274,9 @@ export async function shieldOwnerUsdcToRailgun(): Promise<{ txHash: Hash; amount
     shieldTo: call.to as Address,
     shieldData: call.data as Hex,
     amount,
+    ownerIndex: trade.ownerIndex,
     onSubmitted: async (hash) => {
-      await updateActiveTrade({
+      await updateOwnedTrade(trade.ownerIndex, {
         reshield: {
           status: 'pending',
           userOpHash: hash,
@@ -287,7 +288,7 @@ export async function shieldOwnerUsdcToRailgun(): Promise<{ txHash: Hash; amount
     },
   });
 
-  await updateActiveTrade({
+  await updateOwnedTrade(trade.ownerIndex, {
     reshield: {
       status: 'confirmed',
       userOpHash,
@@ -315,6 +316,7 @@ async function shieldPayingEth(
   mnemonic: string,
   shieldPrivateKey: Hex,
   token: Address = USDC_ADDRESS,
+  ownerIndex?: number,
 ): Promise<{ txHash: Hash; amountUnits: bigint } | null> {
   const account = privateKeyToAccount(privateKey);
   const block = await publicClient.getBlock();
@@ -361,17 +363,18 @@ async function shieldPayingEth(
   }
   const signed = await signPopulated(privateKey, populated);
   if ((await publicClient.getBalance({ address: owner })) < maxCostWei(signed.raw)) return null;
+  if (ownerIndex === undefined) throw new Error('No trade is active.');
 
-  await updateActiveTrade({
+  await updateOwnedTrade(ownerIndex, {
     reshield: { status: 'pending', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: 0 },
   });
   await broadcast(signed.raw);
   const receipt = await publicClient.waitForTransactionReceipt({ hash: signed.hash });
   if (receipt.status !== 'success') {
-    await updateActiveTrade({ reshield: undefined });
+    await updateOwnedTrade(ownerIndex, { reshield: undefined });
     throw new Error(`The Railgun shield reverted (tx ${signed.hash}). The tokens are still at the owner; they were not sent again.`);
   }
-  await updateActiveTrade({
+  await updateOwnedTrade(ownerIndex, {
     reshield: { status: 'confirmed', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: Date.now() },
   });
   return { txHash: signed.hash, amountUnits: balance };
@@ -382,8 +385,8 @@ async function shieldPayingEth(
  * swap, where the output is WETH and Circle's USDC paymaster does not apply.
  * A shield already recorded on this trade is not sent again.
  */
-export async function shieldOwnerToken(token: Address, amount: bigint): Promise<{ txHash: Hash; amountUnits: bigint }> {
-  const trade = await getActiveTrade();
+export async function shieldOwnerToken(token: Address, amount: bigint, venue?: BookSlot): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  const trade = venue ? await getVenueTrade(venue) : await getActiveTrade();
   if (!trade) throw new Error('No active trade to shield.');
   if (amount <= 0n) throw new Error('There is nothing to shield.');
   if (trade.reshield?.status === 'pending' && trade.reshield.userOpHash) {
@@ -395,15 +398,173 @@ export async function shieldOwnerToken(token: Address, amount: bigint): Promise<
   const owner = await ownerAt(trade.ownerIndex);
   const mnemonic = await requireUnlockedMnemonic();
   const signature = await privateKeyToAccount(owner.privateKey).signMessage({ message: SHIELD_MESSAGE });
-  const shielded = await shieldPayingEth(owner.privateKey, owner.address, amount, mnemonic, keccak256(signature), token);
+  const shielded = await shieldPayingEth(owner.privateKey, owner.address, amount, mnemonic, keccak256(signature), token, trade.ownerIndex);
   if (!shielded) {
     throw new Error(`Not enough ETH at ${owner.address} to shield these tokens back into Railgun. The tokens are still at that address.`);
   }
   return shielded;
 }
 
+const FUNDING_SHIELD_KEY = 'truly:fundingShield';
+const MIN_FUNDING_USDC = 1_000_000n;
+
+interface FundingShieldRecord {
+  status: 'pending' | 'confirmed';
+  raw: Hex;
+  txHash: Hash;
+  amount: string;
+}
+
+let fundingShieldInFlight: Promise<{ txHash: Hash; amountUnits: bigint }> | null = null;
+
+/** USDC and ETH on the address Add funds shields from. */
+export async function fundingWalletBalances(): Promise<{ address: Address; usdcUnits: bigint; ethWei: bigint }> {
+  const wallet = await fundingWallet();
+  const [usdcUnits, ethWei] = await Promise.all([
+    usdcBalance(wallet.address),
+    publicClient.getBalance({ address: wallet.address }),
+  ]);
+  return { address: wallet.address, usdcUnits, ethWei };
+}
+
+/**
+ * Shield `amount` of USDC from the funding address into this vault's Railgun
+ * wallet. Same approve-then-shield path as a return deposit, paid in ETH.
+ * A signed shield is stored before broadcast, and a retry sends those bytes.
+ * This does not touch an open trade.
+ */
+export async function shieldFundingWallet(amount: bigint): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  if (fundingShieldInFlight) return fundingShieldInFlight;
+  fundingShieldInFlight = shieldFundingWalletOnce(amount).finally(() => {
+    fundingShieldInFlight = null;
+  });
+  return fundingShieldInFlight;
+}
+
+async function shieldFundingWalletOnce(amount: bigint): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  const wallet = await fundingWallet();
+  const pending = await readFundingShield();
+  if (pending?.status === 'pending') return finishFundingShield(wallet.privateKey, pending);
+
+  if (amount < MIN_FUNDING_USDC) throw new Error('Shield at least 1 USDC.');
+  const balance = await usdcBalance(wallet.address);
+  if (balance < amount) {
+    throw new Error(
+      `This address holds ${(Number(balance) / 1e6).toFixed(2)} USDC. Send USDC on Arbitrum to ${wallet.address}, then shield it. Nothing was shielded.`,
+    );
+  }
+
+  await approveFundingUsdc(wallet.privateKey, wallet.address, amount);
+
+  const mnemonic = await requireUnlockedMnemonic();
+  const signature = await privateKeyToAccount(wallet.privateKey).signMessage({ message: SHIELD_MESSAGE });
+  const populated = await ask<PopulatedRailgunTx>({
+    kind: 'railgunShield',
+    mnemonic,
+    shieldPrivateKey: keccak256(signature),
+    amountUnits: amount.toString(),
+    fromAddress: wallet.address,
+    tokenAddress: USDC_ADDRESS,
+  });
+  if (populated.to.toLowerCase() !== RAILGUN_PROXY_ARBITRUM.toLowerCase()) {
+    throw new Error('Railgun returned a shield aimed at the wrong contract.');
+  }
+  const signed = await signPopulated(wallet.privateKey, populated);
+  if ((await publicClient.getBalance({ address: wallet.address })) < maxCostWei(signed.raw)) {
+    throw new Error(`This address needs a little ETH on Arbitrum for gas. Send it to ${wallet.address}. Nothing was shielded.`);
+  }
+  const record: FundingShieldRecord = { status: 'pending', raw: signed.raw, txHash: signed.hash, amount: amount.toString() };
+  await writeFundingShield(record);
+  return finishFundingShield(wallet.privateKey, record);
+}
+
+async function approveFundingUsdc(privateKey: Hex, owner: Address, amount: bigint): Promise<void> {
+  const allowance = await publicClient.readContract({
+    address: USDC_ADDRESS,
+    abi: erc20Abi,
+    functionName: 'allowance',
+    args: [owner, RAILGUN_PROXY_ARBITRUM as Address],
+  });
+  if (allowance >= amount) return;
+
+  const approveData = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: 'approve',
+    args: [RAILGUN_PROXY_ARBITRUM as Address, amount],
+  });
+  const block = await publicClient.getBlock();
+  const maxFeePerGas = (block.baseFeePerGas ?? 20_000_000n) * 2n;
+  let approveGas: bigint;
+  try {
+    approveGas = ((await publicClient.estimateGas({ account: owner, to: USDC_ADDRESS, data: approveData })) * 12n) / 10n;
+  } catch {
+    throw new Error(`This address needs a little ETH on Arbitrum for gas. Send it to ${owner}. Nothing was shielded.`);
+  }
+  const eth = await publicClient.getBalance({ address: owner });
+  if (eth < (approveGas + SHIELD_GAS_GUESS) * maxFeePerGas) {
+    throw new Error(`This address needs a little ETH on Arbitrum for gas. Send it to ${owner}. Nothing was shielded.`);
+  }
+  const raw = await privateKeyToAccount(privateKey).signTransaction({
+    chainId: ARBITRUM_CHAIN_ID,
+    nonce: await publicClient.getTransactionCount({ address: owner }),
+    to: USDC_ADDRESS,
+    data: approveData,
+    value: 0n,
+    gas: approveGas,
+    maxFeePerGas,
+    maxPriorityFeePerGas: 0n,
+    type: 'eip1559',
+  });
+  await broadcast(raw);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: keccak256(raw) });
+  if (receipt.status !== 'success') throw new Error('The USDC approval for the shield reverted. Nothing was shielded.');
+}
+
+async function finishFundingShield(privateKey: Hex, record: FundingShieldRecord): Promise<{ txHash: Hash; amountUnits: bigint }> {
+  const existing = await publicClient.getTransactionReceipt({ hash: record.txHash }).catch(() => null);
+  if (existing?.status === 'success') {
+    await writeFundingShield({ ...record, status: 'confirmed' });
+    return { txHash: record.txHash, amountUnits: BigInt(record.amount) };
+  }
+  if (existing?.status === 'reverted') {
+    await writeFundingShield(null);
+    throw new Error(`The Railgun shield reverted (tx ${record.txHash}). The USDC is still at this address. Nothing was sent again.`);
+  }
+
+  const owner = privateKeyToAccount(privateKey).address;
+  const raw = await raiseGasIfNeeded(privateKey, record.raw);
+  const txHash = raw === record.raw ? record.txHash : keccak256(raw);
+  if (raw !== record.raw) await writeFundingShield({ ...record, raw, txHash });
+  if ((await publicClient.getBalance({ address: owner })) < maxCostWei(raw)) {
+    throw new Error(`This address needs a little ETH on Arbitrum for gas. Send it to ${owner}. The shield is signed and sends when you retry.`);
+  }
+  await broadcast(raw);
+  const mined = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  if (mined.status !== 'success') {
+    await writeFundingShield(null);
+    throw new Error(`The Railgun shield reverted (tx ${txHash}). The USDC is still at this address. Nothing was sent again.`);
+  }
+  await writeFundingShield({ ...record, raw, txHash, status: 'confirmed' });
+  return { txHash, amountUnits: BigInt(record.amount) };
+}
+
+async function readFundingShield(): Promise<FundingShieldRecord | null> {
+  const stored = await chrome.storage.local.get(FUNDING_SHIELD_KEY);
+  const record = stored[FUNDING_SHIELD_KEY] as FundingShieldRecord | undefined;
+  if (!record || (record.status !== 'pending' && record.status !== 'confirmed')) return null;
+  return record;
+}
+
+async function writeFundingShield(record: FundingShieldRecord | null): Promise<void> {
+  if (!record) {
+    await chrome.storage.local.remove(FUNDING_SHIELD_KEY);
+    return;
+  }
+  await chrome.storage.local.set({ [FUNDING_SHIELD_KEY]: record });
+}
+
 async function settlePendingUnshield(trade: ActiveTrade, netUnits: bigint): Promise<RailgunUnshieldResult> {
-  const outcome = await settleRailgunFunding();
+  const outcome = await settleRailgunFunding(trade.ownerIndex);
   if (outcome === 'landed' && trade.withdrawal?.txHash) {
     return {
       txHash: trade.withdrawal.txHash as Hash,
@@ -425,23 +586,23 @@ async function settlePendingShield(trade: ActiveTrade): Promise<{ txHash: Hash; 
       throw new Error('The Railgun shield is already submitted. Waiting for it to confirm.');
     }
     if (outcome === 'reverted') {
-      await discardReshield();
+      await discardReshield(trade.ownerIndex);
       throw new Error('The Railgun shield reverted. It was not sent again.');
     }
-    await updateActiveTrade({
+    await updateOwnedTrade(trade.ownerIndex, {
       reshield: { ...trade.reshield!, status: 'confirmed', confirmedAt: Date.now() },
     });
     return { txHash: hash, amountUnits: BigInt(trade.reshield!.deposited) };
   }
   const receipt = await publicClient.getTransactionReceipt({ hash }).catch(() => null);
   if (receipt?.status === 'success') {
-    await updateActiveTrade({
+    await updateOwnedTrade(trade.ownerIndex, {
       reshield: { ...trade.reshield!, status: 'confirmed', confirmedAt: Date.now() },
     });
     return { txHash: hash, amountUnits: BigInt(trade.reshield!.deposited) };
   }
   if (receipt?.status === 'reverted') {
-    await updateActiveTrade({ reshield: undefined });
+    await updateOwnedTrade(trade.ownerIndex, { reshield: undefined });
     throw new Error('The Railgun shield reverted. It was not sent again.');
   }
   if (trade.reshield?.raw) await broadcast(trade.reshield.raw as Hex);
@@ -458,6 +619,7 @@ async function sendShieldOperation(input: {
   shieldTo: Address;
   shieldData: Hex;
   amount: bigint;
+  ownerIndex: number;
   onSubmitted: (userOpHash: Hash) => Promise<void>;
 }): Promise<Hash> {
   const owner = privateKeyToAccount(input.privateKey);
@@ -519,7 +681,7 @@ async function sendShieldOperation(input: {
   await input.onSubmitted(userOpHash);
   const receipt = await bundlerClient.waitForUserOperationReceipt({ hash: userOpHash });
   if (!receipt.success) {
-    await discardReshield();
+    await discardReshield(input.ownerIndex);
     throw new Error('The Railgun shield reverted. It was not sent again.');
   }
   return userOpHash;

@@ -9,7 +9,7 @@
  */
 
 import { open, seal, type SealedBox } from './crypto';
-import { deriveOwner, isValidMnemonic, newMnemonic, type OwnerKey } from './keys';
+import { deriveFundingWallet, deriveOwner, isValidMnemonic, newMnemonic, type OwnerKey } from './keys';
 
 const LOCAL_VAULT = 'truly:vault';
 const LOCAL_OWNER_INDEX = 'truly:ownerIndex';
@@ -102,6 +102,11 @@ export async function currentOwner(): Promise<OwnerKey> {
  */
 export async function ownerAt(index: number): Promise<OwnerKey> {
   return deriveOwner(await requireMnemonic(), index);
+}
+
+/** Public USDC for Add funds. Stable for this vault, and never a trade owner. */
+export async function fundingWallet(): Promise<{ address: OwnerKey['address']; privateKey: OwnerKey['privateKey'] }> {
+  return deriveFundingWallet(await requireMnemonic());
 }
 
 /**
