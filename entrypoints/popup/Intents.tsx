@@ -33,7 +33,8 @@ export function IntentsMove({
   onBack: () => void;
   onStarted: () => void;
 }) {
-  const [direction, setDirection] = useState<IntentsDirection>('exit');
+  // Nothing shielded yet: Bring in is the only thing that can work.
+  const [direction, setDirection] = useState<IntentsDirection>(spendableUnits > 0n ? 'exit' : 'entry');
   const [assets, setAssets] = useState<IntentsAsset[] | null>(null);
   const [assetId, setAssetId] = useState('');
   const [amount, setAmount] = useState('');
@@ -174,7 +175,11 @@ export function IntentsMove({
       </label>
       {direction === 'exit' && (
         <p className={`gx-note${tooBig ? ' bad' : ''}`}>
-          {tooBig ? 'Leave a little shielded: the proof needs a change note.' : `Shielded: ${formatUnits(spendableUnits, 6)} USDC`}
+          {spendableUnits === 0n
+            ? 'No shielded USDC yet (or still syncing). Use Bring in first.'
+            : tooBig
+              ? 'Leave a little shielded: the proof needs a change note.'
+              : `Shielded: ${formatUnits(spendableUnits, 6)} USDC`}
         </p>
       )}
 
@@ -397,7 +402,7 @@ export function IntentsProgress({ onClose }: { onClose: () => void }) {
         {view.shieldTx && <div><span>Shield</span><span className="gx-mono">{short(view.shieldTx)}</span></div>}
       </div>
 
-      {(error || view.error) && <p className="gx-error">{error ?? view.error}</p>}
+      {(error || (view.error && view.error !== view.detail)) && <p className="gx-error">{error ?? view.error}</p>}
 
       {finished ? (
         <button type="button" className="gx-btn primary" onClick={() => void send({ kind: 'intentsDismiss' }).finally(onClose)}>

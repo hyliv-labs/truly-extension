@@ -177,10 +177,10 @@ export function GhostHome({
         </button>
       </div>
 
-      {onAnyChain && ready && (
+      {onAnyChain && (
         <button type="button" className="gx-option" onClick={onAnyChain}>
           <b>Any chain · NEAR Intents</b>
-          <span>{empty ? 'Bring funds in from Zcash, Aleo, Solana, Bitcoin and 30+ chains.' : 'Send out to 30+ chains, or bring funds in from Zcash, Aleo and more.'}</span>
+          <span>{empty || !ready ? 'Bring funds in from Zcash, Aleo, Solana, Bitcoin and 30+ chains.' : 'Send out to 30+ chains, or bring funds in from Zcash, Aleo and more.'}</span>
         </button>
       )}
     </GxScreen>
