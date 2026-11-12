@@ -37,6 +37,9 @@ importers:
       '@railgun-community/wallet':
         specifier: 10.4.0
         version: 10.4.0(patch_hash=6vlnmhuoal7rbrh4tdf6xcbh5a)(@graphql-tools/utils@12.1.0(graphql@16.15.0))(@types/node@26.6.6)(bufferutil@4.1.0)(chai@5.3.3)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.1)(utf-8-validate@5.0.10))(tslib@2.9.1)(utf-8-validate@5.0.10)
+      '@scure/base':
+        specifier: 1.2.6
+        version: 1.2.6
       '@scure/bip32':
         specifier: ^2.4.0
         version: 2.4.0
@@ -61,6 +64,9 @@ importers:
       stream-browserify:
         specifier: ^3.0.0
         version: 3.0.0
+      uqr:
+        specifier: 0.1.2
+        version: 0.1.2
       viem:
         specifier: ^2.57.16
         version: 2.57.16(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
@@ -3852,6 +3858,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  uqr@0.1.2:
+    resolution: {integrity: sha512-MJu7ypHq6QasgF5YRTjqscSzQp/W11zoUk6kvmlH+fmWEs63Y0Eib13hYFwAzagRJcVY8WVnlV+eBDUGMJ5IbA==}
 
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
@@ -8683,6 +8692,8 @@ snapshots:
       browserslist: 4.29.5
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uqr@0.1.2: {}
 
   uri-js@4.4.1:
     dependencies:

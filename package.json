@@ -38,6 +38,7 @@
     "@railgun-community/engine": "9.4.0",
     "@railgun-community/shared-models": "7.6.1",
     "@railgun-community/wallet": "10.4.0",
+    "@scure/base": "1.2.6",
     "@scure/bip32": "^2.4.0",
     "@scure/bip39": "^2.4.0",
     "crypto-browserify": "^3.12.1",
@@ -46,6 +47,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "stream-browserify": "^3.0.0",
+    "uqr": "0.1.2",
     "viem": "^2.57.16"
   },
   "devDependencies": {
