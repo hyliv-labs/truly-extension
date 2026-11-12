@@ -29,6 +29,7 @@ import {
   type InFlightRequest,
 } from './approvals';
 import { publicClient } from './chain';
+import { isStructNameRefusal, signTypedDataLoose } from './typed-data';
 import {
   parsePersonalSign,
   parseTransactionRequest,
@@ -46,6 +47,7 @@ const SITE_TABS = [
   'https://*.uniswap.org/*',
   'https://*.compound.xyz/*',
   'https://*.compound.finance/*',
+  'https://*.hyperliquid.xyz/*',
 ];
 
 /**
@@ -445,12 +447,20 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
     case 'eth_signTypedData_v3':
     case 'eth_signTypedData_v4': {
       const typed = parseTypedDataRequest(record.method, record.params, record.ownerAddress);
-      return account.signTypedData({
-        domain: typed.domain,
-        types: typed.types,
-        primaryType: typed.primaryType,
-        message: typed.message,
-      });
+      try {
+        return await account.signTypedData({
+          domain: typed.domain,
+          types: typed.types,
+          primaryType: typed.primaryType,
+          message: typed.message,
+        });
+      } catch (error) {
+        // Hyperliquid's "HyperliquidTransaction:ApproveAgent" (Enable trading)
+        // and its other user-signed actions use a name viem refuses. Same
+        // digest, without that one check; anything else viem refuses stays refused.
+        if (!isStructNameRefusal(error)) throw error;
+        return signTypedDataLoose(privateKey, typed);
+      }
     }
 
     case 'eth_sendTransaction':
