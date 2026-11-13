@@ -16,7 +16,7 @@
 
 import { encodeFunctionData, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { findTradeByOwner, tradeForOrigin, type ActiveTrade } from './trade';
+import { findTradeByOwner, tradeForOrigin, updateOwnedTrade, type ActiveTrade } from './trade';
 import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
@@ -31,6 +31,7 @@ import {
 import { publicClient } from './chain';
 import { isStructNameRefusal, signTypedDataLoose } from './typed-data';
 import { APP_VENUE_IDS, APP_VENUES } from './app-venues';
+import { dydxAddressFromSignature, isDydxOnboarding } from './dydx';
 import {
   parsePersonalSign,
   parseTransactionRequest,
@@ -430,6 +431,18 @@ async function perform(record: InFlightRequest): Promise<unknown> {
   return result;
 }
 
+/**
+ * dydx.trade derives its account from this signature. Keep the public
+ * dydx1/noble1 addresses on the owner's trade, so Bring back can check dYdX.
+ * The signature itself goes only to the page, as with any signature.
+ */
+async function rememberDydxAccount(ownerIndex: number, signature: Hex): Promise<void> {
+  const trade = await findTradeByOwner(ownerIndex);
+  if (!trade || trade.venue !== 'dydx') return;
+  const derived = dydxAddressFromSignature(signature);
+  await updateOwnedTrade(ownerIndex, { appAccount: { address: derived.dydx, noble: derived.noble } }).catch(() => undefined);
+}
+
 async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknown> {
   const account = privateKeyToAccount(privateKey);
 
@@ -449,6 +462,11 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
     case 'eth_signTypedData_v3':
     case 'eth_signTypedData_v4': {
       const typed = parseTypedDataRequest(record.method, record.params, record.ownerAddress);
+      if (isDydxOnboarding(typed)) {
+        const signature = await account.signTypedData({ domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message: typed.message });
+        await rememberDydxAccount(record.ownerIndex, signature);
+        return signature;
+      }
       try {
         return await account.signTypedData({
           domain: typed.domain,

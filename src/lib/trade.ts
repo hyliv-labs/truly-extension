@@ -147,6 +147,12 @@ export interface ActiveTrade {
   readonly hyperliquid?: HyperliquidAccountView;
   /** An app from app-venues.ts (1inch, Aave, ...): funding and the shield back. */
   readonly app?: AppAccountView;
+  /**
+   * The account the app knows this owner by, when it is not the owner itself
+   * (dYdX derives a dydx1 address from a wallet signature). Public addresses
+   * only; the signature and the key derived from it are never stored.
+   */
+  readonly appAccount?: { readonly address: string; readonly noble?: string };
   /** A NEAR Intents move. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
   readonly intents?: IntentsView;
 }

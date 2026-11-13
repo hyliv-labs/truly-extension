@@ -11,8 +11,9 @@
 
 import type { Address } from 'viem';
 import { AAVE_APP } from './aave';
+import { DYDX_APP } from './dydx';
 
-export const APP_VENUE_IDS = ['oneinch', 'aave'] as const;
+export const APP_VENUE_IDS = ['oneinch', 'aave', 'dydx'] as const;
 export type AppVenueId = (typeof APP_VENUE_IDS)[number];
 
 export interface AppVenueSpec {
@@ -68,6 +69,22 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
     returnBlurb:
       'Repay any borrow and withdraw your supply on Aave first. This will not shield while any supply or debt is still open in an Aave market.',
     fundedDetail: 'USDC is on this address. Supply or borrow on Aave’s Arbitrum market with Ghosty as the wallet. Repay and withdraw there before bringing it back.',
+  },
+  dydx: {
+    id: 'dydx',
+    name: 'dYdX',
+    url: DYDX_APP,
+    domains: ['dydx.trade'],
+    tabPatterns: ['https://*.dydx.trade/*'],
+    // dYdX's deposit route (CCTP through Noble) has its own minimum and fees; 5 keeps clear of them.
+    minUnits: 5_000_000n,
+    ready: 'Trade',
+    gasWei: GAS_WEI,
+    doThere: 'Close, then withdraw to Arbitrum',
+    returnBlurb:
+      'Close your positions on dYdX and Withdraw to Arbitrum, to this same address. Withdrawals take about 20 minutes to land. This will not shield while anything is still on dYdX, in its wallet, or on the way.',
+    fundedDetail:
+      'USDC is on this address. On dydx.trade connect Ghosty, sign dYdX’s onboarding message, and Deposit from Arbitrum. To come back, Withdraw to Arbitrum to this same address.',
   },
 };
 

@@ -15,6 +15,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { publicClient } from './chain';
 import { APP_VENUES, type AppAccountView, type AppTokenLine, type AppVenueId } from './app-venues';
 import { appExitBlocker } from './app-venue-checks';
+import { DYDX_ONBOARDING, dydxAddressFromSignature } from './dydx';
 import { ARBITRUM_CHAIN_ID } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
@@ -118,7 +119,7 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
   const amountIn = trade.app?.amountIn ?? '0';
   const unshieldTx = trade.app?.unshieldTx;
 
-  const blocked = await appExitBlocker(venue, trade.ownerAddress);
+  const blocked = await appExitBlocker(venue, await withAppAccount(venue, trade));
   if (blocked) {
     // Refused before anything moved. The address stays funded; say why.
     await remember(trade, { ...trade.app!, status: status === 'failed' ? 'failed' : 'funded', detail: blocked, error: blocked });
@@ -184,6 +185,22 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
   } catch (error) {
     return fail(venue, BigInt(amountIn), error);
   }
+}
+
+/**
+ * dYdX knows the owner by a dydx1 address derived from its onboarding
+ * signature. The provider records it when the site asks; if it did not (an
+ * older session), derive it here the same way: the signature is
+ * deterministic, so it is the address the site got.
+ */
+async function withAppAccount(venue: AppVenueId, trade: ActiveTrade): Promise<ActiveTrade> {
+  if (venue !== 'dydx' || trade.appAccount?.address) return trade;
+  const owner = await ownerAt(trade.ownerIndex);
+  const signature = await privateKeyToAccount(owner.privateKey).signTypedData(DYDX_ONBOARDING);
+  const derived = dydxAddressFromSignature(signature);
+  const appAccount = { address: derived.dydx, noble: derived.noble };
+  await updateOwnedTrade(trade.ownerIndex, { appAccount });
+  return { ...trade, appAccount };
 }
 
 async function wrapLeftoverEth(trade: ActiveTrade): Promise<void> {
