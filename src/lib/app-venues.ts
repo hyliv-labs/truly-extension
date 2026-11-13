@@ -16,7 +16,7 @@ import { DYDX_APP } from './dydx';
 /** Lido's wstETH on Arbitrum (docs.lido.fi deployed contracts; read live: wstETH, 18 decimals). */
 export const WSTETH_ARBITRUM: Address = '0x5979D7b546E38E414F7E9822514be443A4800529';
 
-export const APP_VENUE_IDS = ['oneinch', 'aave', 'dydx', 'lido'] as const;
+export const APP_VENUE_IDS = ['oneinch', 'aave', 'dydx', 'lido', 'rhea'] as const;
 export type AppVenueId = (typeof APP_VENUE_IDS)[number];
 
 export interface AppVenueSpec {
@@ -46,6 +46,12 @@ export interface AppVenueSpec {
   readonly fundVia?: { readonly intentsAssetId: string; readonly symbol: string; readonly decimals: number };
   /** Shown on Go ghost before funding: something the user must know first. */
   readonly caution?: string;
+  /**
+   * 'near': the app runs on NEAR. The owner is a NEAR implicit account from
+   * the same index (near-keys.ts), funded and brought back through NEAR
+   * Intents by near-venue-private.ts, and Ghosty is its NEAR wallet.
+   */
+  readonly chain?: 'near';
   /** Tokens this app hands out that Bring back should look for, beyond the usual ones. */
   readonly extraTokens?: readonly { readonly address: Address; readonly symbol: string; readonly decimals: number }[];
 }
@@ -117,6 +123,24 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
       'ETH is on this address, delivered by NEAR Intents. On stake.lido.fi (Arbitrum) connect Ghosty and Stake: you get wstETH. Bring back shields it.',
     fundVia: { intentsAssetId: 'nep141:arb.omft.near', symbol: 'ETH', decimals: 18 },
     extraTokens: [{ address: WSTETH_ARBITRUM, symbol: 'wstETH', decimals: 18 }],
+  },
+  rhea: {
+    id: 'rhea',
+    name: 'Rhea',
+    url: 'https://app.rhea.finance/',
+    domains: ['rhea.finance'],
+    tabPatterns: ['https://*.rhea.finance/*'],
+    // The way back is a NEAR Intents entry, which starts at about $3, and the account keeps 0.05 NEAR for gas.
+    minUnits: 5_000_000n,
+    ready: 'Trade',
+    gasWei: 0n,
+    doThere: 'Withdraw and close on Rhea',
+    returnBlurb:
+      'Withdraw your supply, repay any borrow and pull your balances out of Rhea first. Then this sends the account’s NEAR and USDC through NEAR Intents into your private balance, one token at a time. About 0.05 NEAR stays on the account for gas.',
+    fundedDetail:
+      'NEAR is on a fresh NEAR account, delivered by NEAR Intents. On app.rhea.finance connect Ghosty (NEAR wallet) and trade, supply or borrow. Bring back sends it home.',
+    fundVia: { intentsAssetId: 'nep141:wrap.near', symbol: 'NEAR', decimals: 24 },
+    chain: 'near',
   },
 };
 

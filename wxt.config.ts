@@ -113,6 +113,11 @@ export default defineConfig({
       'https://*.aave.com/*',
       'https://*.dydx.trade/*',
       'https://*.lido.fi/*',
+      // Rhea Finance on NEAR: Ghosty is its NEAR wallet (NEAR Connect), and the
+      // worker reads Rhea's contracts and sends NEAR transactions through these RPCs.
+      'https://*.rhea.finance/*',
+      'https://free.rpc.fastnear.com/*',
+      'https://rpc.mainnet.near.org/*',
       // dYdX: its indexer, a dYdX chain REST node and a Noble REST node, read
       // by Bring back to see whether anything is still on dYdX or on the way.
       'https://indexer.dydx.trade/*',
@@ -172,7 +177,7 @@ export default defineConfig({
       {
         // The MAIN-world provider is injected by the ISOLATED relay.
         resources: ['injected.js'],
-        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*', 'https://*.1inch.io/*', 'https://*.1inch.com/*', 'https://*.aave.com/*', 'https://*.dydx.trade/*', 'https://*.lido.fi/*'],
+        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*', 'https://*.1inch.io/*', 'https://*.1inch.com/*', 'https://*.aave.com/*', 'https://*.dydx.trade/*', 'https://*.lido.fi/*', 'https://*.rhea.finance/*'],
       },
     ],
   },

@@ -17,6 +17,7 @@ import { APP_VENUES, type AppAccountView, type AppTokenLine, type AppVenueId } f
 import { appExitBlocker } from './app-venue-checks';
 import { DYDX_ONBOARDING, dydxAddressFromSignature } from './dydx';
 import { lastIntentsView, startIntentsExit } from './intents-private';
+import { fundNearAccount, shieldNearAccount } from './near-venue-private';
 import { ARBITRUM_CHAIN_ID } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, settleRecordedShield, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
@@ -76,6 +77,13 @@ async function fund(venue: AppVenueId, amountIn: bigint): Promise<AppAccountView
   }
 
   const trade = existing ?? (await startVenue(venue));
+  if (spec.chain === 'near') {
+    try {
+      return await fundNearAccount(trade, amountIn, spec.fundedDetail);
+    } catch (error) {
+      return fail(venue, amountIn, error);
+    }
+  }
   if (spec.fundVia) {
     try {
       return await fundViaIntents(venue, trade, amountIn);
@@ -134,6 +142,13 @@ async function unshieldOntoOwner(venue: AppVenueId, amountIn: bigint): Promise<A
 async function shield(venue: AppVenueId): Promise<AppAccountView> {
   const spec = APP_VENUES[venue];
   const trade = await requireTrade(venue);
+  if (spec.chain === 'near') {
+    return shieldNearAccount(trade, spec).catch((error: unknown) => {
+      // Refused before anything moved (Rhea still holds funds): the account stays as it was.
+      if (error instanceof Error && /^(Rhea still holds|Ghosty could not read Rhea|Bring back is available)/.test(error.message)) throw error;
+      return fail(venue, BigInt(trade.app?.amountIn ?? '0'), error);
+    });
+  }
   const status = trade.app?.status;
   if (status !== 'funded' && status !== 'shielding' && status !== 'failed') {
     throw new Error('Shield back is available once the USDC is on this address.');
@@ -418,7 +433,7 @@ async function fail(venue: AppVenueId, amountIn: bigint, error: unknown): Promis
         amountIn: amountIn.toString(),
         detail: message,
         error: message,
-        ownerAddress: trade.ownerAddress,
+        ownerAddress: APP_VENUES[venue].chain === 'near' ? (trade.appAccount?.address ?? trade.ownerAddress) : trade.ownerAddress,
         unshieldTx: trade.app?.unshieldTx ?? trade.withdrawal?.txHash,
         shielded: trade.app?.shielded,
         left: trade.app?.left,
