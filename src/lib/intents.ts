@@ -182,7 +182,8 @@ export function intentsAbandonBlocker(trade: IntentsTradeLike | null): string | 
   if (view.direction === 'exit' && (trade?.withdrawal || view.unshieldTx)) {
     return 'The unshield already went to NEAR Intents. Wait for delivery or the refund; abandoning now would stop Ghosty from shielding a refund back.';
   }
-  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx || view.depositedAmount)) {
+  const heldBy1Click = view.swapStatus !== undefined && view.swapStatus !== 'PENDING_DEPOSIT' && view.swapStatus !== 'REFUNDED';
+  if (view.direction === 'entry' && (view.stage === 'swapping' || view.stage === 'shielding' || view.userDepositTx || view.depositedAmount || view.shieldTx || heldBy1Click)) {
     return 'Your deposit is with NEAR Intents. Wait for it to land and be shielded; abandoning now would leave the USDC at an address nothing watches.';
   }
   return null;

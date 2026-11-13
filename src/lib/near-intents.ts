@@ -259,14 +259,26 @@ export function checkQuote(request: QuoteRequest, response: QuoteResponse, now =
   const echo = response?.quoteRequest;
   if (!quote || !echo) throw new OneClickError('1Click returned no quote.');
 
-  const same = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase();
+  // Asset ids and EVM addresses compare without case; every other address
+  // (base58 Solana, Zcash t-addresses, ...) is case-sensitive and must match exactly.
+  const sameId = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase();
+  const sameAddress = (a: string | undefined, b: string) =>
+    /^0x[0-9a-fA-F]{40}$/.test(b) ? (a ?? '').toLowerCase() === b.toLowerCase() : (a ?? '') === b;
   const mismatches: string[] = [];
-  if (!same(echo.originAsset, request.originAsset)) mismatches.push('origin asset');
-  if (!same(echo.destinationAsset, request.destinationAsset)) mismatches.push('destination asset');
-  if (!same(echo.recipient, request.recipient)) mismatches.push('recipient');
-  if (!same(echo.refundTo, request.refundTo)) mismatches.push('refund address');
+  if (!sameId(echo.originAsset, request.originAsset)) mismatches.push('origin asset');
+  if (!sameId(echo.destinationAsset, request.destinationAsset)) mismatches.push('destination asset');
+  if (!sameAddress(echo.recipient, request.recipient)) mismatches.push('recipient');
+  if (!sameAddress(echo.refundTo, request.refundTo)) mismatches.push('refund address');
   if (echo.swapType !== request.swapType) mismatches.push('swap type');
   if (echo.amount !== request.amount) mismatches.push('amount');
+  // A refund to an Intents account, or delivery anywhere but the chain, would
+  // land where Ghosty never looks; nothing shields it back.
+  if (echo.refundType !== request.refundType) mismatches.push('refund type');
+  if (echo.recipientType !== request.recipientType) mismatches.push('recipient type');
+  if (echo.depositType !== request.depositType) mismatches.push('deposit type');
+  if (Boolean(echo.dry) !== request.dry) mismatches.push('dry flag');
+  if (Number(echo.slippageTolerance) !== request.slippageTolerance) mismatches.push('slippage');
+  if (Date.parse(String(echo.deadline ?? '')) !== Date.parse(request.deadline)) mismatches.push('deadline');
   if (mismatches.length > 0) {
     throw new OneClickError(`1Click quoted a different ${mismatches.join(', ')} from the one asked for. Nothing was sent.`);
   }
@@ -289,9 +301,21 @@ export function checkQuote(request: QuoteRequest, response: QuoteResponse, now =
   if (!/^\d+$/.test(quote.minAmountOut ?? '') || BigInt(quote.minAmountOut) > BigInt(quote.amountOut)) {
     throw new OneClickError('1Click quoted a minimum above the expected amount. Nothing was sent.');
   }
+  // The guaranteed minimum must be within the slippage asked for (plus 1 bp of
+  // rounding). Otherwise "min 0" would pass, and the swap could deliver nothing.
+  const floorBps = BigInt(Math.max(0, 10_000 - request.slippageTolerance - 1));
+  if (BigInt(quote.minAmountOut) * 10_000n < BigInt(quote.amountOut) * floorBps) {
+    throw new OneClickError('1Click guaranteed less than the slippage allows. Nothing was sent.');
+  }
 
   if (!request.dry) {
     if (!quote.depositAddress) throw new OneClickError('1Click returned no deposit address. Nothing was sent.');
+    // An exit pays the deposit address with a Railgun unshield on Arbitrum: it
+    // must be an EVM address, and an unshield cannot carry a memo.
+    if (sameId(request.originAsset, ARB_USDC_ASSET)) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(quote.depositAddress)) throw new OneClickError('1Click returned a deposit address that is not an Arbitrum address. Nothing was sent.');
+      if (quote.depositMemo) throw new OneClickError('1Click asked for a memo, which a Railgun unshield cannot send. Nothing was sent.');
+    }
     if (!response.signature || !response.correlationId) {
       throw new OneClickError('1Click returned an unsigned quote. Nothing was sent.');
     }

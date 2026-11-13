@@ -138,6 +138,19 @@ throws('amountIn above the request is refused', () => checkQuote(request, tamper
 throws('zero out is refused', () => checkQuote(request, tamper({}, { amountOut: '0' }), now), /nothing out/);
 throws('a minimum above the quote is refused', () => checkQuote(request, tamper({}, { minAmountOut: '1997366' }), now), /minimum/);
 throws('no deposit address on a real quote is refused', () => checkQuote(request, tamper({}, { depositAddress: undefined }), now), /deposit address/);
+// Security review, 2026-11-13.
+throws('a guaranteed minimum of 0 is refused', () => checkQuote(request, tamper({}, { minAmountOut: '0' }), now), /slippage allows/);
+throws('a refund to an Intents account is refused', () => checkQuote(request, tamper({ refundType: 'INTENTS' as never }), now), /refund type/);
+throws('a different recipient type is refused', () => checkQuote(request, tamper({ recipientType: 'INTENTS' as never }), now), /recipient type/);
+throws('a different slippage echo is refused', () => checkQuote(request, tamper({ slippageTolerance: 5000 }), now), /slippage/);
+throws('a different deadline echo is refused', () => checkQuote(request, tamper({ deadline: '2030-01-01T00:00:00.000Z' }), now), /deadline/);
+throws('an exit deposit address that is not EVM is refused', () => checkQuote(request, tamper({}, { depositAddress: 'So1anaAddre55xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' }), now), /not an Arbitrum address/);
+throws('an exit with a deposit memo is refused', () => checkQuote(request, tamper({}, { depositMemo: '12345' }), now), /memo/);
+{
+  const solReq = { ...request, recipient: '7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV' };
+  const solRes = { ...real, quoteRequest: { ...real.quoteRequest, recipient: '7ecdhsygxxyscszyep35khn8vvw3svaulktzxwcfltv' } };
+  throws('a base58 recipient differing only in case is refused', () => checkQuote(solReq, solRes, now), /recipient/);
+}
 throws('an unsigned quote is refused', () => checkQuote(request, { ...real, signature: '' }, now), /unsigned/);
 throws(
   'an already inactive address is refused',
@@ -281,6 +294,12 @@ expect('an exit whose proof is running is not interrupted', exitInterrupted(unsh
 expect('an exit with a pending withdrawal resumes instead', exitInterrupted({ ...unshielding, withdrawal: { status: 'pending' } }, false), false);
 
 expect('abandon is free before an exit sends anything', intentsAbandonBlocker(unshielding), null);
+{
+  const entryHeld = { venue: 'intents', intents: { ...unshielding.intents!, direction: 'entry' as const, stage: 'failed' as const, swapStatus: 'SUCCESS' as const } };
+  expect('abandon is refused for a failed entry whose swap succeeded', typeof intentsAbandonBlocker(entryHeld), 'string');
+  const entryRefunded = { venue: 'intents', intents: { ...unshielding.intents!, direction: 'entry' as const, stage: 'failed' as const, swapStatus: 'REFUNDED' as const } };
+  expect('abandon is allowed for an entry 1Click refunded', intentsAbandonBlocker(entryRefunded), null);
+}
 expect('abandon is refused once the unshield exists', typeof intentsAbandonBlocker({ ...unshielding, withdrawal: { status: 'pending' } }), 'string');
 expect('abandon is free while an entry only waits', intentsAbandonBlocker({ venue: 'intents', intents: entryView }), null);
 expect('abandon is refused once the entry deposit is seen', typeof intentsAbandonBlocker({ venue: 'intents', intents: { ...entryView, stage: 'swapping' } }), 'string');

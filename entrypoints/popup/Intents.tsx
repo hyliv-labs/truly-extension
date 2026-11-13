@@ -441,8 +441,8 @@ export function IntentsProgress({
         {view.destinationTx && (
           <div>
             <span>Delivery</span>
-            {view.destinationTx.explorerUrl ? (
-              <a href={view.destinationTx.explorerUrl} target="_blank" rel="noreferrer">{short(view.destinationTx.hash)}</a>
+            {safeExplorerUrl(view.destinationTx.explorerUrl) ? (
+              <a href={safeExplorerUrl(view.destinationTx.explorerUrl)} target="_blank" rel="noreferrer noopener">{short(view.destinationTx.hash)}</a>
             ) : (
               <span className="gx-mono">{short(view.destinationTx.hash)}</span>
             )}
@@ -572,4 +572,14 @@ function DepositQr({ view }: { view: IntentsView }) {
 
 function short(value: string): string {
   return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
+/** 1Click supplies the delivery link. Only an https URL is shown; anything else is dropped. */
+function safeExplorerUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -526,6 +526,17 @@ async function runShield(): Promise<void> {
   try {
     const usdc = await publicClient.readContract({ address: USDC_ADDRESS, abi: erc20Abi, functionName: 'balanceOf', args: [trade.ownerAddress] });
     if (usdc === 0n && !trade.reshield) {
+      // An entry NEAR Intents failed or refunded sends the money back to the
+      // user's own refund address, never here. Nothing will arrive: finish,
+      // rather than wait on an empty address forever.
+      if (view.direction === 'entry' && (view.swapStatus === 'FAILED' || view.swapStatus === 'REFUNDED')) {
+        await finish({
+          stage: 'refunded',
+          detail: `NEAR Intents did not complete this swap. Your deposit goes back to ${view.refundTo}; nothing reached Ghosty.`,
+          error: undefined,
+        });
+        return;
+      }
       await patch({ detail: 'Waiting for the USDC to arrive at the fresh address on Arbitrum.' });
       return;
     }
@@ -557,7 +568,9 @@ export async function retryIntents(): Promise<IntentsView> {
 
   if (view.direction === 'exit' && !view.unshieldTx && !trade.withdrawal) {
     // Nothing left the pool. A stale quote is replaced before proving.
-    if (Date.parse(view.refundAfter) - Date.now() < REQUOTE_MARGIN_MS) await requoteExit(trade, view);
+    // Whichever comes first: 1Click stops watching the address, or starts refunding.
+    const closes = Math.min(Date.parse(view.inactiveAt) || Infinity, Date.parse(view.refundAfter) || Infinity);
+    if (!Number.isFinite(closes) || closes - Date.now() < REQUOTE_MARGIN_MS) await requoteExit(trade, view);
     await patch({ stage: 'unshielding', error: undefined });
     kickExit();
     return (await getIntentsTrade())!.intents!;
