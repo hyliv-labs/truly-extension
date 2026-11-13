@@ -10,8 +10,9 @@
  */
 
 import type { Address } from 'viem';
+import { AAVE_APP } from './aave';
 
-export const APP_VENUE_IDS = ['oneinch'] as const;
+export const APP_VENUE_IDS = ['oneinch', 'aave'] as const;
 export type AppVenueId = (typeof APP_VENUE_IDS)[number];
 
 export interface AppVenueSpec {
@@ -53,6 +54,20 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
     returnBlurb:
       'When you finish on 1inch, this reads the address and shields USDC, WETH, USDT, DAI, ARB and anything else it received. A token Railgun cannot take stays there, and gets named.',
     fundedDetail: 'USDC is on this address. Swap on 1inch with Ghosty as the wallet, on Arbitrum. Truly does not swap for you.',
+  },
+  aave: {
+    id: 'aave',
+    name: 'Aave',
+    url: AAVE_APP,
+    domains: ['aave.com'],
+    tabPatterns: ['https://*.aave.com/*'],
+    minUnits: 1_000_000n,
+    ready: 'Supply',
+    gasWei: GAS_WEI,
+    doThere: 'Repay and withdraw',
+    returnBlurb:
+      'Repay any borrow and withdraw your supply on Aave first. This will not shield while any supply or debt is still open in an Aave market.',
+    fundedDetail: 'USDC is on this address. Supply or borrow on Aave’s Arbitrum market with Ghosty as the wallet. Repay and withdraw there before bringing it back.',
   },
 };
 

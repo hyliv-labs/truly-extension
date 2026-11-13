@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { APP_VENUE_IDS, APP_VENUES, appVenueFromHost, isAppVenue } from '../src/lib/app-venues.ts';
 import { venueFromOrigin } from '../src/lib/trade.ts';
+import { aaveExitBlocker, reserveTokens, underlyingName } from '../src/lib/aave.ts';
 
 let failed = false;
 const expect = (label: string, got: unknown, want: unknown) => {
@@ -37,6 +38,18 @@ for (const id of APP_VENUE_IDS) {
 }
 expect('isAppVenue refuses other venues', [isAppVenue('compound'), isAppVenue('hyperliquid'), isAppVenue('x')], [false, false, false]);
 expect('the existing venues still route', [venueFromOrigin('https://app.uniswap.org'), venueFromOrigin('https://app.lighter.xyz'), venueFromOrigin('https://app.hyperliquid.xyz')], ['uniswap', 'lighter', 'hyperliquid']);
+
+// --- Aave: refuse on any supply or debt.
+const Z = '0x0000000000000000000000000000000000000000' as const;
+const A = '0x0000000000000000000000000000000000000001' as const;
+const D = '0x0000000000000000000000000000000000000002' as const;
+expect('a reserve without stable debt reads two tokens', reserveTokens({ aTokenAddress: A, stableDebtTokenAddress: Z, variableDebtTokenAddress: D }).length, 2);
+expect('aArbUSDC is USDC', underlyingName('aArbUSDC'), 'USDC');
+expect('variableDebtArbWETH is WETH', underlyingName('variableDebtArbWETH'), 'WETH');
+expect('an empty address is not blocked', aaveExitBlocker([], { collateral: 0n, debt: 0n }), null);
+expect('a supply blocks', aaveExitBlocker([{ token: A, kind: 'supply', symbol: 'aArbUSDC', balance: 5n }], { collateral: 5n, debt: 0n }), 'Withdraw your USDC supply on Aave first. Nothing was moved.');
+expect('a debt blocks first', aaveExitBlocker([{ token: A, kind: 'supply', symbol: 'aArbUSDC', balance: 5n }, { token: D, kind: 'debt', symbol: 'variableDebtArbWETH', balance: 1n }], { collateral: 5n, debt: 1n }), 'Repay your WETH debt on Aave first, then withdraw. Nothing was moved.');
+expect('account data alone still blocks', aaveExitBlocker([], { collateral: 0n, debt: 3n }), 'Repay your debt on Aave first, then withdraw. Nothing was moved.');
 
 if (failed) process.exit(1);
 console.log('app-venues: all checks passed');

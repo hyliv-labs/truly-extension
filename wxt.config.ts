@@ -109,6 +109,7 @@ export default defineConfig({
       // Apps in src/lib/app-venues.ts. Each list mirrors that app's tabPatterns.
       'https://*.1inch.io/*',
       'https://*.1inch.com/*',
+      'https://*.aave.com/*',
       // Lighter's API is on a DIFFERENT registrable domain, so the pattern
       // above does not cover it. E4/E6 call this host from the worker.
       'https://mainnet.zklighter.elliot.ai/*',
@@ -163,7 +164,7 @@ export default defineConfig({
       {
         // The MAIN-world provider is injected by the ISOLATED relay.
         resources: ['injected.js'],
-        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*', 'https://*.1inch.io/*', 'https://*.1inch.com/*'],
+        matches: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*', 'https://*.1inch.io/*', 'https://*.1inch.com/*', 'https://*.aave.com/*'],
       },
     ],
   },
