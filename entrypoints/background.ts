@@ -65,7 +65,7 @@ import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-pri
 import {
   advanceIntents,
   dismissLastIntents,
-  getPartnerKey,
+  hasPartnerKey,
   intentsAbandonBlocker,
   intentsAssets,
   intentsDepositSent,
@@ -684,7 +684,7 @@ async function handle(
       return setPartnerKey(message.key);
 
     case 'intentsKeyStatus':
-      return { confidential: (await getPartnerKey()) !== null };
+      return { confidential: await hasPartnerKey() };
 
     case 'lighterSignerSelfTest': {
       // A throwaway key and a fictitious account: nothing here is ever sent.

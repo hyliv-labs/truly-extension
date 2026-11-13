@@ -52,10 +52,13 @@ import { loadShieldedBalance, railgunReady, readShieldedBalance } from './shield
 import { railgunUsdcBalances, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
 import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
 import { zcashAddressForIntents } from './zcash';
+import { open as openBox, seal, type SealedBox } from './crypto';
+import { requireUnlockedMnemonic } from './vault';
 
 /** The NEAR Intents slot of the venue book. Other venues stay open on their own owners. */
 const getIntentsTrade = () => getVenueTrade('intents');
 
+/** Older builds stored the partner key here in plain text. It is sealed and removed on the next unlocked read. */
 const PARTNER_KEY = 'truly:oneClickPartnerKey';
 const LAST_VIEW = 'truly:intentsLast';
 const TOKENS_CACHE_MS = 10 * 60_000;
@@ -81,22 +84,100 @@ let lastPoll = 0;
 
 // --- Partner key ---------------------------------------------------------------
 
-/** The user's own 1Click partner key. Never bundled: a key in the build ships in the zip. */
-export async function getPartnerKey(): Promise<string | null> {
-  const stored = await chrome.storage.local.get(PARTNER_KEY);
-  const key = stored[PARTNER_KEY];
-  return typeof key === 'string' && key.trim() ? key.trim() : null;
+/**
+ * The user's own 1Click partner key. Never bundled: a key in the build ships in the zip.
+ *
+ * On disk it is sealed (scrypt + AES-GCM, as the vault) under the recovery
+ * phrase. The opened key is kept in chrome.storage.session: memory only,
+ * cleared when the browser exits, and kept across auto-lock so a move's
+ * status checks keep working while locked. Scrypt per 4-second poll would
+ * be too slow, which is why the opened copy is cached at all.
+ */
+const PARTNER_KEY_SEALED = 'truly:oneClickPartnerKeySealed';
+const PARTNER_KEY_SESSION = 'truly:oneClickPartnerKeyOpen';
+
+/** Separates this use of the phrase from the vault's own sealing. */
+const partnerKeySecret = (mnemonic: string) => `truly:1click-partner-key:${mnemonic}`;
+
+async function unlockedMnemonic(): Promise<string | null> {
+  try {
+    return await requireUnlockedMnemonic();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `key` is null when none is saved, or when one is saved but cannot be
+ * opened right now (`saved` true): locked after a browser restart, or
+ * sealed under a different phrase.
+ */
+async function partnerKeyState(): Promise<{ key: string | null; saved: boolean }> {
+  const session = await chrome.storage.session.get(PARTNER_KEY_SESSION);
+  const open = session[PARTNER_KEY_SESSION];
+  if (typeof open === 'string' && open) return { key: open, saved: true };
+
+  const stored = await chrome.storage.local.get([PARTNER_KEY_SEALED, PARTNER_KEY]);
+  const legacy = stored[PARTNER_KEY];
+  const box = stored[PARTNER_KEY_SEALED] as SealedBox | undefined;
+  const mnemonic = await unlockedMnemonic();
+
+  if (typeof legacy === 'string' && legacy.trim()) {
+    // Plain text from an older build: seal it now if we can, else use it as is.
+    if (mnemonic) await storePartnerKey(legacy.trim(), mnemonic);
+    return { key: legacy.trim(), saved: true };
+  }
+  if (!box) return { key: null, saved: false };
+  if (!mnemonic) return { key: null, saved: true };
+  try {
+    const key = await openBox(box, partnerKeySecret(mnemonic));
+    await chrome.storage.session.set({ [PARTNER_KEY_SESSION]: key });
+    return { key, saved: true };
+  } catch {
+    return { key: null, saved: true };
+  }
+}
+
+async function storePartnerKey(key: string, mnemonic: string): Promise<void> {
+  const box = await seal(key, partnerKeySecret(mnemonic));
+  await chrome.storage.local.set({ [PARTNER_KEY_SEALED]: box });
+  await chrome.storage.local.remove(PARTNER_KEY);
+  await chrome.storage.session.set({ [PARTNER_KEY_SESSION]: key });
+}
+
+/** Whether a partner key is saved, opened or not. */
+export async function hasPartnerKey(): Promise<boolean> {
+  return (await partnerKeyState()).saved;
 }
 
 export async function setPartnerKey(key: string | null): Promise<{ confidential: boolean }> {
-  if (key && key.trim()) await chrome.storage.local.set({ [PARTNER_KEY]: key.trim() });
-  else await chrome.storage.local.remove(PARTNER_KEY);
-  return { confidential: !!(key && key.trim()) };
+  const trimmed = key?.trim();
+  if (trimmed) {
+    const mnemonic = await unlockedMnemonic();
+    if (!mnemonic) throw new Error('Unlock Ghosty to save the partner key.');
+    await storePartnerKey(trimmed, mnemonic);
+    return { confidential: true };
+  }
+  await chrome.storage.local.remove([PARTNER_KEY_SEALED, PARTNER_KEY]);
+  await chrome.storage.session.remove(PARTNER_KEY_SESSION);
+  return { confidential: false };
 }
 
-async function client(): Promise<{ api: OneClickClient; confidential: boolean }> {
-  const apiKey = await getPartnerKey();
-  return { api: createOneClickClient({ apiKey }), confidential: apiKey !== null };
+/**
+ * `quoting`: this call asks for a quote. A saved key that cannot be opened
+ * then refuses, rather than quietly asking for a non-Confidential quote.
+ * Status reads and token lists go without it.
+ */
+async function client(quoting = false): Promise<{ api: OneClickClient; confidential: boolean }> {
+  const { key, saved } = await partnerKeyState();
+  if (quoting && saved && !key) {
+    throw new Error(
+      (await unlockedMnemonic())
+        ? 'The saved 1Click partner key could not be opened with this recovery phrase. Enter it again in Settings, or remove it.'
+        : 'Unlock Ghosty to use your 1Click partner key.',
+    );
+  }
+  return { api: createOneClickClient({ apiKey: key }), confidential: key !== null };
 }
 
 // --- Assets and preview ----------------------------------------------------------
@@ -174,7 +255,7 @@ const PREVIEW_OWNER = '0x2222222222222222222222222222222222222222';
  * user's address, since 1Click refuses one that is not well-formed.
  */
 export async function previewIntents(direction: IntentsDirection, input: ExitInput | EntryInput): Promise<IntentsPreview> {
-  const { api, confidential } = await client();
+  const { api, confidential } = await client(true);
   if (direction === 'exit') {
     const exit = input as ExitInput;
     const gross = BigInt(exit.grossUnits);
@@ -274,7 +355,7 @@ export async function startIntentsExit(input: ExitInput): Promise<IntentsView> {
   const recipient = userAddress(destination, input.recipient, 'recipient').address;
   const feeBps = await railgunFeeBps();
   const net = railgunNetForGross(gross, feeBps);
-  const { api, confidential } = await client();
+  const { api, confidential } = await client(true);
 
   const trade = await startVenue('intents');
   let quoted: Awaited<ReturnType<typeof getQuote>>;
@@ -327,7 +408,7 @@ export async function startIntentsEntry(input: EntryInput): Promise<IntentsView>
   checkEntrySize(origin, BigInt(input.amountUnits));
   const refundTo = userAddress(origin, input.refundTo, 'refund').address;
   await refuseSecondMove();
-  const { api, confidential } = await client();
+  const { api, confidential } = await client(true);
 
   const trade = await startVenue('intents');
   let quoted: Awaited<ReturnType<typeof getQuote>>;
@@ -598,7 +679,7 @@ export async function retryIntents(): Promise<IntentsView> {
 }
 
 async function requoteExit(trade: ActiveTrade, view: IntentsView, net: bigint): Promise<void> {
-  const { api, confidential } = await client();
+  const { api, confidential } = await client(true);
   const quoted = await getQuote(api, {
     dry: false,
     originAsset: ARB_USDC_ASSET,
