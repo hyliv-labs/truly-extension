@@ -52,6 +52,10 @@ export async function advanceIntentsFundedApps(): Promise<void> {
     if (trade?.app?.status === 'funding' && trade.app.viaIntents) {
       await fundAppAccount(venue, BigInt(trade.app.amountIn)).catch(() => undefined);
     }
+    // A NEAR Bring back runs one NEAR Intents entry per token: carry it to the next step.
+    if (APP_VENUES[venue].chain === 'near' && trade?.app?.status === 'shielding') {
+      await shieldAppAccount(venue).catch(() => undefined);
+    }
   }
 }
 

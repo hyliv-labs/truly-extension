@@ -607,6 +607,8 @@ async function handle(
       if (!isAppVenue(message.venue)) throw new Error('Unknown app.');
       const shielded = await shieldAppAccount(message.venue);
       if (shielded.status === 'done') await announceVenueEnded(message.venue);
+      // A NEAR app comes back through NEAR Intents entries: keep the tick running for them.
+      if (APP_VENUES[message.venue].chain === 'near') await armIntentsTick();
       return shielded;
     }
 

@@ -13,6 +13,9 @@ import { publicClient } from './chain';
 import { COMPOUND_MARKETS } from './compound';
 import { getAccountIndex } from './lighter';
 import { readHyperliquidBalance } from './hyperliquid-api';
+import { deriveNearOwner } from './near-keys';
+import { NEAR_USDC, WRAP_NEAR, nearAccountBalance, nearFtBalance } from './near-chain';
+import { rheaExitBlocker } from './rhea';
 import { readTradingAccount } from './lighter-trading';
 import { ownerUsdcBalance } from './reshield';
 import { RAILGUN_RETURN_TOKENS as BASE_RETURN_TOKENS } from './uniswap';
@@ -21,7 +24,7 @@ import { AAVE_POOL, AAVE_POOL_ABI } from './aave';
 
 /** The usual tokens plus what the app venues hand out (Lido's wstETH). */
 const RAILGUN_RETURN_TOKENS = [...BASE_RETURN_TOKENS, { address: WSTETH_ARBITRUM, symbol: 'wstETH', decimals: 18 }] as const;
-import { fundingWallet, getOwnerIndex, ownerAt } from './vault';
+import { fundingWallet, getOwnerIndex, ownerAt, requireUnlockedMnemonic } from './vault';
 
 /**
  * How far past the last known index to keep looking.
@@ -77,7 +80,7 @@ const COMPOUND_DECIMALS: Record<string, number> = {
 };
 
 export interface WalletHolding {
-  readonly place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid' | 'Aave';
+  readonly place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid' | 'Aave' | 'NEAR' | 'Rhea';
   readonly symbol: string;
   readonly amount: string;
 }
@@ -161,8 +164,23 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
     hyperliquid.push(...(await Promise.all(rows.slice(start, start + 5).map((row) => readHyperliquidBalance(row.address)))));
   }
 
+  // NEAR: the implicit account each owner index has for Rhea. Native NEAR,
+  // wNEAR and USDC, and whether Rhea holds anything. A failed read is shown.
+  const near: (NearHoldings | null)[] = [];
+  for (let start = 0; start < rows.length; start += 5) {
+    near.push(...(await Promise.all(rows.slice(start, start + 5).map((row) => (row.index === null ? Promise.resolve(undefined as unknown as NearHoldings) : readNearHoldings(row.index))))));
+  }
+
   return rows.flatMap((row, rowIndex) => {
     const holdings: WalletHolding[] = [];
+    const nearRead = near[rowIndex];
+    if (row.index !== null && nearRead === null) holdings.push({ place: 'NEAR', symbol: 'not read, scan again', amount: '?' });
+    else if (nearRead) {
+      if (nearRead.native > 0n) holdings.push({ place: 'NEAR', symbol: `NEAR · ${nearRead.accountId.slice(0, 8)}…`, amount: showAmount(nearRead.native, 24) });
+      if (nearRead.wnear > 0n) holdings.push({ place: 'NEAR', symbol: 'wNEAR', amount: showAmount(nearRead.wnear, 24) });
+      if (nearRead.usdc > 0n) holdings.push({ place: 'NEAR', symbol: 'USDC', amount: showAmount(nearRead.usdc, 6) });
+      if (nearRead.rhea) holdings.push({ place: 'Rhea', symbol: 'funds held on Rhea', amount: '—' });
+    }
     const start = rowIndex * stride;
     const eth = chain[start];
     if (eth?.status === 'success' && eth.result > 0n) {
@@ -209,4 +227,28 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
     }
     return holdings.length > 0 ? [{ ...row, holdings }] : [];
   });
+}
+
+interface NearHoldings {
+  readonly accountId: string;
+  readonly native: bigint;
+  readonly wnear: bigint;
+  readonly usdc: bigint;
+  readonly rhea: boolean;
+}
+
+async function readNearHoldings(index: number): Promise<NearHoldings | null> {
+  try {
+    const { accountId } = await deriveNearOwner(await requireUnlockedMnemonic(), index);
+    const account = await nearAccountBalance(accountId);
+    // An account that never received NEAR has nothing on it and nothing on Rhea.
+    if (!account) {
+      const [wnear, usdc] = await Promise.all([nearFtBalance(WRAP_NEAR, accountId), nearFtBalance(NEAR_USDC, accountId)]);
+      return { accountId, native: 0n, wnear, usdc, rhea: false };
+    }
+    const [wnear, usdc, blocked] = await Promise.all([nearFtBalance(WRAP_NEAR, accountId), nearFtBalance(NEAR_USDC, accountId), rheaExitBlocker(accountId)]);
+    return { accountId, native: account.amount, wnear, usdc, rhea: blocked !== null };
+  } catch {
+    return null;
+  }
 }
