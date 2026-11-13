@@ -25,7 +25,7 @@ const TGAS = 10n ** 12n;
 export class NearRpcError extends Error {
   constructor(
     message: string,
-    readonly cause?: unknown,
+    override readonly cause?: unknown,
   ) {
     super(message);
   }
