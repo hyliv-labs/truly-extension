@@ -93,7 +93,8 @@ export default defineConfig({
       // Anon-RPC harness (WebRTC + sandboxed iframe) and ZK proof building need a DOM.
       'browsingData',
       // E10: clear Lighter site data between owner addresses.
-      'tabs',
+      // No 'tabs': tab queries filter by URL on hosts listed below, which the
+      // host permissions already cover, and nothing reads a tab's URL or title.
     ],
     host_permissions: [
       // The app (app.lighter.xyz) and the marketing site.
