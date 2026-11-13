@@ -260,10 +260,13 @@ address holds (including ones it received in a swap) and retires it.
   Unstaking wstETH is an Ethereum-mainnet affair and is not offered here.
 
 Verified without money (browser test on the live sites, throwaway vault): each
-site sees Ghosty over EIP-6963 and gets its own fresh owner; on dydx.trade the
-switch to chain 1, the two onboarding signatures (identical), the refused
-transaction, the switch back and the recorded `dydx1…` address (equal to dYdX's
-own derivation of that signature). Live reads: Aave's check passes an empty
+site sees Ghosty over EIP-6963 and gets its own fresh owner. On dydx.trade,
+through the site's own Sign in: Truly is listed, connects, "Switch network"
+moves it to chain 1, the two onboarding signatures are identical, and the site
+then shows the same `dydx1…` account Ghosty recorded (equal to dYdX's own
+derivation of that signature); a transaction while on chain 1 is refused.
+stake.lido.fi's own UI was not reached: it served a Cloudflare bot check to the
+test browser, so the Arbitrum stake form with Ghosty connected is unverified. Live reads: Aave's check passes an empty
 address and refuses a real supplier; dYdX's check refuses a real account with
 USDC left; 1Click quotes USDC → ETH on Arbitrum.
 
