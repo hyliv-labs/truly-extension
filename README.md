@@ -2,8 +2,6 @@
 
 **Trade anywhere in DeFi. Leave no trace.**
 
-A Chrome wallet by Truly that lets you use any DeFi app from a private balance.
-
 ## The problem
 
 **Everything you do on-chain is public.** One wallet address ties together your
