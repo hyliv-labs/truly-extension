@@ -250,7 +250,7 @@ export function IntentsMove({
       {keyOpen ? (
         <div className="ix-key">
           <label className="gx-field">
-            <input placeholder="1Click partner key" value={key} spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+            <input type="password" autoComplete="off" placeholder="1Click partner key" value={key} spellCheck={false} onChange={(e) => setKey(e.target.value)} />
           </label>
           <button type="button" className="gx-link" onClick={() => void saveKey(key || null)}>Save</button>
           {confidential && <button type="button" className="gx-link" onClick={() => void saveKey(null)}>Remove</button>}
