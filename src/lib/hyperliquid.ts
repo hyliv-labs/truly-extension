@@ -101,6 +101,8 @@ export interface HyperliquidAccountView {
   readonly creditBefore?: string;
   /** Set once Hyperliquid showed the deposit. From then on funding never runs again. */
   readonly creditedAt?: number;
+  /** When the current Bring back round began; the ledger is read from here. */
+  readonly roundStartedAt?: number;
   readonly withdrawal?: HyperliquidWithdrawal;
   /** Which half a 'failed' status belongs to: Try again on Go ghost, or on Bring back. */
   readonly failedIn?: 'funding' | 'shielding';
@@ -263,7 +265,15 @@ interface SpotState {
 }
 
 export function readAccount(perp: unknown, spot: unknown, orders: unknown, mode: HyperliquidAbstraction = 'default'): HyperliquidAccount {
-  const state = (perp ?? {}) as ClearinghouseState;
+  // A changed or failed answer must not read as an empty account.
+  if (!perp || typeof perp !== 'object' || typeof (perp as ClearinghouseState).withdrawable !== 'string' || !(perp as ClearinghouseState).marginSummary) {
+    throw new Error('Hyperliquid answered the account read in an unexpected shape. Nothing was moved; try again.');
+  }
+  if (!spot || typeof spot !== 'object' || !Array.isArray((spot as SpotState).balances)) {
+    throw new Error('Hyperliquid answered the spot read in an unexpected shape. Nothing was moved; try again.');
+  }
+  if (!Array.isArray(orders)) throw new Error('Hyperliquid answered the open-orders read in an unexpected shape. Nothing was moved; try again.');
+  const state = perp as ClearinghouseState;
   const balances = ((spot ?? {}) as SpotState).balances ?? [];
   const usdc = balances.find((row) => row.coin === 'USDC');
   const spotUsdc = usdc ? usdcUnitsFromDecimal(usdc.total ?? '0') : 0n;

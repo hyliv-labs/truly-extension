@@ -19,7 +19,7 @@ import { DYDX_ONBOARDING, dydxAddressFromSignature } from './dydx';
 import { lastIntentsView, startIntentsExit } from './intents-private';
 import { ARBITRUM_CHAIN_ID } from './config';
 import { railgunGrossForNet } from './railgun';
-import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
+import { ensureUnshieldGas, railgunUsdcBalances, settleRecordedShield, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
 import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
 import { arbitrumGasLimit } from './tx-gas';
 import { RAILGUN_RETURN_TOKENS, WETH_ADDRESS } from './uniswap';
@@ -68,7 +68,10 @@ async function fund(venue: AppVenueId, amountIn: bigint): Promise<AppAccountView
   const existing = await getVenueTrade(venue);
   if (existing?.app?.status === 'funded' || existing?.app?.status === 'done') return existing.app;
   if (existing?.app?.status === 'shielding') throw new Error('Shield back is already running.');
-  if (existing?.app?.status === 'failed' && existing.app.unshieldTx && !spec.fundVia) {
+  // A failure after the unshield landed means shield back; one while the
+  // unshield is still pending resumes it (unshieldRailgunForTrade settles the
+  // recorded bytes, never a second proof).
+  if (existing?.app?.status === 'failed' && existing.app.unshieldTx && !spec.fundVia && existing.withdrawal?.status !== 'pending') {
     throw new Error('This address is already funded. Shield back the tokens that are still on it.');
   }
 
@@ -137,6 +140,9 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
   }
   const amountIn = trade.app?.amountIn ?? '0';
   const unshieldTx = trade.app?.unshieldTx;
+  if (trade.withdrawal?.status === 'pending') {
+    throw new Error('The unshield onto this address is still confirming. Try again (Go ghost continues it); nothing was moved.');
+  }
 
   const blocked = await appExitBlocker(venue, await withAppAccount(venue, trade));
   if (blocked) {
@@ -147,9 +153,15 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
 
   await remember(trade, { status: 'shielding', amountIn, unshieldTx, shielded: trade.app?.shielded, detail: 'Reading what this address still holds.' });
   try {
+    const shielded: AppTokenLine[] = [...(trade.app?.shielded ?? [])];
+    // A shield sent before a crash is that token's result: count it once, by its token.
+    const earlier = await settleRecordedShield(venue);
+    if (earlier) {
+      shielded.push({ token: earlier.token, symbol: earlier.token === 'unknown' ? 'earlier shield' : await readSymbol(earlier.token as Address, short(earlier.token as Address)), amount: earlier.amountUnits.toString(), txHash: earlier.txHash });
+      await updateOwnedTrade(trade.ownerIndex, { app: view(trade, { ...trade.app!, status: 'shielding', shielded }) });
+    }
     await wrapLeftoverEth(trade);
     const found = await balancesToShield(venue, trade);
-    const shielded: AppTokenLine[] = [...(trade.app?.shielded ?? [])];
     const already = new Set(shielded.map((row) => row.token.toLowerCase()));
     const left: AppTokenLine[] = [];
 
@@ -233,6 +245,15 @@ async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: b
   }
 
   if (!recorded) {
+    // A record lost to a crash after the exit was sent: if the asset already
+    // arrived (or was staked), this address is funded. Never pay a second time.
+    const ethHeld = await publicClient.getBalance({ address: trade.ownerAddress });
+    const stakedHeld = await Promise.all((spec.extraTokens ?? []).map((token) => tokenBalance(token.address, trade.ownerAddress)));
+    if (ethHeld > 100_000_000_000_000n || stakedHeld.some((amount) => amount > 0n)) {
+      const ready = view(trade, { ...(trade.app ?? { amountIn: amountIn.toString(), detail: '' }), status: 'funded', detail: spec.fundedDetail, error: undefined });
+      await updateOwnedTrade(trade.ownerIndex, { app: ready });
+      return ready;
+    }
     const { feeBps } = await railgunUsdcBalances();
     const gross = railgunGrossForNet(amountIn, feeBps);
     await remember(trade, { status: 'funding', amountIn: amountIn.toString(), detail: `Quoting ${fundVia.symbol} through NEAR Intents.` });
@@ -261,7 +282,13 @@ async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: b
     return ready;
   }
 
-  if (move && (move.stage === 'refunded' || move.stage === 'failed' || (move.stage === 'done' && move.direction === 'exit' && move.swapStatus === 'REFUNDED'))) {
+  if (move?.stage === 'failed') {
+    // Retryable on the NEAR Intents panel; its ETH may still come here. Keep the record.
+    const stalled = view(trade, { ...(trade.app ?? { amountIn: amountIn.toString(), detail: '' }), status: 'funding', viaIntents: recorded, detail: `The NEAR Intents move needs attention: ${move.error ?? move.detail}. Open Send out to retry it.` });
+    await updateOwnedTrade(trade.ownerIndex, { app: stalled });
+    return stalled;
+  }
+  if (move && (move.stage === 'refunded' || (move.stage === 'done' && move.direction === 'exit' && move.swapStatus === 'REFUNDED'))) {
     // Nothing reached this address. NEAR Intents' refund is shielded back by the exit itself.
     const failed = view(trade, {
       status: 'failed',
@@ -335,7 +362,8 @@ async function balancesToShield(venue: AppVenueId, trade: ActiveTrade): Promise<
 
   const rows: { token: Address; symbol: string; amount: bigint }[] = [];
   for (const entry of tokens.values()) {
-    const amount = await tokenBalance(entry.token, trade.ownerAddress).catch(() => 0n);
+    // A failed read is not a zero: refusing beats retiring an address with a token on it.
+    const amount = await tokenBalance(entry.token, trade.ownerAddress);
     if (amount === 0n) continue;
     rows.push({ token: entry.token, symbol: await readSymbol(entry.token, entry.symbol), amount });
   }
@@ -346,13 +374,11 @@ async function balancesToShield(venue: AppVenueId, trade: ActiveTrade): Promise<
 async function tokensReceived(trade: ActiveTrade): Promise<Address[]> {
   const unshieldTx = trade.app?.unshieldTx ?? trade.withdrawal?.txHash;
   if (!unshieldTx) return [];
-  try {
-    const receipt = await publicClient.getTransactionReceipt({ hash: unshieldTx as Hash });
-    const logs = await publicClient.getLogs({ event: transferEvent, args: { to: trade.ownerAddress }, fromBlock: receipt.blockNumber, toBlock: 'latest' });
-    return [...new Set(logs.map((log) => log.address))];
-  } catch {
-    return [];
-  }
+  // Thrown on failure, not read as "nothing received": a swap output outside
+  // the usual tokens is only found here.
+  const receipt = await publicClient.getTransactionReceipt({ hash: unshieldTx as Hash });
+  const logs = await publicClient.getLogs({ event: transferEvent, args: { to: trade.ownerAddress }, fromBlock: receipt.blockNumber, toBlock: 'latest' });
+  return [...new Set(logs.map((log) => log.address))];
 }
 
 async function readSymbol(token: Address, fallback: string): Promise<string> {

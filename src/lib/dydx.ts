@@ -117,6 +117,11 @@ export function decimalUnits(value: string | number | undefined): bigint {
 
 /** /v4/addresses/{address}. A 404 "No subaccounts found" is an address that never deposited. */
 export function readSubaccounts(body: unknown): { equity: bigint; positions: string[]; numbers: number[] } {
+  // null is the indexer's 404 (never deposited). Anything else must look right,
+  // or a changed API would read as an empty account.
+  if (body !== null && (typeof body !== 'object' || !Array.isArray((body as { subaccounts?: unknown }).subaccounts))) {
+    throw new Error('The dYdX indexer answered in an unexpected shape.');
+  }
   const subaccounts = ((body ?? {}) as { subaccounts?: { subaccountNumber?: number; equity?: string; openPerpetualPositions?: Record<string, unknown> }[] }).subaccounts ?? [];
   return {
     equity: subaccounts.reduce((sum, row) => sum + decimalUnits(row.equity), 0n),
@@ -151,12 +156,16 @@ export function dydxExitBlocker(state: DydxState, owner: { usdc: bigint; lastSen
   if (state.nobleUsdc > DYDX_DUST_UNITS) {
     return `${fmt(state.nobleUsdc)} USDC is on its way through Noble. Wait a few minutes and bring it back again. Nothing was moved.`;
   }
+  // Any dYdX movement inside the transit window may still be on its way over
+  // CCTP, whatever the address already holds: some USDC here proves nothing
+  // about the rest.
   const recentDydx = state.lastTransferAt !== null && now - state.lastTransferAt < DYDX_TRANSIT_MS;
-  if (recentDydx && owner.usdc < 1_000_000n) {
-    return 'A withdrawal from dYdX may still be on its way to Arbitrum (about 20 minutes over CCTP). Bring it back again once it lands. Nothing was moved.';
+  if (recentDydx) {
+    return 'dYdX moved funds for this account in the last 45 minutes; a withdrawal may still be on its way to Arbitrum over CCTP. Bring it back again after that. Nothing was moved.';
   }
+  // A deposit that left Arbitrum after dYdX last showed any movement has not landed there yet.
   const recentSend = owner.lastSendAt !== null && now - owner.lastSendAt < DYDX_TRANSIT_MS;
-  if (recentSend && state.lastTransferAt === null) {
+  if (recentSend && (state.lastTransferAt === null || owner.lastSendAt! > state.lastTransferAt)) {
     return 'A deposit to dYdX left this address recently and has not shown on dYdX yet. Wait for it to land, then withdraw it on dydx.trade. Nothing was moved.';
   }
   return null;

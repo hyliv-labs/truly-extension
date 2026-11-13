@@ -248,12 +248,21 @@ async function shield(): Promise<HyperliquidAccountView> {
   if (!view || !(view.status === 'funded' || view.status === 'shielding' || (view.status === 'failed' && view.depositTx))) {
     throw new Error('Bring back is available once the USDC is on Hyperliquid.');
   }
+  // Until Hyperliquid has shown the deposit, it may still be crediting: an
+  // empty account then means "not yet", and retiring would lose the credit.
+  if (!view.creditedAt) {
+    throw new Error('Hyperliquid has not credited the deposit yet. Go ghost keeps checking; bring it back after that. Nothing was moved.');
+  }
   const amountIn = view.amountIn;
   try {
-    if (!view.withdrawal) await startWithdrawal(trade);
-    else if (!view.withdrawal.acceptedAt) await sendWithdrawal(trade);
-    const arrived = await waitForArrival();
-    if (!arrived) return (await requireTrade()).hyperliquid!;
+    // A shield already sent (or this round's USDC already gone to Railgun)
+    // means the arrival check can never pass again: go straight to settling it.
+    if (!trade.reshield && view.step !== 'shielding') {
+      if (!view.withdrawal) await startWithdrawal(trade);
+      else if (!view.withdrawal.acceptedAt) await sendWithdrawal(trade);
+      const arrived = await waitForArrival();
+      if (!arrived) return (await requireTrade()).hyperliquid!;
+    }
     return await shieldBack();
   } catch (error) {
     const latest = await getVenueTrade('hyperliquid');
@@ -286,7 +295,9 @@ async function startWithdrawal(trade: ActiveTrade): Promise<void> {
     // withdrew from Hyperliquid's own site (to this same address, still
     // arriving), or the account is empty. The ledger says which; without it
     // nothing is retired, because USDC landing on a retired address is lost track of.
-    const withdrawn = withdrawnSince(await readLedger(trade.ownerAddress, trade.startedAt));
+    // Only this round: an earlier round's withdrawals were already shielded.
+    const since = Math.max(trade.startedAt, view.roundStartedAt ?? 0);
+    const withdrawn = withdrawnSince(await readLedger(trade.ownerAddress, since));
     const latest = await requireTrade();
     await remember(latest, {
       ...latest.hyperliquid!,
@@ -413,6 +424,7 @@ async function shieldBack(): Promise<HyperliquidAccountView> {
       status: 'funded',
       step: undefined,
       withdrawal: undefined,
+      roundStartedAt: Date.now(),
       shielded,
       error: undefined,
       detail: `${shielded.length > 0 ? 'What arrived is shielded. ' : ''}${usdcDecimalFromUnits(totalUsdc(account) > 0n ? totalUsdc(account) : 0n)} USDC is still on Hyperliquid. Bring it back again to withdraw the rest.`,

@@ -85,7 +85,12 @@ expect('dust equity does not block', dydxExitBlocker({ ...none, equity: 5_000n }
 expect('USDC in the dYdX wallet blocks', /in your dYdX wallet/.test(dydxExitBlocker({ ...none, walletUsdc: 1_485_845n }, { usdc: 0n, lastSendAt: null }, now) ?? ''), true);
 expect('USDC on Noble blocks', /through Noble/.test(dydxExitBlocker({ ...none, nobleUsdc: 2_000_000n }, { usdc: 0n, lastSendAt: null }, now) ?? ''), true);
 expect('a withdrawal minutes ago with nothing landed blocks', /on its way to Arbitrum/.test(dydxExitBlocker({ ...none, lastTransferAt: now - 10 * 60_000 }, { usdc: 0n, lastSendAt: null }, now) ?? ''), true);
-expect('the same once the USDC landed passes', dydxExitBlocker({ ...none, lastTransferAt: now - 10 * 60_000 }, { usdc: 9_000_000n, lastSendAt: null }, now), null);
+expect('a recent withdrawal still blocks when the address holds other USDC (it may be part)', /on its way to Arbitrum/.test(dydxExitBlocker({ ...none, lastTransferAt: now - 10 * 60_000 }, { usdc: 9_000_000n, lastSendAt: null }, now) ?? ''), true);
+expect('once the transit window passed it does not', dydxExitBlocker({ ...none, lastTransferAt: now - 60 * 60_000 }, { usdc: 9_000_000n, lastSendAt: null }, now), null);
+expect('a second deposit after older dYdX activity blocks', /has not shown on dYdX/.test(dydxExitBlocker({ ...none, lastTransferAt: now - 3 * 3600_000 }, { usdc: 0n, lastSendAt: now - 5 * 60_000 }, now) ?? ''), true);
+let shapeError = '';
+try { readSubaccounts({ unexpected: true }); } catch (error) { shapeError = String(error); }
+expect('an unexpected indexer shape is refused, not read as empty', /unexpected shape/.test(shapeError), true);
 expect('a deposit that left but never showed blocks', /has not shown on dYdX/.test(dydxExitBlocker(none, { usdc: 0n, lastSendAt: now - 5 * 60_000 }, now) ?? ''), true);
 expect('an old deposit that never showed does not', dydxExitBlocker(none, { usdc: 0n, lastSendAt: now - 3 * 3600_000 }, now), null);
 

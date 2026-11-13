@@ -290,6 +290,15 @@ async function handle(
             `${reason ?? 'This trade is not finished.'} Use Abandon if you intend to retire it anyway.`,
           );
         }
+      } else {
+        // "End" promises the funds are back. Only a finished Bring back, or an
+        // address that was never funded, may end here; anything else is Abandon.
+        const trade = await getVenueTrade(venue);
+        const view = trade?.app ?? trade?.hyperliquid ?? trade?.compound ?? trade?.uniswap;
+        const neverFunded = trade && !trade.withdrawal && !view?.unshieldTx && !trade.hyperliquid?.depositTx && !trade.app?.viaIntents;
+        if (trade && view?.status !== 'done' && !neverFunded) {
+          throw new Error('This address still holds funds or is mid-way. Bring funds back first, or use Abandon if you intend to retire it anyway.');
+        }
       }
       await endVenue(venue);
       if (!(await listOpenVenues()).lighter) {

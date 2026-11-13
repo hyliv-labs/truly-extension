@@ -161,7 +161,8 @@ export interface AppAccountView {
  * the address (it was staked) with no wstETH yet means the slow route.
  */
 export function lidoExitBlocker(held: { funded: bigint; eth: bigint; wst: bigint }): string | null {
-  if (held.wst === 0n && held.eth * 2n < held.funded) {
+  // Any real drop with no wstETH yet: staking even a small part by the slow route is in flight.
+  if (held.wst === 0n && held.eth * 100n < held.funded * 95n) {
     return 'The ETH left this address and no wstETH has arrived yet. Lido’s slower route takes several minutes; bring it back once wstETH shows. Nothing was moved.';
   }
   return null;

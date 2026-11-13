@@ -89,6 +89,11 @@ export interface ActiveTrade {
      * no raw transaction; its userOpHash is waited on through the bundler.
      */
     readonly raw?: string;
+    /**
+     * The token this shield moves. A record for one token must never be read
+     * as the result for another; absent on records written before this field.
+     */
+    readonly token?: string;
   };
   /**
    * E3: set once the pool withdrawal is CONFIRMED on chain. Mirrors `reshield`

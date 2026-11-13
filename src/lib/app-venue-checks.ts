@@ -24,7 +24,7 @@ import {
   NOBLE_USDC_DENOM,
   readSubaccounts,
 } from './dydx';
-import type { ActiveTrade } from './trade';
+import { getVenueTrade, type ActiveTrade } from './trade';
 
 type ExitCheck = (owner: Address, trade: ActiveTrade) => Promise<string | null>;
 
@@ -69,10 +69,13 @@ async function dydxCheck(owner: Address, trade: ActiveTrade): Promise<string | n
     const orders = await Promise.all(
       subaccounts.numbers.map((number) => getJson(`${DYDX_INDEXER}/orders?address=${account.address}&subaccountNumber=${number}&status=OPEN&limit=50`, [])),
     );
-    const transfers = (await getJson(`${DYDX_INDEXER}/transfers?address=${account.address}&subaccountNumber=0&limit=1`, [404])) as { transfers?: { createdAt?: string }[] } | null;
+    const transferBodies = (await Promise.all(
+      (subaccounts.numbers.length > 0 ? subaccounts.numbers : [0]).map((number) => getJson(`${DYDX_INDEXER}/transfers?address=${account.address}&subaccountNumber=${number}&limit=1`, [404])),
+    )) as ({ transfers?: { createdAt?: string }[] } | null)[];
     const wallet = await getJson(`${DYDX_REST}/cosmos/bank/v1beta1/balances/${account.address}`, []);
     const noble = account.noble ? await getJson(`${NOBLE_REST}/cosmos/bank/v1beta1/balances/${account.noble}`, []) : null;
-    const lastTransfer = transfers?.transfers?.[0]?.createdAt;
+    const transferTimes = transferBodies.map((body) => Date.parse(body?.transfers?.[0]?.createdAt ?? '')).filter((time) => Number.isFinite(time));
+    const lastTransfer = transferTimes.length > 0 ? Math.max(...transferTimes) : null;
 
     const ownerUsdc = await publicClient.readContract({ address: USDC_ADDRESS, abi: erc20Abi, functionName: 'balanceOf', args: [owner] });
     return dydxExitBlocker(
@@ -82,7 +85,7 @@ async function dydxCheck(owner: Address, trade: ActiveTrade): Promise<string | n
         openOrders: orders.reduce<number>((sum, body) => sum + (Array.isArray(body) ? body.length : 0), 0),
         walletUsdc: bankUnits(wallet, DYDX_USDC_DENOM),
         nobleUsdc: bankUnits(noble, NOBLE_USDC_DENOM),
-        lastTransferAt: lastTransfer ? Date.parse(lastTransfer) : null,
+        lastTransferAt: lastTransfer,
       },
       { usdc: ownerUsdc, lastSendAt: await lastUsdcSend(owner) },
     );
@@ -130,6 +133,11 @@ async function getJson(url: string, empty: number[]): Promise<unknown> {
  */
 async function lidoCheck(owner: Address, trade: ActiveTrade): Promise<string | null> {
   try {
+    // A NEAR Intents move still paying this address: wait for it.
+    const live = (await getVenueTrade('intents'))?.intents;
+    if (live && live.direction === 'exit' && live.recipient.toLowerCase() === owner.toLowerCase() && live.stage !== 'done' && live.stage !== 'refunded') {
+      return 'A NEAR Intents move is still delivering ETH to this address. Bring it back once it lands. Nothing was moved.';
+    }
     const funded = BigInt(trade.app?.viaIntents?.minOut ?? '0');
     if (funded === 0n) return null;
     const [eth, wst] = await Promise.all([

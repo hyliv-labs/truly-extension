@@ -287,6 +287,7 @@ export async function shieldOwnerUsdcToRailgun(venue?: BookSlot): Promise<{ txHa
           depositIndex: 0,
           deposited: amount.toString(),
           confirmedAt: 0,
+          token: USDC_ADDRESS,
         },
       });
     },
@@ -299,6 +300,7 @@ export async function shieldOwnerUsdcToRailgun(venue?: BookSlot): Promise<{ txHa
       depositIndex: 0,
       deposited: amount.toString(),
       confirmedAt: Date.now(),
+      token: USDC_ADDRESS,
     },
   });
   return { txHash: userOpHash, amountUnits: amount };
@@ -370,7 +372,7 @@ async function shieldPayingEth(
   if (ownerIndex === undefined) throw new Error('No trade is active.');
 
   await updateOwnedTrade(ownerIndex, {
-    reshield: { status: 'pending', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: 0 },
+    reshield: { status: 'pending', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: 0, token },
   });
   await broadcast(signed.raw);
   const receipt = await publicClient.waitForTransactionReceipt({ hash: signed.hash });
@@ -379,7 +381,7 @@ async function shieldPayingEth(
     throw new Error(`The Railgun shield reverted (tx ${signed.hash}). The tokens are still at the owner; they were not sent again.`);
   }
   await updateOwnedTrade(ownerIndex, {
-    reshield: { status: 'confirmed', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: Date.now() },
+    reshield: { status: 'confirmed', userOpHash: signed.hash, raw: signed.raw, depositIndex: 0, deposited: balance.toString(), confirmedAt: Date.now(), token },
   });
   return { txHash: signed.hash, amountUnits: balance };
 }
@@ -393,6 +395,12 @@ export async function shieldOwnerToken(token: Address, amount: bigint, venue?: B
   const trade = venue ? await getVenueTrade(venue) : await getActiveTrade();
   if (!trade) throw new Error('No active trade to shield.');
   if (amount <= 0n) throw new Error('There is nothing to shield.');
+  // A record for another token is that token's result, not this one's: settle
+  // it as such (it throws while still in flight), clear it, then shield this token.
+  if (trade.reshield?.userOpHash && (!trade.reshield.token || trade.reshield.token.toLowerCase() !== token.toLowerCase())) {
+    await settleRecordedShield(venue ?? trade.venue ?? 'lighter');
+    return shieldOwnerToken(token, amount, venue);
+  }
   if (trade.reshield?.status === 'pending' && trade.reshield.userOpHash) {
     return settlePendingShield(trade);
   }
@@ -422,6 +430,24 @@ interface FundingShieldRecord {
 let fundingShieldInFlight: Promise<{ txHash: Hash; amountUnits: bigint }> | null = null;
 
 /** USDC and ETH on the address Add funds shields from. */
+/**
+ * Settle whatever shield this venue's record holds, as that token's own
+ * result, and clear the record. Bring back calls this before shielding the
+ * next token, so a shield sent before a crash is counted once, for the right
+ * token, and never reported as another token's result.
+ */
+export async function settleRecordedShield(venue: BookSlot): Promise<{ token: string; txHash: Hash; amountUnits: bigint } | null> {
+  const trade = await getVenueTrade(venue);
+  if (!trade?.reshield?.userOpHash) return null;
+  const token = trade.reshield.token ?? 'unknown';
+  const result =
+    trade.reshield.status === 'confirmed'
+      ? { txHash: trade.reshield.userOpHash as Hash, amountUnits: BigInt(trade.reshield.deposited) }
+      : await settlePendingShield(trade);
+  await updateOwnedTrade(trade.ownerIndex, { reshield: undefined });
+  return { token, ...result };
+}
+
 export async function fundingWalletBalances(): Promise<{ address: Address; usdcUnits: bigint; ethWei: bigint }> {
   const wallet = await fundingWallet();
   const [usdcUnits, ethWei] = await Promise.all([
