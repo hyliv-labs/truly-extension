@@ -152,7 +152,12 @@ export interface ActiveTrade {
    * (dYdX derives a dydx1 address from a wallet signature). Public addresses
    * only; the signature and the key derived from it are never stored.
    */
-  readonly appAccount?: { readonly address: string; readonly noble?: string };
+  readonly appAccount?: {
+    readonly address: string;
+    readonly noble?: string;
+    /** dydx1 accounts from non-standard onboarding requests. Bring back refuses while any exists. */
+    readonly unknownAccounts?: string[];
+  };
   /** A NEAR Intents move. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
   readonly intents?: IntentsView;
 }

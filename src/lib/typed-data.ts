@@ -11,7 +11,7 @@
  * name check: same domain type, same struct encoding.
  */
 
-import { concat, getTypesForEIP712Domain, hashDomain, hashStruct, keccak256, type Hex, type TypedDataDomain } from 'viem';
+import { concat, getTypesForEIP712Domain, hashDomain, hashStruct, keccak256, validateTypedData, type Hex, type TypedDataDomain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 export interface LooseTypedData {
@@ -38,4 +38,29 @@ export function isStructNameRefusal(error: unknown): boolean {
 
 export function signTypedDataLoose(privateKey: Hex, input: LooseTypedData): Promise<Hex> {
   return privateKeyToAccount(privateKey).sign({ hash: hashTypedDataLoose(input) });
+}
+
+/** Hyperliquid's user-signed action names: "HyperliquidTransaction:Withdraw", "Hyperliquid:AcceptTerms". */
+const HYPERLIQUID_NAME = /^Hyperliquid(Transaction)?:[A-Za-z0-9]+$/;
+
+/**
+ * May this be signed with the loose hash? Every struct name with a ':' must
+ * be one of Hyperliquid's, and with the ':' swapped out the payload must pass
+ * viem's own checks (field types, addresses, integer ranges). The rename only
+ * feeds the check; the hash still uses the original names.
+ */
+export function looseTypedDataAllowed(input: LooseTypedData): boolean {
+  const names = Object.keys(input.types);
+  if (names.some((name) => name.includes(':') && !HYPERLIQUID_NAME.test(name))) return false;
+  if (!names.some((name) => name.includes(':'))) return false;
+  const rename = (name: string) => name.replace(/:/g, '_');
+  const types = Object.fromEntries(
+    names.map((name) => [rename(name), input.types[name]!.map((field) => ({ name: field.name, type: field.type.replace(/^([^[]+)/, (base) => (input.types[base] ? rename(base) : base)) }))]),
+  );
+  try {
+    validateTypedData({ domain: input.domain as TypedDataDomain, types: types as never, primaryType: rename(input.primaryType), message: input.message } as never);
+    return true;
+  } catch {
+    return false;
+  }
 }

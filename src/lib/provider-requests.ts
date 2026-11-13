@@ -1,3 +1,4 @@
+import { decodeFunctionData, parseAbi } from 'viem';
 /**
  * Pure parsing for the wallet methods Lighter (and any EIP-1193 dapp) sends.
  *
@@ -116,13 +117,10 @@ export function parseTypedDataRequest(
   const types = { ...body.types };
   delete types.EIP712Domain;
 
-  const summary = truncate(
-    JSON.stringify(
-      { primaryType: body.primaryType, domain, message: body.message },
-      null,
-      2,
-    ),
-  );
+  // Only what is signed is shown, message first. Keys the types do not list
+  // are not hashed, so showing them (as the raw JSON did) let a site push the
+  // real spender or amount out of view with junk.
+  const summary = signedSummary(body.primaryType, types, domain, body.message);
 
   return {
     address,
@@ -184,10 +182,12 @@ export function parseTransactionRequest(
   const value = asBigint(body.value);
   const gas = body.gas === undefined ? undefined : asBigint(body.gas);
 
+  const call = data ? describeCall(data) : null;
   const summary = [
+    ...(call ? [call] : []),
     `To: ${body.to}`,
     `Value: ${formatEth(value)}`,
-    data ? `Data: ${previewData(data)}` : 'Data: none',
+    data ? `Data: ${fullData(data)}` : 'Data: none',
   ].join('\n');
 
   return { to: body.to as `0x${string}`, data, value, gas, summary };
@@ -223,12 +223,95 @@ function formatEth(value: bigint): string {
   return frac ? `${whole}.${frac} ETH` : `${whole} ETH`;
 }
 
-function previewData(data: string): string {
+/** All of it up to 4 KB of hex, then the length. The decoded call above is what to read. */
+function fullData(data: string): string {
   if (data === '0x') return 'none';
   const bytes = (data.length - 2) / 2;
-  return `${data.slice(0, 18)}… (${bytes} bytes)`;
+  return data.length > 8194 ? `${data.slice(0, 8194)}… (${bytes} bytes)` : `${data} (${bytes} bytes)`;
 }
 
-function truncate(value: string): string {
-  return value.length > 4000 ? `${value.slice(0, 4000)}\n…` : value;
+const MAX_UINT = 2n ** 256n - 1n;
+const KNOWN_CALLS = parseAbi([
+  'function approve(address spender, uint256 amount)',
+  'function transfer(address to, uint256 amount)',
+  'function transferFrom(address from, address to, uint256 amount)',
+  'function increaseAllowance(address spender, uint256 addedValue)',
+  'function setApprovalForAll(address operator, bool approved)',
+]);
+
+/** The calls that hand tokens or allowances to someone, decoded so the user sees who and how much. */
+export function describeCall(data: `0x${string}`): string | null {
+  try {
+    const { functionName, args } = decodeFunctionData({ abi: KNOWN_CALLS, data });
+    const amount = (value: unknown) => (value === MAX_UINT ? 'UNLIMITED' : String(value));
+    switch (functionName) {
+      case 'approve':
+        return `WARNING: approve lets ${args[0]} spend ${amount(args[1])} units of this token.`;
+      case 'increaseAllowance':
+        return `WARNING: increaseAllowance lets ${args[0]} spend ${amount(args[1])} more units of this token.`;
+      case 'setApprovalForAll':
+        return args[1] ? `WARNING: setApprovalForAll lets ${args[0]} move ALL of this collection.` : `setApprovalForAll revokes ${args[0]}.`;
+      case 'transfer':
+        return `Sends ${amount(args[1])} units of this token to ${args[0]}.`;
+      case 'transferFrom':
+        return `Moves ${amount(args[2])} units of this token from ${args[0]} to ${args[1]}.`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Signatures that move money or grant spending without a transaction of their own. */
+const RISKY_TYPED = /permit|withdraw|transfer|order|approve|send|delegate/i;
+
+function signedSummary(
+  primaryType: string,
+  types: Record<string, readonly { name: string; type: string }[]>,
+  domain: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string {
+  const lines: string[] = [];
+  if (RISKY_TYPED.test(primaryType)) {
+    lines.push(`WARNING: a signed ${primaryType} can move funds or grant spending with no further prompt. Check every field.`);
+  }
+  lines.push(`Signing: ${primaryType}`, 'Message:');
+  render(primaryType, message, '  ', 0);
+  lines.push('Domain:');
+  for (const key of ['name', 'version', 'chainId', 'verifyingContract', 'salt']) {
+    if (domain[key] !== undefined) lines.push(`  ${key}: ${show(domain[key])}`);
+  }
+  return lines.join('\n');
+
+  function render(type: string, value: unknown, indent: string, depth: number): void {
+    const fields = types[type];
+    if (!fields || depth > 8 || !value || typeof value !== 'object') {
+      lines.push(`${indent}${show(value)}`);
+      return;
+    }
+    for (const field of fields) {
+      const item = (value as Record<string, unknown>)[field.name];
+      const base = field.type.replace(/\[\d*\]$/, '');
+      if (types[base]) {
+        lines.push(`${indent}${field.name}:`);
+        if (Array.isArray(item)) item.forEach((entry, i) => { lines.push(`${indent}  [${i}]`); render(base, entry, `${indent}    `, depth + 1); });
+        else render(base, item, `${indent}  `, depth + 1);
+      } else {
+        lines.push(`${indent}${field.name}: ${show(item)}`);
+      }
+    }
+  }
+}
+
+function show(value: unknown): string {
+  if (typeof value === 'string') {
+    try {
+      if (BigInt(value) === MAX_UINT) return 'UNLIMITED';
+    } catch {
+      // not a number
+    }
+    return value;
+  }
+  if (typeof value === 'bigint' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
 }

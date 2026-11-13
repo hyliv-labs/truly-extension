@@ -136,3 +136,20 @@ try {
 }
 
 process.exitCode = failed ? 1 : 0;
+// Security review: the approval window shows what is signed, and decodes approvals.
+{
+  const permit = {
+    domain: { _: 'x'.repeat(5000), name: 'USD Coin', version: '2', chainId: 42161, verifyingContract: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' },
+    types: { Permit: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] },
+    primaryType: 'Permit',
+    message: { junk: 'y'.repeat(5000), owner: OWNER, spender: OTHER, value: (2n ** 256n - 1n).toString(), nonce: '0', deadline: '9999999999' },
+  };
+  const shown = parseTypedDataRequest('eth_signTypedData_v4', [OWNER, JSON.stringify(permit)], OWNER).summary;
+  if (!shown.includes(`spender: ${OTHER}`)) fail('the Permit spender must be shown'); else pass('the Permit spender is shown');
+  if (!shown.includes('value: UNLIMITED')) fail('an unlimited Permit must say UNLIMITED'); else pass('an unlimited Permit says UNLIMITED');
+  if (shown.includes('xxxxx') || shown.includes('yyyyy')) fail('unsigned junk keys must not be shown'); else pass('unsigned junk keys are not shown');
+  if (!shown.startsWith('WARNING')) fail('a Permit must carry a warning'); else pass('a Permit carries a warning');
+  const approve = parseTransactionRequest([{ to: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', data: `0x095ea7b3${OTHER.slice(2).padStart(64, '0')}${'f'.repeat(64)}` }], OWNER).summary;
+  if (!approve.includes(`lets ${OTHER} spend UNLIMITED`)) fail(`approve must be decoded: ${approve}`); else pass('an unlimited approve is decoded and flagged');
+}
+

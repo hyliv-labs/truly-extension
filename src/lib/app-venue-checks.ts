@@ -59,6 +59,9 @@ async function aaveCheck(owner: Address): Promise<string | null> {
  */
 async function dydxCheck(owner: Address, trade: ActiveTrade): Promise<string | null> {
   const account = trade.appAccount;
+  if (account?.unknownAccounts?.length) {
+    return `dYdX asked for a non-standard onboarding signature, which made another dYdX account (${account.unknownAccounts.join(', ')}). Ghosty cannot confirm it is empty. Withdraw everything on dydx.trade, then use Abandon if you are sure. Nothing was moved.`;
+  }
   if (!account?.address) return 'Ghosty does not know this address’s dYdX account yet. Try again. Nothing was moved.';
   try {
     const subaccountsBody = await getJson(`${DYDX_INDEXER}/addresses/${account.address}`, [404]);

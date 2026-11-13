@@ -27,7 +27,7 @@ import {
   withdrawTypedData,
 } from '../src/lib/hyperliquid.ts';
 import { venueFromOrigin } from '../src/lib/trade.ts';
-import { hashTypedDataLoose, isStructNameRefusal, signTypedDataLoose } from '../src/lib/typed-data.ts';
+import { hashTypedDataLoose, isStructNameRefusal, looseTypedDataAllowed, signTypedDataLoose } from '../src/lib/typed-data.ts';
 import { hashTypedData } from 'viem';
 
 let failed = false;
@@ -107,6 +107,12 @@ const approveAgent = {
   message: { hyperliquidChain: 'Mainnet', agentAddress: '0x0000000000000000000000000000000000000001', agentName: '', nonce: 1731400000000 },
 };
 expect('approveAgent signature matches the Hyperliquid SDK', splitSignature(await signTypedDataLoose(KEY, approveAgent)), APPROVE_AGENT_SIG);
+// Security review: the loose path is for Hyperliquid's names only, and still validates fields.
+expect('loose signing allowed for ApproveAgent', looseTypedDataAllowed(approveAgent), true);
+expect('loose signing allowed for Withdraw', looseTypedDataAllowed(withdrawTypedData(action) as never), true);
+expect('loose signing refused for another colon name', looseTypedDataAllowed({ ...approveAgent, types: { 'Evil:Permit': approveAgent.types['HyperliquidTransaction:ApproveAgent'] }, primaryType: 'Evil:Permit' }), false);
+expect('loose signing refused for a Permit with an unused colon type added', looseTypedDataAllowed({ ...permitLike, types: { ...permitLike.types, 'a:b': [] } } as never), false);
+expect('loose signing refused when a field fails viem checks', looseTypedDataAllowed({ ...approveAgent, message: { ...approveAgent.message, agentAddress: '0x123' } }), false);
 expect('exchange body nonce is the action time', exchangeBody(action, signature).nonce, 1731400000000);
 throws('a withdrawal of the fee or less is refused', () => withdrawAction(account.address, '1', 1), /1 USDC/);
 throws('more than 6 decimals is refused', () => withdrawAction(account.address, '2.1234567', 1), /6 places/);

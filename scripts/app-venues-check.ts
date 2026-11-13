@@ -9,7 +9,7 @@ import { APP_VENUE_IDS, APP_VENUES, appVenueFromHost, isAppVenue, lidoExitBlocke
 import { venueFromOrigin } from '../src/lib/trade.ts';
 import { aaveExitBlocker, reserveTokens, underlyingName } from '../src/lib/aave.ts';
 import { privateKeyToAccount } from 'viem/accounts';
-import { bankUnits, DYDX_ONBOARDING, dydxAddressFromSignature, dydxExitBlocker, isDydxOnboarding, readSubaccounts } from '../src/lib/dydx.ts';
+import { bankUnits, DYDX_ONBOARDING, dydxAddressFromSignature, dydxExitBlocker, isCanonicalDydxOnboarding, isDydxOnboarding, readSubaccounts } from '../src/lib/dydx.ts';
 
 let failed = false;
 const expect = (label: string, got: unknown, want: unknown) => {
@@ -65,6 +65,12 @@ expect('dydx and noble addresses match dYdX\'s client', dydxAddressFromSignature
 });
 expect('the site\'s onboarding request is recognised', isDydxOnboarding({ primaryType: 'dYdX', message: { action: 'dYdX Chain Onboarding' } }), true);
 expect('other dYdX-typed data is not', isDydxOnboarding({ primaryType: 'Permit', message: { action: 'x' } }), false);
+const canon = { domain: { name: 'dYdX Chain', chainId: 1 }, types: { dYdX: [{ name: 'action', type: 'string' }] }, primaryType: 'dYdX', message: { action: 'dYdX Chain Onboarding' } };
+expect('the site\'s exact onboarding payload is canonical', isCanonicalDydxOnboarding(canon), true);
+expect('chainId as a hex string still canonical', isCanonicalDydxOnboarding({ ...canon, domain: { name: 'dYdX Chain', chainId: '0x1' as never } }), true);
+expect('another chainId is not canonical', isCanonicalDydxOnboarding({ ...canon, domain: { name: 'dYdX Chain', chainId: 42161 } }), false);
+expect('an extra domain field is not canonical', isCanonicalDydxOnboarding({ ...canon, domain: { ...canon.domain, verifyingContract: '' } }), false);
+expect('an extra message field (Turnkey salt) is not canonical', isCanonicalDydxOnboarding({ ...canon, types: { dYdX: [{ name: 'action', type: 'string' }, { name: 'salt', type: 'string' }] }, message: { action: 'dYdX Chain Onboarding', salt: 'x' } }), false);
 const sub = readSubaccounts({ subaccounts: [{ subaccountNumber: 0, equity: '0.377434', openPerpetualPositions: {} }, { subaccountNumber: 128, equity: '2', openPerpetualPositions: { 'ETH-USD': {} } }] });
 expect('subaccount equity sums', sub.equity, 2_377_434n);
 expect('subaccount positions listed', sub.positions, ['ETH-USD']);

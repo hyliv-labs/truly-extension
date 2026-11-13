@@ -43,8 +43,36 @@ export const DYDX_ONBOARDING = {
   message: { action: 'dYdX Chain Onboarding' },
 } as const;
 
+/** Anything shaped like a dYdX onboarding request: its account comes from this signature. */
 export function isDydxOnboarding(typed: { primaryType: string; message: Record<string, unknown> }): boolean {
   return typed.primaryType === 'dYdX' && typeof typed.message.action === 'string' && /onboarding/i.test(typed.message.action);
+}
+
+/**
+ * Exactly the mainnet onboarding payload. Only this one is recorded as the
+ * account: a variant (other domain, chainId, extra field) derives a different
+ * dydx1 address, and recording that would make Bring back check the wrong one.
+ */
+export function isCanonicalDydxOnboarding(typed: {
+  domain: Record<string, unknown>;
+  types: Record<string, readonly { name: string; type: string }[]>;
+  primaryType: string;
+  message: Record<string, unknown>;
+}): boolean {
+  const domainKeys = Object.keys(typed.domain).filter((key) => typed.domain[key] !== undefined).sort();
+  const fields = typed.types.dYdX ?? [];
+  return (
+    typed.primaryType === 'dYdX' &&
+    JSON.stringify(domainKeys) === JSON.stringify(['chainId', 'name']) &&
+    typed.domain.name === DYDX_ONBOARDING.domain.name &&
+    Number(typed.domain.chainId) === DYDX_ONBOARDING.domain.chainId &&
+    Object.keys(typed.types).filter((key) => key !== 'EIP712Domain').length === 1 &&
+    fields.length === 1 &&
+    fields[0]?.name === 'action' &&
+    fields[0]?.type === 'string' &&
+    JSON.stringify(Object.keys(typed.message)) === '["action"]' &&
+    typed.message.action === DYDX_ONBOARDING.message.action
+  );
 }
 
 /**

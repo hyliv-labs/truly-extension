@@ -29,9 +29,9 @@ import {
   type InFlightRequest,
 } from './approvals';
 import { publicClient } from './chain';
-import { isStructNameRefusal, signTypedDataLoose } from './typed-data';
+import { isStructNameRefusal, looseTypedDataAllowed, signTypedDataLoose } from './typed-data';
 import { APP_VENUE_IDS, APP_VENUES, isAppVenue } from './app-venues';
-import { dydxAddressFromSignature, isDydxOnboarding } from './dydx';
+import { dydxAddressFromSignature, isCanonicalDydxOnboarding, isDydxOnboarding } from './dydx';
 import {
   parsePersonalSign,
   parseTransactionRequest,
@@ -478,11 +478,25 @@ async function perform(record: InFlightRequest): Promise<unknown> {
  * dydx1/noble1 addresses on the owner's trade, so Bring back can check dYdX.
  * The signature itself goes only to the page, as with any signature.
  */
-async function rememberDydxAccount(ownerIndex: number, signature: Hex): Promise<void> {
+async function rememberDydxAccount(ownerIndex: number, signature: Hex, canonical: boolean): Promise<void> {
   const trade = await findTradeByOwner(ownerIndex);
   if (!trade || trade.venue !== 'dydx') return;
   const derived = dydxAddressFromSignature(signature);
-  await updateOwnedTrade(ownerIndex, { appAccount: { address: derived.dydx, noble: derived.noble } }).catch(() => undefined);
+  // The first canonical account is kept: a later look-alike request cannot
+  // replace it with an empty account and let Bring back retire a funded one.
+  if (trade.appAccount?.address && trade.appAccount.address !== derived.dydx) {
+    await updateOwnedTrade(ownerIndex, { appAccount: { ...trade.appAccount, unknownAccounts: [...new Set([...(trade.appAccount.unknownAccounts ?? []), derived.dydx])] } }).catch(() => undefined);
+    return;
+  }
+  if (!canonical) {
+    // A non-standard onboarding payload: dYdX may hold funds under an account
+    // Ghosty cannot check the usual way. Record it so Bring back refuses.
+    await updateOwnedTrade(ownerIndex, {
+      appAccount: { address: trade.appAccount?.address ?? '', noble: trade.appAccount?.noble, unknownAccounts: [...new Set([...(trade.appAccount?.unknownAccounts ?? []), derived.dydx])] },
+    }).catch(() => undefined);
+    return;
+  }
+  await updateOwnedTrade(ownerIndex, { appAccount: { ...trade.appAccount, address: derived.dydx, noble: derived.noble } }).catch(() => undefined);
 }
 
 async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknown> {
@@ -506,7 +520,7 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
       const typed = parseTypedDataRequest(record.method, record.params, record.ownerAddress);
       if (isDydxOnboarding(typed)) {
         const signature = await account.signTypedData({ domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message: typed.message });
-        await rememberDydxAccount(record.ownerIndex, signature);
+        await rememberDydxAccount(record.ownerIndex, signature, isCanonicalDydxOnboarding(typed));
         return signature;
       }
       try {
@@ -520,7 +534,10 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
         // Hyperliquid's "HyperliquidTransaction:ApproveAgent" (Enable trading)
         // and its other user-signed actions use a name viem refuses. Same
         // digest, without that one check; anything else viem refuses stays refused.
-        if (!isStructNameRefusal(error)) throw error;
+        // Only Hyperliquid's own names, only for the Hyperliquid address, and
+        // still through viem's field checks (looseTypedDataAllowed renames and validates).
+        const trade = await findTradeByOwner(record.ownerIndex);
+        if (!isStructNameRefusal(error) || trade?.venue !== 'hyperliquid' || !looseTypedDataAllowed(typed)) throw error;
         return signTypedDataLoose(privateKey, typed);
       }
     }

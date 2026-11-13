@@ -284,11 +284,11 @@ async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: b
  * deterministic, so it is the address the site got.
  */
 async function withAppAccount(venue: AppVenueId, trade: ActiveTrade): Promise<ActiveTrade> {
-  if (venue !== 'dydx' || trade.appAccount?.address) return trade;
+  if (venue !== 'dydx' || trade.appAccount?.address || trade.appAccount?.unknownAccounts?.length) return trade;
   const owner = await ownerAt(trade.ownerIndex);
   const signature = await privateKeyToAccount(owner.privateKey).signTypedData(DYDX_ONBOARDING);
   const derived = dydxAddressFromSignature(signature);
-  const appAccount = { address: derived.dydx, noble: derived.noble };
+  const appAccount = { ...trade.appAccount, address: derived.dydx, noble: derived.noble };
   await updateOwnedTrade(trade.ownerIndex, { appAccount });
   return { ...trade, appAccount };
 }
