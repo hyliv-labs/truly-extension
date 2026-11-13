@@ -59,7 +59,7 @@ import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
 import { fundCompoundAccount, shieldCompoundAccount } from '@truly/lib/compound-private';
 import { fundHyperliquidAccount, shieldHyperliquidAccount } from '@truly/lib/hyperliquid-private';
-import { fundAppAccount, shieldAppAccount } from '@truly/lib/app-venue-private';
+import { advanceIntentsFundedApps, fundAppAccount, shieldAppAccount } from '@truly/lib/app-venue-private';
 import { APP_VENUE_IDS, APP_VENUES, isAppVenue } from '@truly/lib/app-venues';
 import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
 import {
@@ -812,6 +812,12 @@ async function tickIntents(): Promise<void> {
     await advanceIntents();
   } catch (error) {
     console.warn('[truly] intents tick failed', error);
+  }
+  try {
+    // Lido is funded by a NEAR Intents exit: flip it to funded when the ETH lands.
+    await advanceIntentsFundedApps();
+  } catch (error) {
+    console.warn('[truly] app funding tick failed', error);
   } finally {
     await armIntentsTick();
   }

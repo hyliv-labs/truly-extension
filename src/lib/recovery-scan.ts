@@ -15,7 +15,12 @@ import { getAccountIndex } from './lighter';
 import { readHyperliquidBalance } from './hyperliquid-api';
 import { readTradingAccount } from './lighter-trading';
 import { ownerUsdcBalance } from './reshield';
-import { RAILGUN_RETURN_TOKENS } from './uniswap';
+import { RAILGUN_RETURN_TOKENS as BASE_RETURN_TOKENS } from './uniswap';
+import { WSTETH_ARBITRUM } from './app-venues';
+import { AAVE_POOL, AAVE_POOL_ABI } from './aave';
+
+/** The usual tokens plus what the app venues hand out (Lido's wstETH). */
+const RAILGUN_RETURN_TOKENS = [...BASE_RETURN_TOKENS, { address: WSTETH_ARBITRUM, symbol: 'wstETH', decimals: 18 }] as const;
 import { fundingWallet, getOwnerIndex, ownerAt } from './vault';
 
 /**
@@ -72,7 +77,7 @@ const COMPOUND_DECIMALS: Record<string, number> = {
 };
 
 export interface WalletHolding {
-  readonly place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid';
+  readonly place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid' | 'Aave';
   readonly symbol: string;
   readonly amount: string;
 }
@@ -135,6 +140,11 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
   ]);
   const chain = await publicClient.multicall({ contracts, allowFailure: true });
   const stride = 1 + RAILGUN_RETURN_TOKENS.length + COMPOUND_MARKETS.length;
+  // Aave: one account summary per address (supply and debt, in USD with 8 decimals).
+  const aave = await publicClient.multicall({
+    contracts: rows.map((row) => ({ address: AAVE_POOL, abi: AAVE_POOL_ABI, functionName: 'getUserAccountData' as const, args: [row.address] as const })),
+    allowFailure: true,
+  });
 
   const lighter = await Promise.all(
     rows.map(async (row) => {
@@ -177,6 +187,14 @@ export async function scanWalletFunds(): Promise<WalletAddressFunds[]> {
         place: 'Lighter',
         symbol: account.positions.length > 0 ? 'USDC · position open' : 'USDC',
         amount: showDecimal(account.collateralRaw),
+      });
+    }
+    const aaveRead = aave[rowIndex];
+    if (aaveRead?.status === 'success' && (aaveRead.result[0] > 0n || aaveRead.result[1] > 0n)) {
+      holdings.push({
+        place: 'Aave',
+        symbol: aaveRead.result[1] > 0n ? 'USD supplied · debt open' : 'USD supplied',
+        amount: showAmount(aaveRead.result[0], 8),
       });
     }
     const hl = hyperliquid[rowIndex];

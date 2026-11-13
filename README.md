@@ -255,7 +255,8 @@ address holds (including ones it received in a swap) and retires it.
   signing and refuses any transaction until the site switches back to Arbitrum.
 - **Lido** stakes ETH, not USDC. Go ghost on Lido sends USDC out of Railgun through
   NEAR Intents (USDC → ETH on Arbitrum, 1Click) to the fresh address, so no earlier
-  address pays it gas. wstETH shielded back keeps earning inside Railgun.
+  address pays it gas. Bring back shields the wstETH into the Railgun wallet behind
+  the same recovery phrase; Ghosty's balance shows USDC only, so it is not shown there.
   Unstaking wstETH is an Ethereum-mainnet affair and is not offered here.
 
 Verified without money (browser test on the live sites, throwaway vault): each

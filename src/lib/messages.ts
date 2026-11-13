@@ -196,7 +196,7 @@ export interface ResultMap {
     index: number | null;
     label: string;
     address: string;
-    holdings: { place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid'; symbol: string; amount: string }[];
+    holdings: { place: 'Arbitrum' | 'Lighter' | 'Compound' | 'Hyperliquid' | 'Aave'; symbol: string; amount: string }[];
   }[];
   metamaskRecoverStart: null;
   metamaskRecoverStatus: RecoveryState;

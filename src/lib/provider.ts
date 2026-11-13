@@ -162,7 +162,7 @@ async function siteChain(trade: ActiveTrade): Promise<string> {
 
 async function setSiteChain(trade: ActiveTrade, chainId: string): Promise<void> {
   if (!trade.venue || !SIGN_ONLY_CHAINS[trade.venue as VenueId]) return;
-  if ((await siteChain(trade)) === chainId) return;
+  // Announce even when nothing changed: wagmi's switchChain waits for chainChanged.
   const stored = ((await chrome.storage.session.get(SITE_CHAIN))[SITE_CHAIN] as Record<string, string> | undefined) ?? {};
   await chrome.storage.session.set({ [SITE_CHAIN]: { ...stored, [`${trade.venue}:${trade.ownerIndex}`]: chainId } });
   if (isAppVenue(trade.venue)) await broadcastProviderEvent('chainChanged', [chainId], [...APP_VENUES[trade.venue].tabPatterns]);

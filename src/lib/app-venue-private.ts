@@ -43,6 +43,17 @@ export function fundAppAccount(venue: AppVenueId, amountIn: bigint): Promise<App
   return run;
 }
 
+/** Called by the intents alarm: move an app funded through NEAR Intents along, panel open or not. */
+export async function advanceIntentsFundedApps(): Promise<void> {
+  for (const venue of Object.keys(APP_VENUES) as AppVenueId[]) {
+    if (!APP_VENUES[venue].fundVia) continue;
+    const trade = await getVenueTrade(venue);
+    if (trade?.app?.status === 'funding' && trade.app.viaIntents) {
+      await fundAppAccount(venue, BigInt(trade.app.amountIn)).catch(() => undefined);
+    }
+  }
+}
+
 export function shieldAppAccount(venue: AppVenueId): Promise<AppAccountView> {
   const running = shielding.get(venue);
   if (running) return running;
@@ -57,14 +68,11 @@ async function fund(venue: AppVenueId, amountIn: bigint): Promise<AppAccountView
   const existing = await getVenueTrade(venue);
   if (existing?.app?.status === 'funded' || existing?.app?.status === 'done') return existing.app;
   if (existing?.app?.status === 'shielding') throw new Error('Shield back is already running.');
-  if (existing?.app?.status === 'failed' && (existing.app.unshieldTx || (existing.app.viaIntents && spec.fundVia === undefined))) {
+  if (existing?.app?.status === 'failed' && existing.app.unshieldTx && !spec.fundVia) {
     throw new Error('This address is already funded. Shield back the tokens that are still on it.');
   }
 
-  let trade = existing ?? (await startVenue(venue));
-  if (spec.fundVia && trade.app?.status === 'failed' && trade.app.viaIntents) {
-    trade = await updateOwnedTrade(trade.ownerIndex, { app: { ...trade.app, viaIntents: undefined } });
-  }
+  const trade = existing ?? (await startVenue(venue));
   if (spec.fundVia) {
     try {
       return await fundViaIntents(venue, trade, amountIn);
@@ -208,7 +216,21 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
 async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: bigint): Promise<AppAccountView> {
   const spec = APP_VENUES[venue];
   const fundVia = spec.fundVia!;
-  const recorded = trade.app?.viaIntents;
+  let recorded = trade.app?.viaIntents;
+
+  // Never pay twice: an exit already delivering to this address (one whose
+  // record was lost to a failure or a restart) is adopted, not repeated.
+  if (!recorded) {
+    const live = (await getVenueTrade('intents'))?.intents;
+    const last = await lastIntentsView();
+    const paying = [live, last].find(
+      (move) => move && move.direction === 'exit' && move.recipient.toLowerCase() === trade.ownerAddress.toLowerCase() && move.stage !== 'refunded' && move.stage !== 'failed',
+    );
+    if (paying) {
+      recorded = { correlationId: paying.correlationId, minOut: paying.minAmountOut };
+      await updateOwnedTrade(trade.ownerIndex, { app: view(trade, { ...(trade.app ?? { amountIn: amountIn.toString(), detail: '' }), status: 'funding', viaIntents: recorded, detail: paying.detail }) });
+    }
+  }
 
   if (!recorded) {
     const { feeBps } = await railgunUsdcBalances();
@@ -225,17 +247,20 @@ async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: b
     return started;
   }
 
-  // Arrived? The address holds at least the quoted minimum.
+  const live = (await getVenueTrade('intents'))?.intents;
+  const last = await lastIntentsView();
+  const move = live?.correlationId === recorded.correlationId ? live : last?.correlationId === recorded.correlationId ? last : null;
+
+  // Arrived? The quoted minimum is on the address, or the user already
+  // staked it (wstETH), or NEAR Intents reported the swap delivered.
   const held = fundVia.symbol === 'ETH' ? await publicClient.getBalance({ address: trade.ownerAddress }) : 0n;
-  if (held >= BigInt(recorded.minOut)) {
-    const ready = view(trade, { ...trade.app!, status: 'funded', detail: spec.fundedDetail, error: undefined });
+  const staked = await Promise.all((spec.extraTokens ?? []).map((token) => tokenBalance(token.address, trade.ownerAddress).catch(() => 0n)));
+  if (held >= BigInt(recorded.minOut) || staked.some((amount) => amount > 0n) || move?.swapStatus === 'SUCCESS') {
+    const ready = view(trade, { ...(trade.app ?? { amountIn: amountIn.toString(), detail: '' }), status: 'funded', viaIntents: recorded, detail: spec.fundedDetail, error: undefined });
     await updateOwnedTrade(trade.ownerIndex, { app: ready });
     return ready;
   }
 
-  const live = (await getVenueTrade('intents'))?.intents;
-  const last = await lastIntentsView();
-  const move = live?.correlationId === recorded.correlationId ? live : last?.correlationId === recorded.correlationId ? last : null;
   if (move && (move.stage === 'refunded' || move.stage === 'failed' || (move.stage === 'done' && move.direction === 'exit' && move.swapStatus === 'REFUNDED'))) {
     // Nothing reached this address. NEAR Intents' refund is shielded back by the exit itself.
     const failed = view(trade, {
@@ -247,7 +272,7 @@ async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: b
     await updateOwnedTrade(trade.ownerIndex, { app: failed });
     return failed;
   }
-  const waiting = view(trade, { ...trade.app!, status: 'funding', detail: move?.detail || trade.app!.detail });
+  const waiting = view(trade, { ...(trade.app ?? { amountIn: amountIn.toString(), detail: '' }), status: 'funding', viaIntents: recorded, detail: move?.detail || trade.app?.detail || 'Waiting on NEAR Intents.' });
   await updateOwnedTrade(trade.ownerIndex, { app: waiting });
   return waiting;
 }
@@ -371,6 +396,8 @@ async function fail(venue: AppVenueId, amountIn: bigint, error: unknown): Promis
         unshieldTx: trade.app?.unshieldTx ?? trade.withdrawal?.txHash,
         shielded: trade.app?.shielded,
         left: trade.app?.left,
+        // Kept: a retry continues this NEAR Intents move instead of paying again.
+        viaIntents: trade.app?.viaIntents,
       },
     }).catch(() => undefined);
   }

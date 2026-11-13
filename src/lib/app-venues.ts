@@ -112,7 +112,7 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
     gasWei: 0n,
     doThere: 'Stake for wstETH',
     returnBlurb:
-      'Stake on Lido first, or don’t: this shields the wstETH, and any ETH left over as WETH. wstETH keeps earning inside your private balance.',
+      'Stake on Lido first, or don’t: this shields the wstETH, and any ETH left over as WETH, into the Railgun wallet behind your recovery phrase. Ghosty’s balance shows USDC only, so the wstETH will not appear there.',
     fundedDetail:
       'ETH is on this address, delivered by NEAR Intents. On stake.lido.fi (Arbitrum) connect Ghosty and Stake: you get wstETH. Bring back shields it.',
     fundVia: { intentsAssetId: 'nep141:arb.omft.near', symbol: 'ETH', decimals: 18 },

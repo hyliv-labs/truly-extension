@@ -474,7 +474,9 @@ export function GhostMore({
           disabled={disabled}
           onClick={() => {
             const abandon = window.confirm(
-              venue === 'hyperliquid'
+              venue === 'dydx'
+                ? 'Abandon this address? It is burned and will not be reused. USDC still on dYdX stays there, and the old-address scan does not read dYdX. Withdraw to Arbitrum first.'
+                : venue === 'hyperliquid'
                 ? 'Abandon this address? It is burned and will not be reused. USDC still on Hyperliquid stays there until you scan old addresses for it.'
                 : venue === 'uniswap' || venue === 'compound'
                 ? 'Abandon this address? It is burned and will not be reused. Tokens still on it stay there. Bring funds back first if they should return.'
