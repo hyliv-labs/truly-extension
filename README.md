@@ -67,9 +67,10 @@ Everything NEAR-related was written in the window. Diff:
 [`pre-hackathon...near-intents`](https://github.com/hyliv-labs/truly-extension/compare/pre-hackathon...near-intents).
 The extension itself (Railgun funding of fresh owners, Lighter/Uniswap/Compound
 venues) existed before and is the baseline.
-Hyperliquid as a fourth venue was also added in the window (12 Nov). It is
-not a NEAR integration and is not part of what is submitted for judging; a
-Bring in can fund it the same way it funds any venue.
+Hyperliquid, 1inch, Aave, dYdX and Lido were also added in the window (12–13
+Nov). They are not NEAR integrations and are not part of what is submitted for
+judging, except that Lido is funded through a NEAR Intents exit; a Bring in can
+fund any of them the same way it funds any venue.
 
 | File | What it does |
 | --- | --- |
@@ -230,6 +231,49 @@ site still deposits Arbitrum USDC through Bridge2; a withdrawal can be refused
 when the bridge is short of liquidity, in which case nothing leaves Hyperliquid
 and Bring back says so. The extension calls Hyperliquid's API directly, as
 the site does, so Hyperliquid sees the same IP as the site.
+
+## 1inch, Aave, dYdX, Lido
+
+Four more apps on one shared core (`src/lib/app-venues.ts`, `app-venue-private.ts`,
+`app-venue-checks.ts`). Each gets its own fresh address, funded from Railgun; the
+user acts on the app's own site with Ghosty as the wallet; Bring back refuses while
+the app still holds anything for that address, then shields every token the
+address holds (including ones it received in a swap) and retires it.
+
+| App | Site | Funded with | Bring back refuses while |
+| --- | --- | --- | --- |
+| 1inch | 1inch.com/swap | USDC + gas | nothing (a swap leaves tokens on the address) |
+| Aave v3 | app.aave.com (Arbitrum market) | USDC + gas | any reserve's aToken or debt token, or `getUserAccountData`, shows a position; reserves read from the Pool each time |
+| dYdX v4 | dydx.trade | USDC + gas | equity, a position or an order on dYdX; USDC in the dYdX wallet or on Noble; a CCTP leg possibly in flight |
+| Lido | stake.lido.fi (Arbitrum direct staking) | ETH, delivered by a NEAR Intents exit | the ETH left and no wstETH arrived yet (Lido's slow route) |
+
+- **dYdX** derives its account from a "dYdX Chain Onboarding" signature. Ghosty
+  records the resulting `dydx1…`/`noble1…` addresses when the site asks, never the
+  signature, and can derive them itself (signatures are deterministic). The
+  derivation matches dYdX's own `v4-client-js`. dydx.trade switches to Ethereum
+  mainnet before that signature; for that site only, Ghosty accepts chain 1 for
+  signing and refuses any transaction until the site switches back to Arbitrum.
+- **Lido** stakes ETH, not USDC. Go ghost on Lido sends USDC out of Railgun through
+  NEAR Intents (USDC → ETH on Arbitrum, 1Click) to the fresh address, so no earlier
+  address pays it gas. wstETH shielded back keeps earning inside Railgun.
+  Unstaking wstETH is an Ethereum-mainnet affair and is not offered here.
+
+Verified without money (browser test on the live sites, throwaway vault): each
+site sees Ghosty over EIP-6963 and gets its own fresh owner; on dydx.trade the
+switch to chain 1, the two onboarding signatures (identical), the refused
+transaction, the switch back and the recorded `dydx1…` address (equal to dYdX's
+own derivation of that signature). Live reads: Aave's check passes an empty
+address and refuses a real supplier; dYdX's check refuses a real account with
+USDC left; 1Click quotes USDC → ETH on Arbitrum.
+
+Not yet run with money. Stated limits: dYdX's v9.9 upgrade (planned 17 Nov 2026)
+moves its USDC to Injective and its docs say withdrawals to other chains are
+rejected afterwards; Ghosty warns on the Go ghost screen and has not verified that
+Withdraw to Arbitrum keeps working. dYdX's deposit leaves an unlimited USDC
+allowance to Skip's spender on the address (harmless once the address is
+shielded and retired). The dYdX transit rule is a time window (45 minutes), not a
+proof. 1inch limit and Fusion orders do not lock funds, so an order left open
+simply fails after Bring back.
 
 ## CROPS
 
