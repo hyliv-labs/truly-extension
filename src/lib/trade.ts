@@ -17,17 +17,18 @@ import type { CompoundAccountView } from './compound';
 import type { UniswapAccountView } from './uniswap';
 import type { IntentsView } from './intents';
 import type { HyperliquidAccountView } from './hyperliquid';
+import { APP_VENUE_IDS, appVenueFromHost, type AppAccountView, type AppVenueId } from './app-venues';
 
 const LOCAL_ACTIVE_TRADE = 'truly:activeTrade';
 
-export type VenueId = 'lighter' | 'uniswap' | 'compound' | 'hyperliquid';
+export type VenueId = 'lighter' | 'uniswap' | 'compound' | 'hyperliquid' | AppVenueId;
 /**
  * A slot in the book. 'intents' is a NEAR Intents exit or entry: it has its
  * own fresh owner like any venue, but no dapp ever connects to it, so it is
  * never the "focused" trade a site or the Lighter flow reads.
  */
 export type BookSlot = VenueId | 'intents';
-const SLOTS: readonly BookSlot[] = ['lighter', 'uniswap', 'compound', 'hyperliquid', 'intents'];
+const SLOTS: readonly BookSlot[] = ['lighter', 'uniswap', 'compound', 'hyperliquid', ...APP_VENUE_IDS, 'intents'];
 
 export function venueFromOrigin(origin: string): VenueId | null {
   let host = origin;
@@ -47,7 +48,7 @@ export function venueFromOrigin(origin: string): VenueId | null {
   ) {
     return 'compound';
   }
-  return null;
+  return appVenueFromHost(host);
 }
 
 export async function tradeForOrigin(origin: string): Promise<ActiveTrade | null> {
@@ -56,13 +57,7 @@ export async function tradeForOrigin(origin: string): Promise<ActiveTrade | null
   return getVenueTrade(venue);
 }
 
-export interface VenueBook {
-  lighter?: ActiveTrade;
-  uniswap?: ActiveTrade;
-  compound?: ActiveTrade;
-  hyperliquid?: ActiveTrade;
-  intents?: ActiveTrade;
-}
+export type VenueBook = { [slot in BookSlot]?: ActiveTrade };
 const LOCAL_TRADE_HISTORY = 'truly:tradeHistory';
 const HISTORY_LIMIT = 50;
 
@@ -150,6 +145,8 @@ export interface ActiveTrade {
   readonly compound?: CompoundAccountView;
   /** Hyperliquid funding (bridge deposit), the withdrawal and the shield back. */
   readonly hyperliquid?: HyperliquidAccountView;
+  /** An app from app-venues.ts (1inch, Aave, ...): funding and the shield back. */
+  readonly app?: AppAccountView;
   /** A NEAR Intents move. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
   readonly intents?: IntentsView;
 }
@@ -184,7 +181,7 @@ async function readBook(): Promise<VenueBook> {
   if (!raw) return {};
   if (isTrade(raw)) return { [venueOf(raw)]: raw };
   const book = raw as VenueBook;
-  return { lighter: book.lighter, uniswap: book.uniswap, compound: book.compound, hyperliquid: book.hyperliquid, intents: book.intents };
+  return Object.fromEntries(SLOTS.filter((slot) => book[slot]).map((slot) => [slot, book[slot]])) as VenueBook;
 }
 
 async function writeBook(book: VenueBook): Promise<void> {
@@ -197,7 +194,7 @@ async function writeBook(book: VenueBook): Promise<void> {
 
 function focused(book: VenueBook): ActiveTrade | null {
   if (book.lighter) return book.lighter;
-  const rest = [book.uniswap, book.compound, book.hyperliquid].filter((trade): trade is ActiveTrade => Boolean(trade));
+  const rest = [book.uniswap, book.compound, book.hyperliquid, ...APP_VENUE_IDS.map((id) => book[id])].filter((trade): trade is ActiveTrade => Boolean(trade));
   return rest.length === 1 ? rest[0] ?? null : null;
 }
 

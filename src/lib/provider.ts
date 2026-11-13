@@ -30,6 +30,7 @@ import {
 } from './approvals';
 import { publicClient } from './chain';
 import { isStructNameRefusal, signTypedDataLoose } from './typed-data';
+import { APP_VENUE_IDS, APP_VENUES } from './app-venues';
 import {
   parsePersonalSign,
   parseTransactionRequest,
@@ -48,6 +49,7 @@ const SITE_TABS = [
   'https://*.compound.xyz/*',
   'https://*.compound.finance/*',
   'https://*.hyperliquid.xyz/*',
+  ...APP_VENUE_IDS.flatMap((id) => APP_VENUES[id].tabPatterns),
 ];
 
 /**

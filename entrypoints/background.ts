@@ -59,6 +59,8 @@ import { erc20Abi } from 'viem';
 import { getFastBridgeLimit } from '@truly/lib/lighter';
 import { fundCompoundAccount, shieldCompoundAccount } from '@truly/lib/compound-private';
 import { fundHyperliquidAccount, shieldHyperliquidAccount } from '@truly/lib/hyperliquid-private';
+import { fundAppAccount, shieldAppAccount } from '@truly/lib/app-venue-private';
+import { APP_VENUE_IDS, APP_VENUES, isAppVenue } from '@truly/lib/app-venues';
 import { fundUniswapAccount, shieldUniswapAccount } from '@truly/lib/uniswap-private';
 import {
   advanceIntents,
@@ -561,6 +563,20 @@ async function handle(
       return shielded;
     }
 
+    case 'fundApp': {
+      await touchAutoLock();
+      if (!isAppVenue(message.venue)) throw new Error('Unknown app.');
+      return fundAppAccount(message.venue, BigInt(message.amountUnits));
+    }
+
+    case 'shieldApp': {
+      await touchAutoLock();
+      if (!isAppVenue(message.venue)) throw new Error('Unknown app.');
+      const shielded = await shieldAppAccount(message.venue);
+      if (shielded.status === 'done') await announceVenueEnded(message.venue);
+      return shielded;
+    }
+
     case 'fundingWallet': {
       await touchAutoLock();
       const view = await fundingWalletBalances();
@@ -666,7 +682,7 @@ async function handle(
 async function refreshLighterTabs(): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({
-      url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*'],
+      url: ['https://*.lighter.xyz/*', 'https://*.uniswap.org/*', 'https://*.compound.xyz/*', 'https://*.compound.finance/*', 'https://*.hyperliquid.xyz/*', ...APP_VENUE_IDS.flatMap((id) => APP_VENUES[id].tabPatterns)],
     });
     for (const tab of tabs) {
       if (tab.id === undefined) continue;
@@ -807,6 +823,7 @@ function venueTabs(venue: VenueId): string[] {
   if (venue === 'uniswap') return ['https://*.uniswap.org/*'];
   if (venue === 'compound') return ['https://*.compound.xyz/*', 'https://*.compound.finance/*'];
   if (venue === 'hyperliquid') return ['https://*.hyperliquid.xyz/*'];
+  if (isAppVenue(venue)) return [...APP_VENUES[venue].tabPatterns];
   return ['https://*.lighter.xyz/*'];
 }
 

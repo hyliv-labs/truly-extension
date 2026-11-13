@@ -13,6 +13,7 @@ import type { SessionView } from './trade-session';
 import type { TradeSession } from './session-types';
 import type { CompoundAccountView } from './compound';
 import type { HyperliquidAccountView } from './hyperliquid';
+import type { AppAccountView, AppVenueId } from './app-venues';
 import type { UniswapAccountView } from './uniswap';
 import type { IntentsAsset, IntentsDirection, IntentsPreview, IntentsView } from './intents';
 
@@ -100,6 +101,10 @@ export type Request =
   | { kind: 'fundHyperliquid'; amountUnits: string }
   /** Withdraw from Hyperliquid to that address, then shield the USDC back into Railgun. */
   | { kind: 'shieldHyperliquid' }
+  /** An app from app-venues.ts: unshield USDC onto a fresh address for it. */
+  | { kind: 'fundApp'; venue: AppVenueId; amountUnits: string }
+  /** Shield what that address holds, once the app holds nothing for it. */
+  | { kind: 'shieldApp'; venue: AppVenueId }
   /** Public USDC sitting on this Ghosty's funding address. */
   | { kind: 'fundingWallet' }
   /** Shield that USDC into this Ghosty's Railgun balance. */
@@ -244,6 +249,8 @@ export interface ResultMap {
   shieldCompound: CompoundAccountView;
   fundHyperliquid: HyperliquidAccountView;
   shieldHyperliquid: HyperliquidAccountView;
+  fundApp: AppAccountView;
+  shieldApp: AppAccountView;
   fundingWallet: { address: Address; usdcUnits: string; ethWei: string };
   shieldFundingWallet: { txHash: string; amountUnits: string };
   lighterSignerSelfTest: { txType: number; txHash: string; loadMs: number };

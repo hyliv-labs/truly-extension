@@ -9,6 +9,7 @@ import { send, SLOW_TIMEOUT_MS } from '@truly/lib/messages';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 import type { TradeQuote } from '@truly/lib/trade-plan';
 import type { VenueId } from '@truly/lib/trade';
+import { isAppVenue } from '@truly/lib/app-venues';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { SessionView } from '@truly/lib/trade-session';
 import { ACTIVE_SESSION_STATES, type SessionState } from '@truly/lib/session-types';
@@ -142,8 +143,8 @@ export function TradeForm({
       />
       {venue === 'uniswap' ? (
         <UniswapSwap busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
-      ) : venue === 'hyperliquid' ? (
-        <p className="field-label">This Hyperliquid account is funded and brought back from the Ghosty screens.</p>
+      ) : venue === 'hyperliquid' || isAppVenue(venue) ? (
+        <p className="field-label">This account is funded and brought back from the Ghosty screens.</p>
       ) : venue === 'compound' ? (
         <CompoundSupply busy={busy} ready={balance !== null && railgunReady(balance.railgun)} onDone={onOpened} />
       ) : (

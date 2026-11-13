@@ -16,6 +16,7 @@ import { RAILGUN_RETURN_TOKENS } from '@truly/lib/uniswap';
 import { Mascot } from './Mascot';
 import { GxBack, GxBrand, GxScreen } from './Ghosty';
 import { appView, VENUES, venueLogo, type Venue } from './Deposit';
+import { APP_VENUES, isAppVenue } from '@truly/lib/app-venues';
 
 export type ReturnPhase = 'confirm' | 'moving' | 'done' | 'failed';
 
@@ -171,6 +172,7 @@ export function GhostReturn({
           else if (lighter) outcome = await send({ kind: 'shieldFunds' }, SLOW_TIMEOUT_MS);
           else if (venue === 'uniswap') outcome = await send({ kind: 'shieldUniswap' }, SLOW_TIMEOUT_MS);
           else if (venue === 'hyperliquid') outcome = await send({ kind: 'shieldHyperliquid' }, SLOW_TIMEOUT_MS);
+          else if (isAppVenue(venue)) outcome = await send({ kind: 'shieldApp', venue }, SLOW_TIMEOUT_MS);
           else outcome = await send({ kind: 'shieldCompound' }, SLOW_TIMEOUT_MS);
           break;
         } catch (e) {
@@ -361,6 +363,8 @@ export function GhostReturn({
     ? `Close the position on ${name} first. This withdraws the USDC and shields it back. An open position stays where it is.`
     : venue === 'compound'
       ? `Withdraw on ${name} first. This will not shield while a supply, borrow, or reward is still open.`
+      : isAppVenue(venue)
+        ? APP_VENUES[venue].returnBlurb
       : venue === 'hyperliquid'
         ? `Close your positions and cancel open orders on ${name} first. This withdraws the USDC to Arbitrum (${name} keeps a 1 USDC fee) and shields it back.`
         : `When you finish on ${name}, this reads the address and shields USDC, WETH, USDT, DAI, and ARB. Anything else stays there, and gets named.`;
@@ -388,7 +392,7 @@ export function GhostReturn({
         </div>
         <div>
           <span>You do there</span>
-          <span>{lighter || venue === 'hyperliquid' ? 'Close the position' : venue === 'compound' ? 'Withdraw the supply' : 'Finish the swap'}</span>
+          <span>{isAppVenue(venue) ? APP_VENUES[venue].doThere : lighter || venue === 'hyperliquid' ? 'Close the position' : venue === 'compound' ? 'Withdraw the supply' : 'Finish the swap'}</span>
         </div>
         <div>
           <span>Then Ghosty</span>
@@ -442,12 +446,13 @@ export function GhostMore({
         <GxBack onClick={onBack} label="More options" disabled={disabled} />
       </div>
       <p className="gx-sub">These don’t move funds unless you abandon an address that still holds some.</p>
-      {(status.activeTrade?.session?.error?.message ?? status.activeTrade?.session?.detail ?? status.activeTrade?.uniswap?.error ?? status.activeTrade?.compound?.error ?? status.activeTrade?.hyperliquid?.error) && (
+      {(status.activeTrade?.session?.error?.message ?? status.activeTrade?.session?.detail ?? status.activeTrade?.uniswap?.error ?? status.activeTrade?.compound?.error ?? status.activeTrade?.hyperliquid?.error ?? status.activeTrade?.app?.error) && (
         <p className="gx-note">
           {status.activeTrade?.session?.error?.message
             ?? status.activeTrade?.uniswap?.error
             ?? status.activeTrade?.compound?.error
             ?? status.activeTrade?.hyperliquid?.error
+            ?? status.activeTrade?.app?.error
             ?? status.activeTrade?.session?.detail}
         </p>
       )}

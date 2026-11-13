@@ -11,17 +11,22 @@ import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance'
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { TradeQuote } from '@truly/lib/trade-plan';
 import { HYPERLIQUID_APP, HYPERLIQUID_MIN_FUND_UNITS } from '@truly/lib/hyperliquid';
+import { APP_VENUE_IDS, APP_VENUES, appVenueFromHost, isAppVenue, type AppVenueId } from '@truly/lib/app-venues';
+import type { VenueId } from '@truly/lib/trade';
 import type { SessionView } from '@truly/lib/trade-session';
 import { Mascot } from './Mascot';
 import { EyeIcon, GxBack, GxBrand, GxScreen } from './Ghosty';
 
-export type Venue = 'lighter' | 'uniswap' | 'compound' | 'hyperliquid';
+export type Venue = VenueId;
 
 export const VENUES: Record<Venue, { name: string; url: string; minUnits: bigint; ready: string }> = {
   lighter: { name: 'Lighter', url: 'https://app.lighter.xyz', minUnits: 5_000_000n, ready: 'Trade' },
   uniswap: { name: 'Uniswap', url: 'https://app.uniswap.org/swap?chain=arbitrum', minUnits: 1_000_000n, ready: 'Swap' },
   compound: { name: 'Compound', url: 'https://app.compound.finance/markets/usdc-arb', minUnits: 1_000_000n, ready: 'Supply' },
   hyperliquid: { name: 'Hyperliquid', url: HYPERLIQUID_APP, minUnits: HYPERLIQUID_MIN_FUND_UNITS, ready: 'Trade' },
+  ...(Object.fromEntries(
+    APP_VENUE_IDS.map((id) => [id, { name: APP_VENUES[id].name, url: APP_VENUES[id].url, minUnits: APP_VENUES[id].minUnits, ready: APP_VENUES[id].ready }]),
+  ) as Record<AppVenueId, { name: string; url: string; minUnits: bigint; ready: string }>),
 };
 
 /** The account record a dapp venue keeps on its trade. Lighter keeps a session instead. */
@@ -30,6 +35,7 @@ export function appView(venue: Venue, trade: NonNullable<VaultStatus['activeTrad
   if (venue === 'uniswap') return trade.uniswap;
   if (venue === 'compound') return trade.compound;
   if (venue === 'hyperliquid') return trade.hyperliquid;
+  if (isAppVenue(venue)) return trade.venue === venue ? trade.app : undefined;
   return undefined;
 }
 
@@ -41,7 +47,11 @@ export function venueFromSite(site: string | null | undefined): Venue | null {
   if (site.includes('uniswap')) return 'uniswap';
   if (site.includes('compound')) return 'compound';
   if (site.includes('hyperliquid')) return 'hyperliquid';
-  return null;
+  try {
+    return appVenueFromHost(new URL(site.includes('://') ? site : `https://${site}`).hostname);
+  } catch {
+    return null;
+  }
 }
 
 function toUnits(input: string): bigint | null {
@@ -544,6 +554,8 @@ export function GoGhost({
         await send({ kind: 'fundUniswap', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       } else if (venue === 'hyperliquid') {
         await send({ kind: 'fundHyperliquid', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
+      } else if (isAppVenue(venue)) {
+        await send({ kind: 'fundApp', venue, amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       } else {
         await send({ kind: 'fundCompound', amountUnits: units.toString() }, SLOW_TIMEOUT_MS);
       }
@@ -759,6 +771,7 @@ export function GhostProgress({
       if (lighter) await send({ kind: 'retryFunding' }, SLOW_TIMEOUT_MS);
       else if (venue === 'uniswap') await send({ kind: 'fundUniswap', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
       else if (venue === 'hyperliquid') await send({ kind: 'fundHyperliquid', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
+      else if (isAppVenue(venue)) await send({ kind: 'fundApp', venue, amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
       else await send({ kind: 'fundCompound', amountUnits: amountUnits ?? '0' }, SLOW_TIMEOUT_MS);
       await poll();
     } catch (e) {

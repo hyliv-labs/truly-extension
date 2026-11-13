@@ -92,6 +92,8 @@ export async function unshieldRailgunForTrade(netUnits: bigint, venue?: BookSlot
           ? 'The Compound address is not ready to receive funds yet.'
         : trade.venue === 'hyperliquid'
           ? 'The Hyperliquid address is not ready to receive funds yet.'
+        : trade.venue && trade.venue !== 'lighter'
+          ? 'This app address is not ready to receive funds yet.'
           : 'Lighter has not issued a deposit address yet.',
     );
   }

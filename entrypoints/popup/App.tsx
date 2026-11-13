@@ -23,17 +23,19 @@ import {
 } from '@truly/lib/messages';
 import type { RailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 import type { VenueId } from '@truly/lib/trade';
+import { APP_VENUES, isAppVenue } from '@truly/lib/app-venues';
 import { railgunReady, type ShieldedBalance } from '@truly/lib/shielded-balance';
 
 function addressLabel(venue: VenueId | undefined): string {
   if (venue === 'uniswap') return 'Uniswap address';
   if (venue === 'compound') return 'Compound address';
   if (venue === 'hyperliquid') return 'Hyperliquid address';
+  if (isAppVenue(venue)) return `${APP_VENUES[venue].name} address`;
   return 'Lighter address';
 }
 
 function onSite(venue: VenueId | undefined): boolean {
-  return venue === 'uniswap' || venue === 'compound' || venue === 'hyperliquid';
+  return venue === 'uniswap' || venue === 'compound' || venue === 'hyperliquid' || isAppVenue(venue);
 }
 
 export function App() {
