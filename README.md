@@ -99,18 +99,6 @@ flowchart LR
 Your money never sits in a public wallet you own. Getting in, using DeFi and
 getting out all run through addresses that can't be tied back to you.
 
-## Built during the NEAR Hackathon
-
-**The NEAR integration:**
-
-- Private **Bring in** from any chain (Bitcoin, Zcash, Ethereum, Solana and
-  more) straight into the Railgun vault, through NEAR Intents 1Click.
-- Private **Send out** from the vault to any asset on any chain.
-- **NEAR Intents Confidential Swap API:** with a partner key, every swap runs
-  through 1Click's Confidential mode, with strict checks on every quote.
-- **Zcash** deposits from any wallet, including shielded addresses.
-- **Lido**, funded through a NEAR Intents swap to ETH on a fresh address.
-
 ## Try it
 
 1. Download the latest release zip and unzip it.
