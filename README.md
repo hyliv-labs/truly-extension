@@ -46,6 +46,7 @@ flowchart LR
         ZEC[Zcash]
         ETH[Ethereum]
         SOL[Solana]
+        NEARC[NEAR]
     end
 
     subgraph NEAR["NEAR Intents (1Click)"]
@@ -85,7 +86,7 @@ flowchart LR
 
 ## Any chain in, any chain out, with NEAR Intents
 
-- **Bring in:** deposit from Bitcoin, Zcash, Ethereum, Solana and more.
+- **Bring in:** deposit from NEAR, Bitcoin, Zcash, Ethereum, Solana and more.
   NEAR Intents swaps it to USDC on Arbitrum, and Ghosty shields it straight away.
 - **Send out:** pay out from the shielded balance to any asset on any chain
   NEAR Intents supports, delivered to the address you choose.

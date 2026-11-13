@@ -382,6 +382,7 @@ export const FEATURED_ASSETS: readonly { readonly assetId: string; readonly labe
   { assetId: 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near', label: 'USDC on Ethereum' },
   { assetId: 'nep141:btc.omft.near', label: 'BTC on Bitcoin' },
   { assetId: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1', label: 'USDC on NEAR' },
+  { assetId: 'nep141:wrap.near', label: 'wNEAR on NEAR' },
 ];
 
 const HIDDEN_CHAINS = new Set(['bsc']);
