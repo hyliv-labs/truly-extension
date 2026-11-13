@@ -17,7 +17,10 @@
 import { encodeFunctionData, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { findTradeByOwner, tradeForOrigin, updateOwnedTrade, type ActiveTrade, type VenueId } from './trade';
-import { isUnlocked, ownerAt } from './vault';
+import { isUnlocked, ownerAt, requireUnlockedMnemonic } from './vault';
+import { deriveNearOwner } from './near-keys';
+import { nearOutcomeFailure, nearSignAndSend } from './near-chain';
+import { describeNearTransactions, implicitPublicKey, isNearWalletMethod, parseNearTransactions, parseNep413, signNep413, type NearWalletMethod } from './near-wallet';
 import {
   decideApproval,
   dropApproval,
@@ -84,6 +87,11 @@ export async function handleProviderRequest(
   if (existing) return continueInFlight(existing);
 
   const trade = await tradeForOrigin(origin);
+  if (isNearWalletMethod(method)) return handleNearRequest({ origin, method, params, requestId: id }, trade);
+  if (trade?.venue && isAppVenue(trade.venue) && APP_VENUES[trade.venue].chain === 'near') {
+    // A NEAR app: the Ethereum provider stays silent there, and nothing is signed for Arbitrum.
+    throw rpcError(4200, `On ${APP_VENUES[trade.venue].name}, Ghosty is a NEAR wallet.`);
+  }
   if (!trade) {
     // Throwing here is what Lighter renders as "Connection cancelled", and
     // the request is already dead by the time the user starts a trade.
@@ -384,12 +392,15 @@ async function approveAndPerform(input: {
   params: unknown[];
   ownerAddress: string;
   ownerIndex: number;
+  /** NEAR requests: the prompt text and the account shown, worked out by the caller. */
+  message?: string;
+  displayAccount?: string;
 }): Promise<unknown> {
   if (input.method === 'eth_sendTransaction') {
     await assertOwnerHasEth(input.ownerAddress);
   }
 
-  const message = approvalMessage(input.method, input.params, input.ownerAddress);
+  const message = input.message ?? approvalMessage(input.method, input.params, input.ownerAddress);
   const record: InFlightRequest = {
     requestId: input.requestId,
     approvalId: crypto.randomUUID(),
@@ -408,7 +419,7 @@ async function approveAndPerform(input: {
     id: record.approvalId,
     origin: record.origin,
     method: record.method,
-    ownerAddress: record.ownerAddress,
+    ownerAddress: input.displayAccount ?? record.ownerAddress,
     message,
     createdAt: record.createdAt,
   });
@@ -500,6 +511,7 @@ async function rememberDydxAccount(ownerIndex: number, signature: Hex, canonical
 }
 
 async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknown> {
+  if (isNearWalletMethod(record.method)) return executeNear(record);
   const account = privateKeyToAccount(privateKey);
 
   switch (record.method) {
@@ -726,6 +738,85 @@ async function assertOwnerHasEth(ownerAddress: string): Promise<void> {
       -32000,
       'This owner address holds no ETH, so it cannot send a transaction. Truly will not fund it with ETH, because that payment would link the address. USDC goes back to the pool through Re-shield, which pays gas in USDC.',
     );
+  }
+}
+
+// --- NEAR wallet (NEAR Connect injected wallet) ------------------------------------
+
+async function handleNearRequest(
+  input: { origin: string; method: NearWalletMethod; params: unknown[]; requestId: string },
+  found: ActiveTrade | null,
+): Promise<unknown> {
+  if (input.method === 'near_signOut') return null;
+  let trade = found;
+  if (!trade) {
+    if (input.method === 'near_getAccounts') return [];
+    if (input.method !== 'near_signIn') return refuseWithoutTrade(input.method);
+    // As with an Ethereum connect: show Ghosty and wait for the user to start this app.
+    await openTrulyWindow(input.origin);
+    trade = await waitForOriginTrade(input.origin);
+  }
+  if (!trade.venue || !isAppVenue(trade.venue) || APP_VENUES[trade.venue].chain !== 'near') {
+    throw rpcError(4100, 'Ghosty is a NEAR wallet only on NEAR apps.');
+  }
+  const accountId = trade.appAccount?.address;
+  if (!accountId || !/^[0-9a-f]{64}$/.test(accountId)) {
+    throw rpcError(4100, `Fund the ${APP_VENUES[trade.venue].name} account in Ghosty first (Go ghost), then connect.`);
+  }
+  const account = { accountId, publicKey: implicitPublicKey(accountId) };
+  if (input.method === 'near_getAccounts') return [account];
+  if (input.method === 'near_signIn' && (await consumeConnectConsent(input.origin))) return [account];
+
+  let message: string;
+  try {
+    if (input.method === 'near_signIn') message = `Connect NEAR account ${accountId} to ${input.origin}. The site sees this account and can ask Ghosty to sign; every signature asks you first.`;
+    else if (input.method === 'near_signMessage') {
+      const parsed = parseNep413(input.params);
+      message = `For ${parsed.recipient}:\n\n${parsed.message}`;
+    } else message = describeNearTransactions(parseNearTransactions(input.method, input.params, accountId), accountId);
+  } catch (error) {
+    // Refused before any prompt: nothing Ghosty will sign was asked for.
+    throw rpcError(4200, error instanceof Error ? error.message : String(error));
+  }
+  return approveAndPerform({
+    requestId: input.requestId,
+    origin: input.origin,
+    method: input.method,
+    params: input.params,
+    ownerAddress: trade.ownerAddress,
+    ownerIndex: trade.ownerIndex,
+    message,
+    displayAccount: accountId,
+  });
+}
+
+/** After approval. The NEAR key is derived at the request's own owner index, like the EVM key. */
+async function executeNear(record: InFlightRequest): Promise<unknown> {
+  const trade = await findTradeByOwner(record.ownerIndex);
+  const key = await deriveNearOwner(await requireUnlockedMnemonic(), record.ownerIndex);
+  if (!trade?.appAccount?.address || trade.appAccount.address !== key.accountId) {
+    throw rpcError(4100, 'Ghosty NEAR account mismatch; refusing to sign.');
+  }
+  const account = { accountId: key.accountId, publicKey: key.publicKey };
+  switch (record.method) {
+    case 'near_signIn':
+      return [account];
+    case 'near_signMessage':
+      return signNep413(key, parseNep413(record.params));
+    case 'near_signAndSendTransaction':
+    case 'near_signAndSendTransactions': {
+      const txs = parseNearTransactions(record.method, record.params, key.accountId);
+      const outcomes = [];
+      // In order: a later transaction often depends on an earlier one (a deposit before a swap).
+      for (const tx of txs) {
+        const outcome = await nearSignAndSend(key, tx.receiverId, tx.actions);
+        outcomes.push(outcome);
+        if (nearOutcomeFailure(outcome)) break;
+      }
+      return record.method === 'near_signAndSendTransaction' ? outcomes[0] : outcomes;
+    }
+    default:
+      throw rpcError(4200, `Ghosty does not support ${record.method}.`);
   }
 }
 
