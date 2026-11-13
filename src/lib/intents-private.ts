@@ -49,7 +49,7 @@ import {
   type IntentsView,
 } from './intents';
 import { loadShieldedBalance, railgunReady, readShieldedBalance } from './shielded-balance';
-import { shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
+import { railgunUsdcBalances, shieldOwnerUsdcToRailgun, unshieldRailgunForTrade } from './railgun-client';
 import { endVenue, getVenueTrade, startVenue, updateOwnedTrade, type ActiveTrade } from './trade';
 import { zcashAddressForIntents } from './zcash';
 
@@ -570,7 +570,15 @@ export async function retryIntents(): Promise<IntentsView> {
     // Nothing left the pool. A stale quote is replaced before proving.
     // Whichever comes first: 1Click stops watching the address, or starts refunding.
     const closes = Math.min(Date.parse(view.inactiveAt) || Infinity, Date.parse(view.refundAfter) || Infinity);
-    if (!Number.isFinite(closes) || closes - Date.now() < REQUOTE_MARGIN_MS) await requoteExit(trade, view);
+    // The unshield refuses when gross minus today's fee is not the quoted net.
+    // Re-read the live fee, so a fee change gets a new quote instead of failing every Retry.
+    let net = BigInt(view.amountIn);
+    if (view.grossUnits) {
+      const { feeBps } = await railgunUsdcBalances();
+      net = railgunNetForGross(BigInt(view.grossUnits), feeBps);
+    }
+    const feeMoved = net !== BigInt(view.amountIn);
+    if (feeMoved || !Number.isFinite(closes) || closes - Date.now() < REQUOTE_MARGIN_MS) await requoteExit(trade, view, net);
     await patch({ stage: 'unshielding', error: undefined });
     kickExit();
     return (await getIntentsTrade())!.intents!;
@@ -589,13 +597,13 @@ export async function retryIntents(): Promise<IntentsView> {
   return patch({ stage: view.direction === 'entry' && !view.swapStatus ? 'awaiting-deposit' : 'swapping', error: undefined });
 }
 
-async function requoteExit(trade: ActiveTrade, view: IntentsView): Promise<void> {
+async function requoteExit(trade: ActiveTrade, view: IntentsView, net: bigint): Promise<void> {
   const { api, confidential } = await client();
   const quoted = await getQuote(api, {
     dry: false,
     originAsset: ARB_USDC_ASSET,
     destinationAsset: view.destinationAsset,
-    amountUnits: BigInt(view.amountIn),
+    amountUnits: net,
     recipient: view.recipient,
     refundTo: trade.ownerAddress,
     slippageBps: DEFAULT_SLIPPAGE_BPS,
@@ -604,7 +612,7 @@ async function requoteExit(trade: ActiveTrade, view: IntentsView): Promise<void>
   });
   const fields = quoteFields(quoted.response);
   await updateOwnedTrade(trade.ownerIndex, { intentAddress: fields.depositAddress as Address });
-  await patch({ ...fields, confidential });
+  await patch({ ...fields, confidential, amountIn: net.toString() });
 }
 
 export async function lastIntentsView(): Promise<IntentsView | null> {
