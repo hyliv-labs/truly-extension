@@ -10,7 +10,7 @@
 
 import { erc20Abi, parseAbiItem, type Address } from 'viem';
 import { AAVE_POOL, AAVE_POOL_ABI, aaveExitBlocker, reserveTokens, type AavePositionToken } from './aave';
-import type { AppVenueId } from './app-venues';
+import { lidoExitBlocker, WSTETH_ARBITRUM, type AppVenueId } from './app-venues';
 import { publicClient } from './chain';
 import { USDC_ADDRESS } from './config';
 import {
@@ -120,9 +120,29 @@ async function getJson(url: string, empty: number[]): Promise<unknown> {
   }
 }
 
+/**
+ * Lido on Arbitrum usually swaps ETH for wstETH at once from a pool; when the
+ * pool is short it goes the slow way (CCIP to Ethereum and back, minutes).
+ * ETH gone from the address with no wstETH yet is that: wait, do not retire.
+ */
+async function lidoCheck(owner: Address, trade: ActiveTrade): Promise<string | null> {
+  try {
+    const funded = BigInt(trade.app?.viaIntents?.minOut ?? '0');
+    if (funded === 0n) return null;
+    const [eth, wst] = await Promise.all([
+      publicClient.getBalance({ address: owner }),
+      publicClient.readContract({ address: WSTETH_ARBITRUM, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
+    ]);
+    return lidoExitBlocker({ funded, eth, wst });
+  } catch (error) {
+    return `Could not read the Lido balances (${error instanceof Error ? error.message.split('\n')[0] : String(error)}). Nothing was moved; try again.`;
+  }
+}
+
 const CHECKS: Partial<Record<AppVenueId, ExitCheck>> = {
   aave: aaveCheck,
   dydx: dydxCheck,
+  lido: lidoCheck,
 };
 
 export async function appExitBlocker(venue: AppVenueId, trade: ActiveTrade): Promise<string | null> {

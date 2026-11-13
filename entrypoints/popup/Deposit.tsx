@@ -617,6 +617,7 @@ export function GoGhost({
                 : 'More than your private balance.'
               : `${fmt(spendableUnits)} available privately${pendingUnits > 0n ? `, ${fmt(pendingUnits)} still landing` : ''}`}
       </p>
+      {isAppVenue(venue) && APP_VENUES[venue].caution && <p className="gx-note bad">{APP_VENUES[venue].caution}</p>}
       {onBringIn && spendableUnits + pendingUnits < min && (
         <button type="button" className="gx-option" onClick={onBringIn}>
           <b>Not enough for {VENUES[venue].name} yet</b>
@@ -742,6 +743,15 @@ export function GhostProgress({
   const poll = useCallback(async () => {
     try {
       if (lighter) setView(await send({ kind: stage === 'ready' ? 'tradeSession' : 'advanceTrade' }, SLOW_TIMEOUT_MS));
+      // An app funded through NEAR Intents (Lido) waits on the exit; ask the worker to look again.
+      if (isAppVenue(venue) && APP_VENUES[venue].fundVia && stage === 'paying' && !resuming.current && amountUnits) {
+        resuming.current = true;
+        void send({ kind: 'fundApp', venue, amountUnits }, SLOW_TIMEOUT_MS)
+          .catch(() => undefined)
+          .finally(() => {
+            resuming.current = false;
+          });
+      }
       const cutOff = stage === 'crediting' || (stage === 'paying' && t.hyperliquid?.step === 'bridging' && Boolean(t.hyperliquid.depositTx));
       if (venue === 'hyperliquid' && cutOff && !resuming.current && amountUnits) {
         resuming.current = true;

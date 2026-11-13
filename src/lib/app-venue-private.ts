@@ -10,12 +10,13 @@
  * Truly never acts on the app. Its own site does, with this owner connected.
  */
 
-import { erc20Abi, parseAbiItem, type Address, type Hash } from 'viem';
+import { erc20Abi, formatUnits, parseAbiItem, type Address, type Hash } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { publicClient } from './chain';
 import { APP_VENUES, type AppAccountView, type AppTokenLine, type AppVenueId } from './app-venues';
 import { appExitBlocker } from './app-venue-checks';
 import { DYDX_ONBOARDING, dydxAddressFromSignature } from './dydx';
+import { lastIntentsView, startIntentsExit } from './intents-private';
 import { ARBITRUM_CHAIN_ID } from './config';
 import { railgunGrossForNet } from './railgun';
 import { ensureUnshieldGas, railgunUsdcBalances, shieldOwnerToken, unshieldRailgunForTrade } from './railgun-client';
@@ -56,11 +57,21 @@ async function fund(venue: AppVenueId, amountIn: bigint): Promise<AppAccountView
   const existing = await getVenueTrade(venue);
   if (existing?.app?.status === 'funded' || existing?.app?.status === 'done') return existing.app;
   if (existing?.app?.status === 'shielding') throw new Error('Shield back is already running.');
-  if (existing?.app?.status === 'failed' && existing.app.unshieldTx) {
+  if (existing?.app?.status === 'failed' && (existing.app.unshieldTx || (existing.app.viaIntents && spec.fundVia === undefined))) {
     throw new Error('This address is already funded. Shield back the tokens that are still on it.');
   }
 
-  const trade = existing ?? (await startVenue(venue));
+  let trade = existing ?? (await startVenue(venue));
+  if (spec.fundVia && trade.app?.status === 'failed' && trade.app.viaIntents) {
+    trade = await updateOwnedTrade(trade.ownerIndex, { app: { ...trade.app, viaIntents: undefined } });
+  }
+  if (spec.fundVia) {
+    try {
+      return await fundViaIntents(venue, trade, amountIn);
+    } catch (error) {
+      return fail(venue, amountIn, error);
+    }
+  }
   await remember(trade, {
     status: 'funding',
     amountIn: amountIn.toString(),
@@ -185,6 +196,60 @@ async function shield(venue: AppVenueId): Promise<AppAccountView> {
   } catch (error) {
     return fail(venue, BigInt(amountIn), error);
   }
+}
+
+/**
+ * Funding in another asset (Lido: ETH). A NEAR Intents exit takes the USDC
+ * out of Railgun and a solver delivers the asset to this fresh address, so
+ * nothing on Arbitrum links it to Railgun or to an earlier address. The exit
+ * runs on its own (the intents alarm); this checks on it and is safe to call
+ * again: it never starts a second exit while one is recorded.
+ */
+async function fundViaIntents(venue: AppVenueId, trade: ActiveTrade, amountIn: bigint): Promise<AppAccountView> {
+  const spec = APP_VENUES[venue];
+  const fundVia = spec.fundVia!;
+  const recorded = trade.app?.viaIntents;
+
+  if (!recorded) {
+    const { feeBps } = await railgunUsdcBalances();
+    const gross = railgunGrossForNet(amountIn, feeBps);
+    await remember(trade, { status: 'funding', amountIn: amountIn.toString(), detail: `Quoting ${fundVia.symbol} through NEAR Intents.` });
+    const exit = await startIntentsExit({ assetId: fundVia.intentsAssetId, grossUnits: gross.toString(), recipient: trade.ownerAddress });
+    const started = view(trade, {
+      status: 'funding',
+      amountIn: amountIn.toString(),
+      viaIntents: { correlationId: exit.correlationId, minOut: exit.minAmountOut },
+      detail: `Sending ${Number(amountIn) / 1e6} USDC out of Railgun through NEAR Intents. At least ${formatUnits(BigInt(exit.minAmountOut), fundVia.decimals)} ${fundVia.symbol} arrives on this address.`,
+    });
+    await updateOwnedTrade(trade.ownerIndex, { app: started });
+    return started;
+  }
+
+  // Arrived? The address holds at least the quoted minimum.
+  const held = fundVia.symbol === 'ETH' ? await publicClient.getBalance({ address: trade.ownerAddress }) : 0n;
+  if (held >= BigInt(recorded.minOut)) {
+    const ready = view(trade, { ...trade.app!, status: 'funded', detail: spec.fundedDetail, error: undefined });
+    await updateOwnedTrade(trade.ownerIndex, { app: ready });
+    return ready;
+  }
+
+  const live = (await getVenueTrade('intents'))?.intents;
+  const last = await lastIntentsView();
+  const move = live?.correlationId === recorded.correlationId ? live : last?.correlationId === recorded.correlationId ? last : null;
+  if (move && (move.stage === 'refunded' || move.stage === 'failed' || (move.stage === 'done' && move.direction === 'exit' && move.swapStatus === 'REFUNDED'))) {
+    // Nothing reached this address. NEAR Intents' refund is shielded back by the exit itself.
+    const failed = view(trade, {
+      status: 'failed',
+      amountIn: amountIn.toString(),
+      detail: `NEAR Intents did not deliver the ${fundVia.symbol}. ${move.error ?? 'Any refund goes back into your private balance.'} Try again to quote a new one.`,
+      error: move.error ?? 'Not delivered.',
+    });
+    await updateOwnedTrade(trade.ownerIndex, { app: failed });
+    return failed;
+  }
+  const waiting = view(trade, { ...trade.app!, status: 'funding', detail: move?.detail || trade.app!.detail });
+  await updateOwnedTrade(trade.ownerIndex, { app: waiting });
+  return waiting;
 }
 
 /**

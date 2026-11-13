@@ -16,7 +16,7 @@
 
 import { encodeFunctionData, keccak256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { findTradeByOwner, tradeForOrigin, updateOwnedTrade, type ActiveTrade } from './trade';
+import { findTradeByOwner, tradeForOrigin, updateOwnedTrade, type ActiveTrade, type VenueId } from './trade';
 import { isUnlocked, ownerAt } from './vault';
 import {
   decideApproval,
@@ -30,7 +30,7 @@ import {
 } from './approvals';
 import { publicClient } from './chain';
 import { isStructNameRefusal, signTypedDataLoose } from './typed-data';
-import { APP_VENUE_IDS, APP_VENUES } from './app-venues';
+import { APP_VENUE_IDS, APP_VENUES, isAppVenue } from './app-venues';
 import { dydxAddressFromSignature, isDydxOnboarding } from './dydx';
 import {
   parsePersonalSign,
@@ -92,14 +92,19 @@ export async function handleProviderRequest(
 
   switch (method) {
     case 'eth_chainId':
-      return CHAIN_ID_HEX;
+      return siteChain(trade);
 
     case 'wallet_switchEthereumChain': {
-      const target = (params[0] as { chainId?: string } | undefined)?.chainId;
-      if (target && target.toLowerCase() !== CHAIN_ID_HEX) {
-        throw rpcError(4902, 'Truly only operates on Arbitrum One.');
+      const target = (params[0] as { chainId?: string } | undefined)?.chainId?.toLowerCase();
+      if (!target || target === CHAIN_ID_HEX) {
+        await setSiteChain(trade, CHAIN_ID_HEX);
+        return null;
       }
-      return null;
+      if (trade.venue && SIGN_ONLY_CHAINS[trade.venue as VenueId]?.includes(target)) {
+        await setSiteChain(trade, target);
+        return null;
+      }
+      throw rpcError(4902, 'Truly only operates on Arbitrum One.');
     }
 
     case 'eth_accounts':
@@ -110,13 +115,20 @@ export async function handleProviderRequest(
     case 'wallet_getPermissions':
       return accountsPermission(trade.ownerAddress);
 
+    case 'eth_sendTransaction':
+      // On a sign-only chain the site believes it is on another network. A
+      // transaction it sends would be signed for Arbitrum, so refuse it.
+      if ((await siteChain(trade)) !== CHAIN_ID_HEX) {
+        throw rpcError(4100, 'Ghosty only signs messages on that network. Switch the site back to Arbitrum to send a transaction.');
+      }
+      return approveAndPerform({ requestId: id, origin, method, params, ownerAddress: trade.ownerAddress, ownerIndex: trade.ownerIndex });
+
     case 'eth_requestAccounts':
     case 'wallet_requestPermissions':
     case 'personal_sign':
     case 'eth_signTypedData_v3':
     case 'eth_signTypedData_v4':
     case 'eth_signTypedData':
-    case 'eth_sendTransaction':
       return approveAndPerform({
         requestId: id,
         origin,
@@ -132,6 +144,31 @@ export async function handleProviderRequest(
 }
 
 /**
+ * Chains a site may switch to for signing only. dydx.trade switches to
+ * Ethereum mainnet (chainId 1) before it asks for its onboarding signature
+ * (v4-web useGenerateKeys: switchChainAsync({chainId: 1}), then sign), and
+ * will not onboard a wallet that refuses. Ghosty reports that chain to the
+ * site and signs messages there, but sends no transaction until the site
+ * switches back to Arbitrum.
+ */
+const SIGN_ONLY_CHAINS: Partial<Record<VenueId, string[]>> = { dydx: ['0x1'] };
+const SITE_CHAIN = 'truly:siteChain';
+
+async function siteChain(trade: ActiveTrade): Promise<string> {
+  if (!trade.venue || !SIGN_ONLY_CHAINS[trade.venue as VenueId]) return CHAIN_ID_HEX;
+  const stored = (await chrome.storage.session.get(SITE_CHAIN))[SITE_CHAIN] as Record<string, string> | undefined;
+  return stored?.[`${trade.venue}:${trade.ownerIndex}`] ?? CHAIN_ID_HEX;
+}
+
+async function setSiteChain(trade: ActiveTrade, chainId: string): Promise<void> {
+  if (!trade.venue || !SIGN_ONLY_CHAINS[trade.venue as VenueId]) return;
+  if ((await siteChain(trade)) === chainId) return;
+  const stored = ((await chrome.storage.session.get(SITE_CHAIN))[SITE_CHAIN] as Record<string, string> | undefined) ?? {};
+  await chrome.storage.session.set({ [SITE_CHAIN]: { ...stored, [`${trade.venue}:${trade.ownerIndex}`]: chainId } });
+  if (isAppVenue(trade.venue)) await broadcastProviderEvent('chainChanged', [chainId], [...APP_VENUES[trade.venue].tabPatterns]);
+}
+
+/**
  * Tell every open Lighter tab that the exposed account changed.
  *
  * Only Lighter tabs receive it. The content script is not injected anywhere
@@ -139,7 +176,7 @@ export async function handleProviderRequest(
  * that never asked.
  */
 export async function broadcastProviderEvent(
-  event: 'accountsChanged' | 'disconnect',
+  event: 'accountsChanged' | 'disconnect' | 'chainChanged',
   args: unknown[],
   urls: string[] = SITE_TABS,
 ): Promise<void> {

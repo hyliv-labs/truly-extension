@@ -5,7 +5,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { APP_VENUE_IDS, APP_VENUES, appVenueFromHost, isAppVenue } from '../src/lib/app-venues.ts';
+import { APP_VENUE_IDS, APP_VENUES, appVenueFromHost, isAppVenue, lidoExitBlocker } from '../src/lib/app-venues.ts';
 import { venueFromOrigin } from '../src/lib/trade.ts';
 import { aaveExitBlocker, reserveTokens, underlyingName } from '../src/lib/aave.ts';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -82,6 +82,17 @@ expect('a withdrawal minutes ago with nothing landed blocks', /on its way to Arb
 expect('the same once the USDC landed passes', dydxExitBlocker({ ...none, lastTransferAt: now - 10 * 60_000 }, { usdc: 9_000_000n, lastSendAt: null }, now), null);
 expect('a deposit that left but never showed blocks', /has not shown on dYdX/.test(dydxExitBlocker(none, { usdc: 0n, lastSendAt: now - 5 * 60_000 }, now) ?? ''), true);
 expect('an old deposit that never showed does not', dydxExitBlocker(none, { usdc: 0n, lastSendAt: now - 3 * 3600_000 }, now), null);
+
+// --- Lido: funded in ETH through NEAR Intents; wait while a stake is in flight.
+expect('Lido is funded with ETH on Arbitrum through NEAR Intents', APP_VENUES.lido.fundVia?.intentsAssetId, 'nep141:arb.omft.near');
+expect('Lido gets no gas top-up from an earlier address', APP_VENUES.lido.gasWei, 0n);
+expect('Bring back looks for wstETH', APP_VENUES.lido.extraTokens?.[0]?.symbol, 'wstETH');
+const ETH1 = 1_000_000_000_000_000_000n;
+expect('unstaked ETH passes (shielded as WETH)', lidoExitBlocker({ funded: ETH1, eth: ETH1, wst: 0n }), null);
+expect('staked and arrived passes', lidoExitBlocker({ funded: ETH1, eth: 1_000_000_000_000n, wst: 800_000_000_000_000_000n }), null);
+expect('ETH gone, no wstETH yet blocks', /no wstETH has arrived/.test(lidoExitBlocker({ funded: ETH1, eth: 1_000_000_000_000n, wst: 0n }) ?? ''), true);
+expect('the 1inch link is the current site', APP_VENUES.oneinch.url.startsWith('https://1inch.com/'), true);
+expect('dYdX shows its upgrade caution', /v9\.9/.test(APP_VENUES.dydx.caution ?? ''), true);
 
 if (failed) process.exit(1);
 console.log('app-venues: all checks passed');

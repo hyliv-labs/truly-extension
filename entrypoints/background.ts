@@ -566,7 +566,10 @@ async function handle(
     case 'fundApp': {
       await touchAutoLock();
       if (!isAppVenue(message.venue)) throw new Error('Unknown app.');
-      return fundAppAccount(message.venue, BigInt(message.amountUnits));
+      const funded = await fundAppAccount(message.venue, BigInt(message.amountUnits));
+      // Lido is funded by a NEAR Intents exit, which the intents alarm drives.
+      if (APP_VENUES[message.venue].fundVia) await armIntentsTick();
+      return funded;
     }
 
     case 'shieldApp': {

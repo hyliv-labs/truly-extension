@@ -13,7 +13,10 @@ import type { Address } from 'viem';
 import { AAVE_APP } from './aave';
 import { DYDX_APP } from './dydx';
 
-export const APP_VENUE_IDS = ['oneinch', 'aave', 'dydx'] as const;
+/** Lido's wstETH on Arbitrum (docs.lido.fi deployed contracts; read live: wstETH, 18 decimals). */
+export const WSTETH_ARBITRUM: Address = '0x5979D7b546E38E414F7E9822514be443A4800529';
+
+export const APP_VENUE_IDS = ['oneinch', 'aave', 'dydx', 'lido'] as const;
 export type AppVenueId = (typeof APP_VENUE_IDS)[number];
 
 export interface AppVenueSpec {
@@ -35,6 +38,14 @@ export interface AppVenueSpec {
   readonly returnBlurb: string;
   /** Shown once the address is funded. */
   readonly fundedDetail: string;
+  /**
+   * Funded in something other than USDC: a NEAR Intents exit from Railgun
+   * delivers this asset to the fresh address. Lido stakes ETH, and the
+   * address holding ETH that no earlier address sent keeps it unlinked.
+   */
+  readonly fundVia?: { readonly intentsAssetId: string; readonly symbol: string; readonly decimals: number };
+  /** Shown on Go ghost before funding: something the user must know first. */
+  readonly caution?: string;
   /** Tokens this app hands out that Bring back should look for, beyond the usual ones. */
   readonly extraTokens?: readonly { readonly address: Address; readonly symbol: string; readonly decimals: number }[];
 }
@@ -45,7 +56,8 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
   oneinch: {
     id: 'oneinch',
     name: '1inch',
-    url: 'https://app.1inch.io/swap?src=42161:USDC',
+    // app.1inch.io now redirects here (301).
+    url: 'https://1inch.com/swap',
     domains: ['1inch.io', '1inch.com'],
     tabPatterns: ['https://*.1inch.io/*', 'https://*.1inch.com/*'],
     minUnits: 1_000_000n,
@@ -85,6 +97,26 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
       'Close your positions on dYdX and Withdraw to Arbitrum, to this same address. Withdrawals take about 20 minutes to land. This will not shield while anything is still on dYdX, in its wallet, or on the way.',
     fundedDetail:
       'USDC is on this address. On dydx.trade connect Ghosty, sign dYdX’s onboarding message, and Deposit from Arbitrum. To come back, Withdraw to Arbitrum to this same address.',
+    caution:
+      'dYdX’s v9.9 upgrade (planned for 17 Nov 2026) moves its USDC to Injective, and its docs say withdrawals to other chains are rejected after it. Ghosty has not verified that Withdraw to Arbitrum still works afterwards. Fund only what you will bring back before then.',
+  },
+  lido: {
+    id: 'lido',
+    name: 'Lido',
+    url: 'https://stake.lido.fi/',
+    domains: ['lido.fi'],
+    tabPatterns: ['https://*.lido.fi/*'],
+    minUnits: 5_000_000n,
+    ready: 'Stake',
+    // Funded in ETH, which pays its own gas: no top-up from an earlier address.
+    gasWei: 0n,
+    doThere: 'Stake for wstETH',
+    returnBlurb:
+      'Stake on Lido first, or don’t: this shields the wstETH, and any ETH left over as WETH. wstETH keeps earning inside your private balance.',
+    fundedDetail:
+      'ETH is on this address, delivered by NEAR Intents. On stake.lido.fi (Arbitrum) connect Ghosty and Stake: you get wstETH. Bring back shields it.',
+    fundVia: { intentsAssetId: 'nep141:arb.omft.near', symbol: 'ETH', decimals: 18 },
+    extraTokens: [{ address: WSTETH_ARBITRUM, symbol: 'wstETH', decimals: 18 }],
   },
 };
 
@@ -120,4 +152,17 @@ export interface AppAccountView {
   readonly shielded?: AppTokenLine[];
   readonly left?: AppTokenLine[];
   readonly error?: string;
+  /** Funding through a NEAR Intents exit (fundVia): which move, and the least it delivers. */
+  readonly viaIntents?: { readonly correlationId: string; readonly minOut: string };
+}
+
+/**
+ * Lido: refuse while a stake may still be on its way. ETH mostly gone from
+ * the address (it was staked) with no wstETH yet means the slow route.
+ */
+export function lidoExitBlocker(held: { funded: bigint; eth: bigint; wst: bigint }): string | null {
+  if (held.wst === 0n && held.eth * 2n < held.funded) {
+    return 'The ETH left this address and no wstETH has arrived yet. Lido’s slower route takes several minutes; bring it back once wstETH shows. Nothing was moved.';
+  }
+  return null;
 }
