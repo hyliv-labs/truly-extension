@@ -38,6 +38,9 @@ export async function createVault(
     throw new Error('a vault already exists; lock and unlock it instead');
   }
 
+  // Enforced here, not only in the onboarding form: every path that creates a
+  // vault (recovery, signature import) seals it with this password.
+  if (password.length < 8) throw new Error('Use a password of at least 8 characters.');
   const phrase = mnemonic?.trim() ?? newMnemonic();
   if (!isValidMnemonic(phrase)) {
     throw new Error('invalid recovery phrase');

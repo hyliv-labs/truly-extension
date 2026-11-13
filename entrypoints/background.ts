@@ -196,8 +196,26 @@ export default defineBackground({
       if (alarm.name === INTENTS_ALARM) void tickIntents();
     });
 
+    // Content scripts can read chrome.storage.local unless told otherwise. The
+    // sealed vault and the venue book (every owner address) live there.
+    void chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
+
+    // A vault unlocked by any path (recovery jobs included) starts the
+    // auto-lock countdown, not only the popup's unlock button.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'session' && changes['truly:mnemonic']?.newValue) void touchAutoLock();
+    });
+
     chrome.runtime.onMessage.addListener((message: Request, sender, sendResponse) => {
       if (typeof message?.kind !== 'string') return false;
+
+      // Only extension pages (popup, side panel, approval, offscreen) may ask
+      // for anything privileged. A content script relays provider requests and
+      // nothing else, so a compromised page cannot unlock, fund or send out.
+      if (!fromExtensionPage(sender) && message.kind !== 'provider') {
+        sendResponse({ ok: false, error: 'Not allowed from a web page.' } satisfies Response<unknown>);
+        return false;
+      }
 
       handle(message, sender)
         .then((value) => sendResponse({ ok: true, value } satisfies Response<unknown>))
@@ -258,7 +276,8 @@ async function handle(
     case 'startTrade': {
       const trade = await startTrade();
       await touchAutoLock();
-      await broadcastProviderEvent('accountsChanged', [[trade.ownerAddress]]);
+      // Lighter's owner goes to Lighter's tabs only, never to another venue's.
+      await broadcastProviderEvent('accountsChanged', [[trade.ownerAddress]], venueTabs('lighter'));
       return trade;
     }
 
@@ -305,7 +324,9 @@ async function handle(
         message.requestId,
         sender.tab?.id,
       );
-      await touchAutoLock();
+      // Only a request the user acted on counts as activity. A page polling
+      // eth_chainId must not keep the vault unlocked forever.
+      if (USER_ACTION_METHODS.has(message.method)) await touchAutoLock();
       return result;
     }
 
@@ -840,6 +861,13 @@ async function announceVenueEnded(venue: VenueId): Promise<void> {
   const urls = venueTabs(venue);
   await broadcastProviderEvent('accountsChanged', [[]], urls);
   await broadcastProviderEvent('disconnect', [{ code: 4900, message: 'Truly trade ended.' }], urls);
+}
+
+const USER_ACTION_METHODS = new Set(['eth_requestAccounts', 'wallet_requestPermissions', 'personal_sign', 'eth_signTypedData_v4', 'eth_signTypedData_v3', 'eth_sendTransaction']);
+
+/** An extension page of this extension: the only sender trusted with privileged messages. */
+function fromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && (sender.url ?? '').startsWith(chrome.runtime.getURL(''));
 }
 
 function errorMessage(error: unknown): string {

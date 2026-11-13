@@ -35,7 +35,7 @@ const pass = (msg: string) => console.log('pass', msg);
 
 const PHRASE = 'test test test test test test test test test test test junk';
 
-await createVault('pw', PHRASE);
+await createVault('test-password', PHRASE);
 
 // Trade 1.
 const first = await startTrade();

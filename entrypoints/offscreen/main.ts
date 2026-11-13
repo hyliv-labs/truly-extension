@@ -20,8 +20,14 @@ let hostError: string | null = null;
 
 import { countRailgunRpcError, getRailgunSyncStatus } from '@truly/lib/railgun-sync-status';
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target !== 'truly:offscreen') return false;
+  // Only this extension's own pages and worker. A content script's message also
+  // reaches this document, and must not get balances or proofs out of it.
+  if (sender.id !== chrome.runtime.id || (sender.url !== undefined && !sender.url.startsWith(chrome.runtime.getURL('')))) {
+    sendResponse({ ok: false, error: 'Not allowed.' });
+    return false;
+  }
 
   void handle(message as OffscreenMessage)
     .then((value) => {

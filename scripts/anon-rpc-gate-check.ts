@@ -51,7 +51,7 @@ if (!problems[0]?.reason || problems[0].reason.length < 20) {
   pass('problem carries a reason the popup can show');
 }
 
-await createVault('pw', 'test test test test test test test test test test test junk');
+await createVault('test-password', 'test test test test test test test test test test test junk');
 
 try {
   await startTrade();

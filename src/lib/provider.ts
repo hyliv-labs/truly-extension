@@ -76,6 +76,11 @@ export async function handleProviderRequest(
   await pruneInFlight();
 
   const existing = await getInFlight(id);
+  // A request id belongs to the origin that made it. Another page presenting
+  // the same id gets nothing from the stored result.
+  if (existing && normaliseOrigin(existing.origin) !== normaliseOrigin(origin)) {
+    throw rpcError(4100, 'That request belongs to another site.');
+  }
   if (existing) return continueInFlight(existing);
 
   const trade = await tradeForOrigin(origin);
