@@ -820,10 +820,19 @@ export function GhostProgress({
           </span>
           <h1 className="gx-title">You&apos;re a ghost on {name}</h1>
           <p className="gx-sub">
-            {VENUES[venue].ready} as usual. {name} sees a private account{amountUnits ? ` with ${fmt(amountUnits)} USDC` : ''}.
-            {venue === 'hyperliquid'
-              ? ' Connect, pick Truly in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
-              : venue !== 'lighter' && ' Pick Arbitrum, then Truly in its wallet list.'}
+            {isAppVenue(venue) && APP_VENUES[venue].chain === 'near' ? (
+              <>
+                {VENUES[venue].ready} as usual. {name} sees a fresh NEAR account holding{amountUnits ? ` about ${fmt(amountUnits)} USDC worth of` : ''} NEAR.
+                {' '}Connect, choose NEAR, then Ghosty in the wallet list.
+              </>
+            ) : (
+              <>
+                {VENUES[venue].ready} as usual. {name} sees a private account{amountUnits ? ` with ${fmt(amountUnits)} USDC` : ''}.
+                {venue === 'hyperliquid'
+                  ? ' Connect, pick Truly in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
+                  : venue !== 'lighter' && ' Pick Arbitrum, then Truly in its wallet list.'}
+              </>
+            )}
           </p>
         </div>
         <button type="button" className="gx-btn primary" onClick={() => void chrome.tabs.create({ url: VENUES[venue].url })}>
@@ -843,7 +852,7 @@ export function GhostProgress({
     ...(lighter || venue === 'hyperliquid' ? [{ label: `${name} is crediting it`, state: (stage === 'crediting' ? 'now' : 'todo') as 'now' | 'todo' }] : []),
     { label: `Ready to ${VENUES[venue].ready.toLowerCase()}`, state: 'todo' },
   ];
-  const wait = lighter && stage === 'crediting' ? 'This can take up to 20 minutes.' : venue === 'hyperliquid' ? 'A few minutes.' : 'About a minute.';
+  const wait = lighter && stage === 'crediting' ? 'This can take up to 20 minutes.' : venue === 'hyperliquid' || (isAppVenue(venue) && APP_VENUES[venue].fundVia) ? 'A few minutes.' : 'About a minute.';
 
   return (
     <GxScreen>
