@@ -111,7 +111,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<CompoundAccountView>
     status: 'funded',
     amountIn: amountIn.toString(),
     unshieldTx,
-    detail: 'USDC is on this address. Supply it on Compound. Withdraw it there before shielding. Truly will not supply or withdraw.',
+    detail: 'USDC is on this address. Supply it on Compound. Withdraw it there before shielding. Ghosty will not supply or withdraw.',
   });
   await updateOwnedTrade(trade.ownerIndex, { compound: ready });
   return ready;

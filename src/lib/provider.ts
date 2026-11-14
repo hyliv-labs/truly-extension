@@ -109,7 +109,7 @@ export async function handleProviderRequest(
         await setSiteChain(trade, target);
         return null;
       }
-      throw rpcError(4902, 'Truly only operates on Arbitrum One.');
+      throw rpcError(4902, 'Ghosty only operates on Arbitrum One.');
     }
 
     case 'eth_accounts':
@@ -144,7 +144,7 @@ export async function handleProviderRequest(
       });
 
     default:
-      throw rpcError(4200, `Truly does not support ${method}.`);
+      throw rpcError(4200, `Ghosty does not support ${method}.`);
   }
 }
 
@@ -229,8 +229,8 @@ async function refuseWithoutTrade(method: string): Promise<unknown> {
   throw rpcError(
     4100,
     unlocked
-      ? 'Truly has no active trade. Open Truly and start one, then try again.'
-      : 'Truly is locked. Unlock it and start a trade, then try again.',
+      ? 'Ghosty has no active trade. Open Ghosty and start one, then try again.'
+      : 'Ghosty is locked. Unlock it and start a trade, then try again.',
   );
 }
 
@@ -463,7 +463,7 @@ async function perform(record: InFlightRequest): Promise<unknown> {
 
   const owner = await ownerAt(latest.ownerIndex);
   if (owner.address.toLowerCase() !== latest.ownerAddress.toLowerCase()) {
-    throw rpcError(4100, 'Truly owner mismatch; refusing to sign.');
+    throw rpcError(4100, 'Ghosty owner mismatch; refusing to sign.');
   }
 
   const result = await execute(latest, owner.privateKey);
@@ -546,7 +546,7 @@ async function execute(record: InFlightRequest, privateKey: Hex): Promise<unknow
       return sendOwnerTransaction(record, privateKey);
 
     default:
-      throw rpcError(4200, `Truly does not support ${record.method}.`);
+      throw rpcError(4200, `Ghosty does not support ${record.method}.`);
   }
 }
 
@@ -724,7 +724,7 @@ async function assertOwnerHasEth(ownerAddress: string): Promise<void> {
   if (balance === 0n) {
     throw new ProviderRequestError(
       -32000,
-      'This owner address holds no ETH, so it cannot send a transaction. Truly will not fund it with ETH, because that payment would link the address. USDC goes back to the pool through Re-shield, which pays gas in USDC.',
+      'This owner address holds no ETH, so it cannot send a transaction. Ghosty will not fund it with ETH, because that payment would link the address. USDC goes back to the pool through Re-shield, which pays gas in USDC.',
     );
   }
 }
@@ -814,7 +814,7 @@ async function openApprovalWindow(record: InFlightRequest): Promise<void> {
   });
 
   if (created?.id === undefined) {
-    await settle(record.approvalId, false, 'Truly could not open the approval window.');
+    await settle(record.approvalId, false, 'Ghosty could not open the approval window.');
     return;
   }
 
@@ -864,7 +864,7 @@ async function openTrulyWindow(origin?: string): Promise<void> {
     ...APPROVAL_WINDOW,
   });
   if (created?.id === undefined) {
-    throw rpcError(4001, 'Truly could not open a window to start the trade.');
+    throw rpcError(4001, 'Ghosty could not open a window to start the trade.');
   }
 
   connectWindowId = created.id;

@@ -869,7 +869,7 @@ function venueTabs(venue: VenueId): string[] {
 async function announceVenueEnded(venue: VenueId): Promise<void> {
   const urls = venueTabs(venue);
   await broadcastProviderEvent('accountsChanged', [[]], urls);
-  await broadcastProviderEvent('disconnect', [{ code: 4900, message: 'Truly trade ended.' }], urls);
+  await broadcastProviderEvent('disconnect', [{ code: 4900, message: 'Ghosty trade ended.' }], urls);
 }
 
 const USER_ACTION_METHODS = new Set(['eth_requestAccounts', 'wallet_requestPermissions', 'personal_sign', 'eth_signTypedData_v4', 'eth_signTypedData_v3', 'eth_sendTransaction']);

@@ -290,7 +290,7 @@ export class BackgroundUnreachable extends Error {
   constructor(kind: string, ms: number) {
     super(
       `The background worker did not answer '${kind}' within ${Math.round(ms / 1000)}s. ` +
-        'Check chrome://extensions — if the Truly card shows no "service worker" link, it failed to start.',
+        'Check chrome://extensions — if the Ghosty card shows no "service worker" link, it failed to start.',
     );
     this.name = 'BackgroundUnreachable';
   }

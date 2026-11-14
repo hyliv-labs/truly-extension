@@ -97,7 +97,7 @@ export function UniswapSwap({
             ? 'The tokens that could be shielded are back in Railgun. This address is not reused.'
             : funded
               ? 'This address holds the USDC. Swap any pair on Uniswap. When you are finished, shield what is left back into Railgun.'
-              : 'A fresh address, funded from Railgun. You swap it on Uniswap. Truly does not send the swap.'}
+              : 'A fresh address, funded from Railgun. You swap it on Uniswap. Ghosty does not send the swap.'}
         </span>
       </div>
 
@@ -157,7 +157,7 @@ export function UniswapSwap({
       ) : funded ? (
         <>
           <p className="connect-steps">
-            On Uniswap: select <strong>Arbitrum</strong>, then <strong>Connect wallet</strong>, then <strong>Truly</strong>.
+            On Uniswap: select <strong>Arbitrum</strong>, then <strong>Connect wallet</strong>, then <strong>Ghosty</strong>.
             A different network is refused.
           </p>
           <button type="button" className="secondary" disabled={busy || working !== null} onClick={() => void chrome.tabs.create({ url: UNISWAP_APP })}>

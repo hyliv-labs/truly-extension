@@ -114,7 +114,7 @@ async function unshieldOntoOwner(amountIn: bigint): Promise<UniswapAccountView> 
     status: 'funded',
     amountIn: amountIn.toString(),
     unshieldTx,
-    detail: 'USDC is on this address. Open Uniswap, connect Truly, and swap there. Truly will not send a swap.',
+    detail: 'USDC is on this address. Open Uniswap, connect Ghosty, and swap there. Ghosty will not send a swap.',
   });
   await updateOwnedTrade(trade.ownerIndex, { uniswap: ready });
   return ready;

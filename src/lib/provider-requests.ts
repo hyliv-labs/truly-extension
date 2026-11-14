@@ -55,7 +55,7 @@ export function parsePersonalSign(
     throw new ProviderRequestError(-32602, 'personal_sign is missing a message or an address.');
   }
   if (address.toLowerCase() !== ownerAddress.toLowerCase()) {
-    throw new ProviderRequestError(4100, 'Truly will only sign for the active owner.');
+    throw new ProviderRequestError(4100, 'Ghosty will only sign for the active owner.');
   }
   return { raw: raw as `0x${string}`, address };
 }
@@ -73,11 +73,11 @@ export function parseTypedDataRequest(
   if (method === 'eth_signTypedData') {
     throw new ProviderRequestError(
       4200,
-      'Truly supports eth_signTypedData_v4, not the older eth_signTypedData.',
+      'Ghosty supports eth_signTypedData_v4, not the older eth_signTypedData.',
     );
   }
   if (!TYPED_METHODS.has(method)) {
-    throw new ProviderRequestError(4200, `Truly does not support ${method}.`);
+    throw new ProviderRequestError(4200, `Ghosty does not support ${method}.`);
   }
 
   const address = params.find(
@@ -88,7 +88,7 @@ export function parseTypedDataRequest(
     throw new ProviderRequestError(-32602, 'Typed data is missing an address or a payload.');
   }
   if (address.toLowerCase() !== ownerAddress.toLowerCase()) {
-    throw new ProviderRequestError(4100, 'Truly will only sign for the active owner.');
+    throw new ProviderRequestError(4100, 'Ghosty will only sign for the active owner.');
   }
 
   const parsed = typeof raw === 'string' ? parseJson(raw) : raw;
@@ -148,7 +148,7 @@ export function parseTransactionRequest(
 ): ParsedTransaction {
   const tx = params[0];
   if (!tx || typeof tx !== 'object') {
-    throw new ProviderRequestError(-32602, 'Truly expected a transaction object.');
+    throw new ProviderRequestError(-32602, 'Ghosty expected a transaction object.');
   }
 
   const body = tx as {
@@ -161,20 +161,20 @@ export function parseTransactionRequest(
   };
 
   if (body.from && body.from.toLowerCase() !== ownerAddress.toLowerCase()) {
-    throw new ProviderRequestError(4100, 'Truly will only send transactions from the active owner.');
+    throw new ProviderRequestError(4100, 'Ghosty will only send transactions from the active owner.');
   }
 
   if (body.chainId !== undefined) {
     const chainId = typeof body.chainId === 'string' ? Number(body.chainId) : body.chainId;
     if (chainId !== 42161) {
-      throw new ProviderRequestError(4902, 'Truly only sends transactions on Arbitrum One.');
+      throw new ProviderRequestError(4902, 'Ghosty only sends transactions on Arbitrum One.');
     }
   }
 
   if (typeof body.to !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(body.to)) {
     throw new ProviderRequestError(
       -32602,
-      'Truly needs a transaction recipient. It will not deploy a contract.',
+      'Ghosty needs a transaction recipient. It will not deploy a contract.',
     );
   }
 
@@ -213,7 +213,7 @@ function asBigint(value: string | number | bigint | undefined): bigint {
   try {
     return BigInt(value);
   } catch {
-    throw new ProviderRequestError(-32602, 'Truly could not read the transaction value.');
+    throw new ProviderRequestError(-32602, 'Ghosty could not read the transaction value.');
   }
 }
 

@@ -66,7 +66,7 @@ export const APP_VENUES: Record<AppVenueId, AppVenueSpec> = {
     doThere: 'Finish the swap',
     returnBlurb:
       'When you finish on 1inch, this reads the address and shields USDC, WETH, USDT, DAI, ARB and anything else it received. A token Railgun cannot take stays there, and gets named.',
-    fundedDetail: 'USDC is on this address. Swap on 1inch with Ghosty as the wallet, on Arbitrum. Truly does not swap for you.',
+    fundedDetail: 'USDC is on this address. Swap on 1inch with Ghosty as the wallet, on Arbitrum. Ghosty does not swap for you.',
   },
   aave: {
     id: 'aave',

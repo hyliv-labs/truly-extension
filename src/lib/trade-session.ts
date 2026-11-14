@@ -440,7 +440,7 @@ async function stepDeposit(trade: ActiveTrade, session: TradeSession): Promise<v
     await transition(
       session.id,
       'funded',
-      `Lighter credited ${account.collateral.toFixed(2)} USDC to account #${account.accountIndex}. Open Lighter and trade there. Truly did not place an order.`,
+      `Lighter credited ${account.collateral.toFixed(2)} USDC to account #${account.accountIndex}. Open Lighter and trade there. Ghosty did not place an order.`,
     );
     return;
   }
@@ -878,7 +878,7 @@ async function stepWithdraw(trade: ActiveTrade, session: TradeSession): Promise<
     await transition(
       session.id,
       'exited',
-      `Lighter accepted a withdrawal of ${usd} USDC to the owner on Arbitrum. Re-shield once it arrives. Truly will not send a second withdrawal.`,
+      `Lighter accepted a withdrawal of ${usd} USDC to the owner on Arbitrum. Re-shield once it arrives. Ghosty will not send a second withdrawal.`,
     );
     return;
   }
@@ -928,7 +928,7 @@ async function stepReturn(trade: ActiveTrade, session: TradeSession): Promise<vo
     await updateSession(session.id, () => ({
       detail:
         balance === 0n
-          ? 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Truly re-shields it.'
+          ? 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Ghosty re-shields it.'
           : `${usd} USDC is at the owner, under the pool minimum, so it is not re-shielded yet.`,
     }));
     return;
@@ -947,7 +947,7 @@ async function stepReturnRailgun(trade: ActiveTrade, session: TradeSession): Pro
   const balance = await ownerUsdcBalance(trade.ownerAddress);
   if (!submitted && balance === 0n) {
     await updateSession(session.id, () => ({
-      detail: 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Truly shields it back into Railgun.',
+      detail: 'Lighter accepted the withdrawal. Waiting for the USDC to reach this owner on Arbitrum, then Ghosty shields it back into Railgun.',
     }));
     return;
   }
@@ -1242,7 +1242,7 @@ async function settleOrder(signer: SignerAccount, attempt: OrderAttempt, account
       detail:
         tx.status === 'accepted'
           ? waited > ORDER_LOOKUP_GRACE_MS
-            ? 'Lighter accepted the order transaction but shows no order for it yet. Truly will keep checking and will not resubmit.'
+            ? 'Lighter accepted the order transaction but shows no order for it yet. Ghosty will keep checking and will not resubmit.'
             : 'Order accepted by Lighter. Waiting for its execution record.'
           : `Submission outcome unknown (${tx.message ?? 'no answer'}). Checking Lighter before doing anything else.`,
     };

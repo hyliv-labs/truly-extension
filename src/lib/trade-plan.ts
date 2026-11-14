@@ -373,7 +373,7 @@ export function validateDeposit(input: {
     );
   }
   const warnings = [
-    'A new account is created and funded. Truly does not place an order — trade it on Lighter.',
+    'A new account is created and funded. Ghosty does not place an order — trade it on Lighter.',
   ];
   if (plan.expectedNetUnits > amountUnits + 1_000_000n) {
     warnings.push(
@@ -433,7 +433,7 @@ export function validateRailgunDeposit(input: {
     throw new TradeValidationError('insufficient-balance', 'Not enough Railgun USDC to fund this account.');
   }
   const warnings = [
-    'A new account is created and funded. Truly does not place an order — trade it on Lighter.',
+    'A new account is created and funded. Ghosty does not place an order — trade it on Lighter.',
   ];
   if (input.pendingUnits > 0n) {
     warnings.push('Some Railgun USDC is still syncing or blocked, so it is not counted.');

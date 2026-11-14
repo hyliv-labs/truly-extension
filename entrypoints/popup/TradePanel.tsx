@@ -155,7 +155,7 @@ export function TradeForm({
           {connectedAddress
             ? `Deposits to ${shortAddress(connectedAddress)}, the address Lighter is connected to. You trade it on Lighter.`
             : connecting
-              ? 'The Railgun balance is above. Truly funds a new address and connects it. You trade on Lighter.'
+              ? 'The Railgun balance is above. Ghosty funds a new address and connects it. You trade on Lighter.'
               : 'A fresh address, funded from Railgun. You trade it on Lighter.'}
         </span>
       </div>
@@ -341,7 +341,7 @@ function OrderSummary({ quote }: { quote: TradeQuote }) {
   const pending = Number(quote.pendingAspUnits) > 0 ? ` · ${usdc(quote.pendingAspUnits)} awaiting ASP` : '';
   return (
     <div className="summary">
-      <p className="summary-lead">New Lighter account · no order from Truly</p>
+      <p className="summary-lead">New Lighter account · no order from Ghosty</p>
       <div className="row"><span>Deposit</span><span>{usdc(quote.marginUnits)} USDC from {quote.fundingSource}</span></div>
       <div className="row"><span>Sent</span><span>{usdc(quote.grossWithdrawalUnits)} gross, ~{usdc(quote.expectedNetUnits)} to the account</span></div>
       <div className="row"><span>Fee</span><span>~{usdc(quote.relayerFeeEstimateUnits)} from the shielded balance</span></div>
@@ -491,7 +491,7 @@ export function SessionPanel({
               its fast bridge has no capacity.
             </p>
           )}
-          {s.blocked === 'locked' && <p className="error">Unlock Truly to continue. This step signs with the trade&apos;s keys.</p>}
+          {s.blocked === 'locked' && <p className="error">Unlock Ghosty to continue. This step signs with the trade&apos;s keys.</p>}
           {s.error && s.error.code !== 'transient' && (
             <p className={s.detail.includes(s.error.message) ? 'field-label' : 'error'}>
               {s.detail.includes(s.error.message) ? s.error.code : `${s.error.code}: ${s.error.message}`}
@@ -541,7 +541,7 @@ export function SessionPanel({
           <p className="summary-lead">Trade this account on Lighter</p>
           <div className="row"><span>Credited</span><span>{money(s.creditedUsd)}</span></div>
           <div className="row"><span>Owner</span><code>{view.ownerAddress}</code></div>
-          <p className="hint">Connect Truly on Lighter. This extension will not place or close an order.</p>
+          <p className="hint">Connect Ghosty on Lighter. This extension will not place or close an order.</p>
           <button disabled={disabled} onClick={() => void act('shield', () => send({ kind: 'shieldFunds' }, SLOW_TIMEOUT_MS))}>
             {working === 'shield' ? 'Starting shield…' : `Shield back into ${s.quote.fundingSource}`}
           </button>
@@ -572,7 +572,7 @@ export function SessionPanel({
       {s.state === 'order-failed' && (
         <>
           <p className="hint">
-            Funds are on Lighter account #{view.accountIndex ?? '—'} with no position. Truly will not resend anything on its own. Retry places a NEW order after the
+            Funds are on Lighter account #{view.accountIndex ?? '—'} with no position. Ghosty will not resend anything on its own. Retry places a NEW order after the
             previous one was confirmed dead; otherwise withdraw on Lighter and re-shield.
           </p>
           <button disabled={disabled} onClick={() => void act('retry', () => send({ kind: 'retryOrder' }, SLOW_TIMEOUT_MS))}>

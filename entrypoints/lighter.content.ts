@@ -95,7 +95,7 @@ function reply(
           id,
           error: response?.rpc ?? {
             code: 4900,
-            message: response?.error ?? 'Truly failed',
+            message: response?.error ?? 'Ghosty failed',
           },
         },
     window.location.origin,

@@ -127,10 +127,10 @@ export async function compoundExitBlocker(account: Address): Promise<string | nu
     const borrowBalance = borrow.result as unknown as bigint;
     const supplyBalance = supply.result as unknown as bigint;
     if (borrowBalance > 0n) {
-      return `This address still has a borrow on the Compound ${market.label} market. Repay it on Compound, then shield back. Truly will not repay it.`;
+      return `This address still has a borrow on the Compound ${market.label} market. Repay it on Compound, then shield back. Ghosty will not repay it.`;
     }
     if (supplyBalance > 0n) {
-      return `Funds are still supplied on the Compound ${market.label} market. Withdraw them on Compound, then shield back. Truly will not withdraw.`;
+      return `Funds are still supplied on the Compound ${market.label} market. Withdraw them on Compound, then shield back. Ghosty will not withdraw.`;
     }
     if (reward?.status !== 'success') {
       throw new Error(`Could not read Compound rewards on the ${market.label} market. Retry shield back. Nothing was shielded.`);
@@ -165,7 +165,7 @@ export async function compoundExitBlocker(account: Address): Promise<string | nu
       throw new Error('Could not read Compound collateral. Retry shield back. Nothing was shielded.');
     }
     if ((row.result as unknown as bigint) > 0n) {
-      return `Collateral is still supplied on the Compound ${collateral[index]!.label} market. Withdraw it on Compound, then shield back. Truly will not withdraw.`;
+      return `Collateral is still supplied on the Compound ${collateral[index]!.label} market. Withdraw it on Compound, then shield back. Ghosty will not withdraw.`;
     }
   }
   return null;

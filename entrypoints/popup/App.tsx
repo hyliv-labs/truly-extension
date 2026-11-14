@@ -128,7 +128,7 @@ export function App() {
           refreshNow = false;
         }
       }
-      throw new Error('The Railgun sync is still running. Leave Truly unlocked and check back.');
+      throw new Error('The Railgun sync is still running. Leave Ghosty unlocked and check back.');
     } catch (e) {
       setShieldedError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -527,11 +527,11 @@ export function App() {
             <strong>{connectOrigin}</strong> wants to connect.
             {status?.unlocked
               ? connectOrigin.includes('uniswap')
-                ? ' Truly gives it a fresh address. Fund that address from Railgun below, then swap on Uniswap.'
+                ? ' Ghosty gives it a fresh address. Fund that address from Railgun below, then swap on Uniswap.'
                 : connectOrigin.includes('compound')
-                  ? ' Truly gives it a fresh address. On Compound, choose Browser Wallet after other wallet extensions are off. Fund that address from Railgun below, then supply on the Arbitrum USDC market.'
-                  : ' Truly gives it a fresh address that has never been used. You fund it from the shielded balance when you trade, not now.'
-              : ' Unlock Truly first.'}
+                  ? ' Ghosty gives it a fresh address. On Compound, choose Browser Wallet after other wallet extensions are off. Fund that address from Railgun below, then supply on the Arbitrum USDC market.'
+                  : ' Ghosty gives it a fresh address that has never been used. You fund it from the shielded balance when you trade, not now.'
+              : ' Unlock Ghosty first.'}
           </p>
           {/* The button the site's "click connect in your wallet popup" refers
               to. Without it the window only offered funding, and the site sat
@@ -577,7 +577,7 @@ export function App() {
               <p className="error">{error}</p>
               <p className="field-label">
                 The background worker did not answer. Open chrome://extensions, check
-                the Truly card for errors, and click &ldquo;service worker&rdquo; to see
+                the Ghosty card for errors, and click &ldquo;service worker&rdquo; to see
                 its console.
               </p>
               <button onClick={() => void refresh().catch((e: Error) => setError(e.message))}>
@@ -631,10 +631,10 @@ export function App() {
                   is fixed; a wallet outside Dynamic's own registry is added
                   as its own connector (fetchInjectedWalletConnectors) but
                   only shown under 'View all wallets'. Without this line the
-                  natural conclusion is that Truly is not supported at all. */}
+                  natural conclusion is that Ghosty is not supported at all. */}
               <p className="connect-steps">
                 On Lighter: <strong>Connect Wallet</strong> → <strong>View all wallets</strong> →{' '}
-                <strong>Truly</strong>. It is not in the recommended list.
+                <strong>Ghosty</strong>. It is not in the recommended list.
               </p>
             </>
           )}

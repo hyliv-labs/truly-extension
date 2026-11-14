@@ -40,7 +40,7 @@ function Approval() {
   if (missing) {
     return (
       <main className="popup">
-        <h1>Truly</h1>
+        <h1>Ghosty</h1>
         <p className="error">This request has expired.</p>
       </main>
     );

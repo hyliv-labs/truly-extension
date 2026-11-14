@@ -822,8 +822,8 @@ export function GhostProgress({
           <p className="gx-sub">
             {VENUES[venue].ready} as usual. {name} sees a private account{amountUnits ? ` with ${fmt(amountUnits)} USDC` : ''}.
             {venue === 'hyperliquid'
-              ? ' Connect, pick Truly in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
-              : venue !== 'lighter' && ' Pick Arbitrum, then Truly in its wallet list.'}
+              ? ' Connect, pick Ghosty in the wallet list, then Enable trading. The USDC is already in your Hyperliquid account.'
+              : venue !== 'lighter' && ' Pick Arbitrum, then Ghosty in its wallet list.'}
           </p>
         </div>
         <button type="button" className="gx-btn primary" onClick={() => void chrome.tabs.create({ url: VENUES[venue].url })}>

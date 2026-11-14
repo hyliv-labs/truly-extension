@@ -80,7 +80,7 @@ export function planRailgunUnshield(input: {
     if (input.pendingUnits > 0n && input.spendableUnits + input.pendingUnits - input.feeUnits >= input.desiredNetUnits) {
       throw new RailgunFundingError(
         'pending-ppoi',
-        'This Railgun balance is not spendable yet. The shield has to finish syncing into the tree before Truly can self-broadcast it.',
+        'This Railgun balance is not spendable yet. The shield has to finish syncing into the tree before Ghosty can self-broadcast it.',
       );
     }
     throw new RailgunFundingError(

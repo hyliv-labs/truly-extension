@@ -120,7 +120,7 @@ export function CompoundSupply({
             ? 'The tokens that could be shielded are back in Railgun. This address is not reused.'
             : funded
               ? 'This address holds the USDC. Supply it on the Arbitrum USDC market. Withdraw there, then shield what is left.'
-              : 'A fresh address, funded from Railgun. You supply it on Compound. Truly does not supply or withdraw.'}
+              : 'A fresh address, funded from Railgun. You supply it on Compound. Ghosty does not supply or withdraw.'}
         </span>
       </div>
 
@@ -144,7 +144,7 @@ export function CompoundSupply({
             <p className="field-label">Unshielded from Railgun onto the new address. Railgun keeps 0.25%. You need at least 1 USDC.</p>
           )}
           <p className="connect-steps">
-            Compound does not list Truly. Turn off other wallet extensions, refresh the page, and choose <strong>Browser Wallet</strong>.
+            Compound does not list Ghosty. Turn off other wallet extensions, refresh the page, and choose <strong>Browser Wallet</strong>.
             Use the <strong>USDC on Arbitrum</strong> market. The Ethereum market is refused.
           </p>
         </>
@@ -184,7 +184,7 @@ export function CompoundSupply({
       ) : funded ? (
         <>
           <p className="connect-steps">
-            Compound does not list Truly. Turn off other wallet extensions, refresh the page, and choose <strong>Browser Wallet</strong>.
+            Compound does not list Ghosty. Turn off other wallet extensions, refresh the page, and choose <strong>Browser Wallet</strong>.
             The market must be <strong>USDC on Arbitrum</strong>. Supply there, then withdraw there. A borrow is refused.
           </p>
           <button type="button" className="secondary" disabled={busy || working !== null} onClick={() => void chrome.tabs.create({ url: COMPOUND_APP })}>

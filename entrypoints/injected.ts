@@ -14,7 +14,7 @@ export default defineUnlistedScript(() => {
   // announcements, or the dapp will list Truly once per announce.
   const info = Object.freeze({
     uuid: crypto.randomUUID(),
-    name: 'Truly',
+    name: 'Ghosty',
     // EIP-6963 requires a data URI, so it is inlined rather than fetched —
     // a page cannot read an extension asset. The previous value was a valid
     // but EMPTY 0x0 svg, which listed Truly as a blank tile beside wallets
@@ -106,7 +106,7 @@ function createProvider() {
     if (data.error) {
       // EIP-1193 shape: dapps branch on `code`, notably 4001 for user rejection.
       entry.reject(
-        Object.assign(new Error(data.error.message ?? 'Truly failed'), {
+        Object.assign(new Error(data.error.message ?? 'Ghosty failed'), {
           code: data.error.code ?? 4900,
         }),
       );

@@ -138,7 +138,7 @@ export async function getTradeStatus(): Promise<TradeStatus | null> {
       phase: 'withdrawn',
       detail: trade.reshield.userOpHash
         ? 'Re-shield submitted. Waiting for it to land in the pool. Checking again will not send a second deposit.'
-        : 'Re-shield is being built. Leave Truly open until it confirms.',
+        : 'Re-shield is being built. Leave Ghosty open until it confirms.',
       advice,
       ownerBalance,
     };
@@ -179,11 +179,11 @@ function describe(advice: ExitAdvice): string {
     case 'not-funded':
       return 'Lighter has not credited the deposit yet.';
     case 'has-positions':
-      return `Position open on Lighter. Close it (in Truly or on Lighter) to end the trade.`;
+      return `Position open on Lighter. Close it (in Ghosty or on Lighter) to end the trade.`;
     case 'withdraw-fast':
       // Truly cannot see resting orders, so it says so rather than implying
       // the account is clear.
-      return `Withdraw the full ${advice.balance} USDC on Lighter (fast withdrawal). Cancel any resting orders there first — Truly cannot see them.`;
+      return `Withdraw the full ${advice.balance} USDC on Lighter (fast withdrawal). Cancel any resting orders there first — Ghosty cannot see them.`;
     case 'withdraw-secure':
       return advice.reason;
     case 'dust':

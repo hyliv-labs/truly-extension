@@ -75,14 +75,17 @@ export default defineConfig({
     ],
   }),
 
+  // The download is named for the product: ghosty-extension-v0.1.1-chrome.zip.
+  zip: { artifactTemplate: 'ghosty-extension-v{{version}}-{{browser}}.zip' },
+
   manifest: {
-    name: 'Truly',
+    name: 'Ghosty',
     // background.type is NOT set here — it is set on defineBackground in
     // entrypoints/background.ts, which is what WXT reads. E3 made the worker a
     // module: the Privacy Pools SDK has dynamic import()s, and the default
     // single-IIFE worker bundle cannot code-split. See the comment there.
     description:
-      'Fund every Lighter trade from Privacy Pools through a fresh owner address, then re-shield.',
+      'Use any DeFi app from a private balance: a fresh address per app, and any chain in or out with NEAR Intents.',
     permissions: [
       'storage',
       // Decrypted key material lives in chrome.storage.session, never a worker global:
