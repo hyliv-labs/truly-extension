@@ -1,6 +1,6 @@
 {
   "name": "truly-extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Private perps: fund every Lighter trade from Privacy Pools through a fresh owner address, then re-shield.",
   "license": "MIT",
