@@ -89,6 +89,9 @@ function approvalTitle(method: string): string {
   if (method === 'personal_sign') return 'Signature request';
   if (method.startsWith('eth_signTypedData')) return 'Typed data';
   if (method === 'eth_sendTransaction') return 'Transaction';
+  if (method === 'near_signAndSendTransaction' || method === 'near_signAndSendTransactions') return 'NEAR transaction';
+  if (method === 'near_signMessage') return 'NEAR signature request';
+  if (method === 'near_signIn') return 'Connect NEAR account';
   return 'Connect';
 }
 

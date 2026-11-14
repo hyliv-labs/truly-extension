@@ -31,6 +31,13 @@ export default defineUnlistedScript(() => {
     );
 
   const host = location.hostname;
+
+  // Rhea runs on NEAR: Ghosty is a NEAR wallet there, not an Ethereum one.
+  if (host === 'rhea.finance' || host.endsWith('.rhea.finance')) {
+    registerNearWallet(provider);
+    return;
+  }
+
   const compound =
     host === 'compound.xyz' ||
     host.endsWith('.compound.xyz') ||
@@ -74,6 +81,64 @@ export default defineUnlistedScript(() => {
     // A page may have locked the property. 6963 still works; nothing to do.
   }
 });
+
+/**
+ * NEAR Connect (@hot-labs/near-connect, used by app.rhea.finance) lists any
+ * wallet announced with a `near-wallet-injected` event, the NEAR counterpart
+ * of EIP-6963. Each method is relayed to the worker like an EIP-1193 call;
+ * signing goes through the same approval window.
+ */
+function registerNearWallet(provider: ReturnType<typeof createProvider>): void {
+  const manifest = Object.freeze({
+    id: 'ghosty',
+    name: 'Ghosty',
+    icon: mascotDataUri('happy'),
+    description: 'Use NEAR DeFi from a private balance.',
+    website: 'https://github.com/hyliv-labs/truly-extension',
+    version: '1.0.0',
+    executor: '',
+    type: 'injected',
+    platform: [],
+    permissions: {},
+    features: {
+      signMessage: true,
+      signTransaction: false,
+      signAndSendTransaction: true,
+      signAndSendTransactions: true,
+      signInWithoutAddKey: true,
+      signInAndSignMessage: false,
+      signInWithFunctionCallKey: false,
+      signDelegateActions: false,
+      mainnet: true,
+      testnet: false,
+    },
+  });
+  // Bytes and bigints do not survive the JSON hop to the worker; send them in a form that does.
+  const plain = (value: unknown): unknown => {
+    if (value instanceof Uint8Array) return { __bytes: Array.from(value) };
+    if (typeof value === 'bigint') return value.toString();
+    if (Array.isArray(value)) return value.map(plain);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, plain(v)]));
+    return value;
+  };
+  const call = (method: string) => (params: unknown) => provider.request({ method, params: [plain(params ?? {})] });
+  const unsupported = (what: string) => () => Promise.reject(new Error(`Ghosty does not support ${what}.`));
+  const wallet = Object.freeze({
+    manifest,
+    signIn: call('near_signIn'),
+    signInAndSignMessage: unsupported('sign-in with a message'),
+    signOut: call('near_signOut'),
+    getAccounts: call('near_getAccounts'),
+    signAndSendTransaction: call('near_signAndSendTransaction'),
+    signAndSendTransactions: call('near_signAndSendTransactions'),
+    signMessage: call('near_signMessage'),
+    signDelegateActions: unsupported('delegate actions'),
+  });
+  const announce = () => window.dispatchEvent(new CustomEvent('near-wallet-injected', { detail: wallet }));
+  // Rhea builds its connector after the app starts, and may build it again.
+  window.addEventListener('near-selector-ready', announce);
+  announce();
+}
 
 function createProvider() {
   const pending = new Map<

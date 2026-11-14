@@ -165,6 +165,22 @@ export interface ActiveTrade {
   };
   /** A NEAR Intents move. intentAddress is the 1Click deposit address (exit) or the owner (entry). */
   readonly intents?: IntentsView;
+  /**
+   * NEAR venue Bring back: the deposit a NEAR owner sends to a 1Click entry.
+   * The signed bytes are saved BEFORE broadcast; a resume re-sends those same
+   * bytes (one nonce, one transaction), never a second transfer.
+   */
+  readonly nearBack?: {
+    readonly correlationId: string;
+    readonly token: string;
+    readonly amount: string;
+    /** Native NEAR wrapped into wNEAR in the same transaction. */
+    readonly wrap?: string;
+    readonly depositAddress: string;
+    readonly signedTx?: string;
+    readonly txHash?: string;
+    readonly sent?: boolean;
+  };
 }
 
 /**

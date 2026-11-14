@@ -53,7 +53,7 @@ export function returnPhase(status: VaultStatus | null): { venue: Venue; phase: 
 
 function amountLabel(row: TokenLine): string {
   const known = RAILGUN_RETURN_TOKENS.find((token) => token.address.toLowerCase() === row.token.toLowerCase());
-  const decimals = row.symbol === 'ETH' ? 18 : known?.decimals ?? (row.symbol === 'USDC' || row.symbol === 'USDT' ? 6 : 18);
+  const decimals = row.symbol === 'NEAR' || row.symbol === 'wNEAR' ? 24 : row.symbol === 'ETH' ? 18 : known?.decimals ?? (row.symbol === 'USDC' || row.symbol === 'USDT' ? 6 : 18);
   const text = formatUnits(BigInt(row.amount), decimals);
   const [whole, frac = ''] = text.split('.');
   return `${whole}.${frac.slice(0, 4).replace(/0+$/, '') || '0'} ${row.symbol}`;
@@ -147,9 +147,10 @@ export function GhostReturn({
   useEffect(() => {
     if (phase !== 'moving' || lighter) return;
     const tick = () => {
-      if (venue === 'hyperliquid' && !working && !resuming.current) {
+      const nearApp = isAppVenue(venue) && APP_VENUES[venue].chain === 'near';
+      if ((venue === 'hyperliquid' || nearApp) && !working && !resuming.current) {
         resuming.current = true;
-        void send({ kind: 'shieldHyperliquid' }, SLOW_TIMEOUT_MS)
+        void send(nearApp ? { kind: 'shieldApp', venue } : { kind: 'shieldHyperliquid' }, SLOW_TIMEOUT_MS)
           .catch(() => undefined)
           .finally(() => {
             resuming.current = false;
