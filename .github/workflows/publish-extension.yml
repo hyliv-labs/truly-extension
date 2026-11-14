@@ -19,9 +19,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # The highest version in release/, e.g. truly-extension-v0.1.0-chrome.zip -> v0.1.0.
-          zip=$(ls release/truly-extension-v*-chrome.zip | sort -V | tail -1)
-          tag=$(basename "$zip" | sed -E 's/^truly-extension-(v[0-9][0-9.]*)-chrome\.zip$/\1/')
+          # The highest version in release/, e.g. ghosty-extension-v0.1.1-chrome.zip -> v0.1.1.
+          # Older zips were named truly-extension-v*; both are read.
+          zip=$(ls release/*-extension-v*-chrome.zip | awk -F'-extension-' '{print $2" "$0}' | sort -V | tail -1 | cut -d' ' -f2)
+          tag=$(basename "$zip" | sed -E 's/^(ghosty|truly)-extension-(v[0-9][0-9.]*)-chrome\.zip$/\2/')
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$zip" --clobber
           else
