@@ -2,6 +2,7 @@ name: Publish extension zip
 
 on:
   push:
+    branches: [main]
     paths:
       - "release/*.zip"
 
@@ -13,10 +14,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Attach the zip to the latest release
+      - name: Create or update the release for the newest zip
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag=$(gh release view --json tagName --jq .tagName)
-          zip=$(ls release/*.zip | head -1)
-          gh release upload "$tag" "$zip" --clobber
+          set -euo pipefail
+          # The highest version in release/, e.g. truly-extension-v0.1.0-chrome.zip -> v0.1.0.
+          zip=$(ls release/truly-extension-v*-chrome.zip | sort -V | tail -1)
+          tag=$(basename "$zip" | sed -E 's/^truly-extension-(v[0-9][0-9.]*)-chrome\.zip$/\1/')
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip" --clobber
+          else
+            gh release create "$tag" "$zip" \
+              --title "Ghosty $tag" \
+              --target "$GITHUB_SHA" \
+              --latest \
+              --notes "Ghosty $tag for Chrome. Download the zip, unzip it, open chrome://extensions, turn on Developer mode, click Load unpacked and pick the unzipped folder. See the README for what is new."
+          fi
